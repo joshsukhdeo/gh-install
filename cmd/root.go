@@ -163,22 +163,22 @@ func GetDefaultTargetPath() string {
 
 func GetDefaultInstallTypes() string {
 	if runtime.GOOS == "windows" {
-		return "exe,msi,zip,7z,tar.gz,py,ts,js"
+		return `exe,msi,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js`
 	} else if runtime.GOOS == "darwin" {
-		return "dmg,zip,7z,tar.gz,py,ts,js,none"
+		return `dmg,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
 	} else if runtime.GOOS == "linux" {
 		osRelease, err := os.ReadFile("/etc/os-release")
 		if err == nil {
 			content := strings.ToLower(string(osRelease))
 			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				return "deb,flatpak,appimage,zip,7z,tar.gz,py,ts,js,none"
+				return `deb,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
 			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				return "rpm,flatpak,appimage,zip,7z,tar.gz,py,ts,js,none"
+				return `rpm,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
 			}
 		}
-		return "deb,rpm,flatpak,appimage,zip,7z,tar.gz,py,ts,js,none"
+		return `deb,rpm,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
 	}
-	return "zip,7z,tar.gz,none"
+	return `zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,none`
 }
 
 func buildRegexFromTypes(types []string) string {
@@ -191,7 +191,7 @@ func buildRegexFromTypes(types []string) string {
 		if t == "none" {
 			hasNone = true
 		} else if t != "" {
-			exts = append(exts, regexp.QuoteMeta(t))
+			exts = append(exts, t)
 		}
 	}
 

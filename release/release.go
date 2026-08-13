@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -260,7 +261,8 @@ func getScore(name string, types []string) int {
 				return len(types) - i
 			}
 		} else if t != "" {
-			if strings.HasSuffix(name, "."+t) {
+			matched, _ := regexp.MatchString(`(?i)\.`+t+`$`, name)
+			if matched {
 				return len(types) - i
 			}
 		}
