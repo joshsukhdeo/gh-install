@@ -186,10 +186,15 @@ func AssetSelector(ghClient *api.RESTClient, repo string,
 		}, nil
 	}
 
+	var namesMatcher []string
+	if name != "" {
+		namesMatcher = []string{name}
+	}
+
 	return &Selector{
 		Kind:          Asset,
 		Items:         items,
-		NamesMatcher:  []string{name},
+		NamesMatcher:  namesMatcher,
 		RegexpMatcher: matcher,
 		Single:        true,
 	}, nil
