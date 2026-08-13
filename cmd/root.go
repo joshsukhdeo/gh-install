@@ -161,24 +161,33 @@ func GetDefaultTargetPath() string {
 	return path.Join(homeDir, ".local", "bin")
 }
 
+func getTarballRgx() string {
+	val := os.Getenv("TARBALL_RGX")
+	if val != "" {
+		return val
+	}
+	return `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
+}
+
 func GetDefaultInstallTypes() string {
+	tarballRgx := getTarballRgx()
 	if runtime.GOOS == "windows" {
-		return `exe,msi,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js`
+		return fmt.Sprintf("exe,msi,7z,%s,zip,py,ts,js", tarballRgx)
 	} else if runtime.GOOS == "darwin" {
-		return `dmg,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
+		return fmt.Sprintf("dmg,7z,%s,zip,py,ts,js,none", tarballRgx)
 	} else if runtime.GOOS == "linux" {
 		osRelease, err := os.ReadFile("/etc/os-release")
 		if err == nil {
 			content := strings.ToLower(string(osRelease))
 			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				return `deb,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
+				return fmt.Sprintf("deb,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				return `rpm,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
+				return fmt.Sprintf("rpm,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 			}
 		}
-		return `deb,rpm,flatpak,appimage,zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,py,ts,js,none`
+		return fmt.Sprintf("deb,rpm,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 	}
-	return `zip,7z,tar(\.[a-z0-9]+)?,t[a-z0-9]{1,3}z,none`
+	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 }
 
 func buildRegexFromTypes(types []string) string {
