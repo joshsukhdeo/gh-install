@@ -161,7 +161,7 @@ func GetDefaultAssetRegexp() string {
 	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
 
 	if runtime.GOOS == "windows" {
-		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:exe))$`, baseRegex, runtime.GOARCH)
+		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:msi|exe))$`, baseRegex, runtime.GOARCH)
 	} else if runtime.GOOS == "darwin" {
 		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:dmg))$`, baseRegex, runtime.GOARCH)
 	} else if runtime.GOOS == "linux" {

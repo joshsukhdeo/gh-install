@@ -301,13 +301,13 @@ func (r *GithubRelease) Install() error {
 		nameI := strings.ToLower(assets[i].Name)
 		nameJ := strings.ToLower(assets[j].Name)
 
-		if strings.HasSuffix(nameI, ".deb") || strings.HasSuffix(nameI, ".rpm") || strings.HasSuffix(nameI, ".exe") || strings.HasSuffix(nameI, ".dmg") {
+		if strings.HasSuffix(nameI, ".deb") || strings.HasSuffix(nameI, ".rpm") || strings.HasSuffix(nameI, ".msi") || strings.HasSuffix(nameI, ".exe") || strings.HasSuffix(nameI, ".dmg") {
 			scoreI = 2
 		} else if strings.HasSuffix(nameI, ".appimage") || strings.HasSuffix(nameI, ".flatpak") {
 			scoreI = 1
 		}
 
-		if strings.HasSuffix(nameJ, ".deb") || strings.HasSuffix(nameJ, ".rpm") || strings.HasSuffix(nameJ, ".exe") || strings.HasSuffix(nameJ, ".dmg") {
+		if strings.HasSuffix(nameJ, ".deb") || strings.HasSuffix(nameJ, ".rpm") || strings.HasSuffix(nameJ, ".msi") || strings.HasSuffix(nameJ, ".exe") || strings.HasSuffix(nameJ, ".dmg") {
 			scoreJ = 2
 		} else if strings.HasSuffix(nameJ, ".appimage") || strings.HasSuffix(nameJ, ".flatpak") {
 			scoreJ = 1
