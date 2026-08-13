@@ -182,72 +182,63 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 }
 
 func (r *GithubRelease) installDeb(binaryPath string) error {
-	var installSpinner *pterm.SpinnerPrinter
 	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'dpkg -i %s'?", binaryPath)) {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo dpkg -i %s'?", binaryPath)) {
 			return fmt.Errorf("'%s' is a DEB installer and user did not want to run it", binaryPath)
 		}
-		installSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Running 'dpkg -i %s'...", binaryPath))
 	}
 
-	cmd := exec.Command("dpkg", "-i", binaryPath)
-	out, err := cmd.Output()
+	cmd := exec.Command("sudo", "dpkg", "-i", binaryPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
 	if err != nil {
-		var errOut string
-		if ee, ok := err.(*exec.ExitError); ok {
-			errOut = string(ee.Stderr)
-		}
 		log.Error().
 			Str("installer binary", binaryPath).
-			Str("installer output", errOut).
 			Err(err).
-			Msgf("'dpkg -i %s' failed", binaryPath)
+			Msgf("'sudo dpkg -i %s' failed", binaryPath)
 		if r.CliParams.Interactive {
-			installSpinner.Fail("Failed.")
+			pterm.Error.Println("Failed to install .deb package")
 		}
 		return err
 	}
 	log.Info().
 		Str("installer binary", binaryPath).
-		Str("installer output", string(out)).
-		Msgf("ran 'dpkg -i %s'", binaryPath)
+		Msgf("ran 'sudo dpkg -i %s'", binaryPath)
 	if r.CliParams.Interactive {
-		installSpinner.Fail("Success!")
+		pterm.Success.Println("Successfully installed .deb package!")
 	}
 	return nil
 }
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
-	var installSpinner *pterm.SpinnerPrinter
 	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'dnf localinstall %s'?", binaryPath)) {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo dnf localinstall %s'?", binaryPath)) {
 			return fmt.Errorf("'%s' is a RPM installer and user did not want to run it", binaryPath)
 		}
-		installSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Running 'dnf localinstall %s'...", binaryPath))
 	}
-	cmd := exec.Command("dnf", "localinstall", binaryPath)
-	out, err := cmd.Output()
+
+	cmd := exec.Command("sudo", "dnf", "localinstall", binaryPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
 	if err != nil {
-		var errOut string
-		if ee, ok := err.(*exec.ExitError); ok {
-			errOut = string(ee.Stderr)
-		}
 		log.Error().
 			Str("installer binary", binaryPath).
-			Str("installer output", errOut).
 			Err(err).
-			Msgf("'dnf localinstall %s' failed", binaryPath)
+			Msgf("'sudo dnf localinstall %s' failed", binaryPath)
 		if r.CliParams.Interactive {
-			installSpinner.Fail("Failed.")
+			pterm.Error.Println("Failed to install .rpm package")
 		}
 		return err
 	}
 	log.Info().
 		Str("installer binary", binaryPath).
-		Str("installer output", string(out)).
-		Msgf("ran 'dnf localinstall %s'", binaryPath)
+		Msgf("ran 'sudo dnf localinstall %s'", binaryPath)
 	if r.CliParams.Interactive {
-		installSpinner.Fail("Success!")
+		pterm.Success.Println("Successfully installed .rpm package!")
 	}
 	return nil
 }
