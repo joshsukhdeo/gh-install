@@ -19,9 +19,9 @@ func main() {
 		kong.DefaultEnvars(cmd.GetEnvPrefix()),
 		kong.PostBuild(cmd.PostBuild),
 		kong.Vars{
-			"release_asset_regexp": cmd.GetDefaultAssetRegexp(),
-			"install_path":         cmd.GetDefaultTargetPath(),
-			"version":              "2.0.0",
+			"install_types": cmd.GetDefaultInstallTypes(),
+			"install_path":  cmd.GetDefaultTargetPath(),
+			"version":       "2.0.0",
 		})
 
 	err := ctx.Run()

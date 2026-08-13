@@ -103,6 +103,10 @@ func (r *RootCLI) Run() error {
 		r.AssetBinariesRegexp = fmt.Sprintf("^%s$", strings.Split(r.Repository, "/")[1])
 	}
 
+	if r.ReleaseAssetRegexp == "" {
+		r.ReleaseAssetRegexp = buildRegexFromTypes(r.Type)
+	}
+
 	log.Info().
 		Str("repository", r.Repository).
 		Str("release version", r.ReleaseVersion).
@@ -157,30 +161,48 @@ func GetDefaultTargetPath() string {
 	return path.Join(homeDir, ".local", "bin")
 }
 
-func GetDefaultAssetRegexp() string {
-	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
-
+func GetDefaultInstallTypes() string {
 	if runtime.GOOS == "windows" {
-		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:msi|exe))$`, baseRegex, runtime.GOARCH)
+		return "exe,msi,archive,py,ts,js"
 	} else if runtime.GOOS == "darwin" {
-		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:dmg))$`, baseRegex, runtime.GOARCH)
+		return "dmg,archive,py,ts,js,none"
 	} else if runtime.GOOS == "linux" {
 		osRelease, err := os.ReadFile("/etc/os-release")
-		isUbuntu := false
-		isFedora := false
 		if err == nil {
 			content := strings.ToLower(string(osRelease))
 			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				isUbuntu = true
+				return "deb,flatpak,appimage,archive,py,ts,js,none"
 			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				isFedora = true
+				return "rpm,flatpak,appimage,archive,py,ts,js,none"
 			}
 		}
+		return "deb,rpm,flatpak,appimage,archive,py,ts,js,none"
+	}
+	return "archive,none"
+}
 
-		if isUbuntu {
-			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:deb|appimage|flatpak))$`, baseRegex, runtime.GOARCH)
-		} else if isFedora {
-			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:rpm|appimage|flatpak))$`, baseRegex, runtime.GOARCH)
+func buildRegexFromTypes(types []string) string {
+	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
+
+	var exts []string
+	hasNone := false
+	for _, t := range types {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "none" {
+			hasNone = true
+		} else if t == "archive" {
+			exts = append(exts, `tar\.gz`, `zip`, `tar\.bz2`, `tgz`, `tar\.xz`)
+		} else if t != "" {
+			exts = append(exts, regexp.QuoteMeta(t))
+		}
+	}
+
+	if len(exts) > 0 {
+		extPattern := strings.Join(exts, "|")
+		if hasNone {
+			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, runtime.GOARCH, extPattern)
+		} else {
+			return fmt.Sprintf(`^.*%s.*\.(?i:%s)$`, runtime.GOARCH, extPattern)
 		}
 	}
 

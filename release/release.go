@@ -251,6 +251,34 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 	return nil
 }
 
+func getScore(name string, types []string) int {
+	name = strings.ToLower(name)
+	for i, t := range types {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "none" {
+			if !strings.Contains(path.Base(name), ".") {
+				return len(types) - i
+			}
+		} else if t == "archive" {
+			if strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.bz2") || strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".tar.xz") {
+				return len(types) - i
+			}
+		} else if t != "" {
+			if strings.HasSuffix(name, "."+t) {
+				return len(types) - i
+			}
+		}
+	}
+
+	for i, t := range types {
+		if strings.ToLower(strings.TrimSpace(t)) == "none" {
+			return len(types) - i
+		}
+	}
+
+	return -1
+}
+
 func (r *GithubRelease) Install() error {
 	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive)
 	if err != nil {
@@ -297,168 +325,156 @@ func (r *GithubRelease) Install() error {
 	}
 
 	sort.Slice(assets, func(i, j int) bool {
-		scoreI, scoreJ := 0, 0
-		nameI := strings.ToLower(assets[i].Name)
-		nameJ := strings.ToLower(assets[j].Name)
-
-		if strings.HasSuffix(nameI, ".deb") || strings.HasSuffix(nameI, ".rpm") || strings.HasSuffix(nameI, ".msi") || strings.HasSuffix(nameI, ".exe") || strings.HasSuffix(nameI, ".dmg") {
-			scoreI = 2
-		} else if strings.HasSuffix(nameI, ".appimage") || strings.HasSuffix(nameI, ".flatpak") {
-			scoreI = 1
-		}
-
-		if strings.HasSuffix(nameJ, ".deb") || strings.HasSuffix(nameJ, ".rpm") || strings.HasSuffix(nameJ, ".msi") || strings.HasSuffix(nameJ, ".exe") || strings.HasSuffix(nameJ, ".dmg") {
-			scoreJ = 2
-		} else if strings.HasSuffix(nameJ, ".appimage") || strings.HasSuffix(nameJ, ".flatpak") {
-			scoreJ = 1
-		}
-
+		scoreI := getScore(assets[i].Name, r.CliParams.Type)
+		scoreJ := getScore(assets[j].Name, r.CliParams.Type)
 		return scoreI > scoreJ
 	})
-
-	var downloadSpinner *pterm.SpinnerPrinter
-	if r.CliParams.Interactive {
-		downloadSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Downloading asset '%s'...", assets[0].Name))
-	}
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
 		log.Error().
 			Err(err).
 			Msg("could not create temporary download directory")
-		if r.CliParams.Interactive {
-			downloadSpinner.Fail("Failed - could not create temporary download directory")
-		}
 		return err
 	}
-
-	stdOut, stdErr, err := gh.Exec("release", "download", releases[0].Name,
-		"--repo", r.CliParams.Repository, "--pattern", assets[0].Name, "--dir", downloadDir)
-	if err != nil {
-		err = fmt.Errorf("failed to run gh command: %s", stdErr.String())
-		log.Error().
-			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
-			Str("release name", releases[0].Name).
-			Str("release asset name", assets[0].Name).
-			Str("download directory", downloadDir).
-			Err(err).
-			Msg("could not download release asset")
-		if r.CliParams.Interactive {
-			downloadSpinner.Fail(fmt.Sprintf("Failed - '%s' failed", stdErr.String()))
-		}
-		return err
-	}
-
-	if r.CliParams.Interactive {
-		downloadSpinner.Success("Downloaded!")
-	}
-
 	defer func() {
 		err = errors.Join(err, os.RemoveAll(downloadDir))
 	}()
 
-	log.Info().
-		Str("repository", r.CliParams.Repository).
-		Int("release id", releases[0].GetId()).
-		Str("release name", releases[0].Name).
-		Str("release asset name", assets[0].Name).
-		Str("download directory", downloadDir).
-		Str("output", stdOut.String()).
-		Msg("downloaded release asset")
-
-	binarySelector, err := selector.BinarySelector(path.Join(downloadDir,
-		assets[0].Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive)
-	if err != nil {
-		log.Error().
-			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
-			Str("release name", releases[0].Name).
-			Str("release asset name", assets[0].Name).
-			Str("downloaded asset", path.Join(downloadDir, assets[0].Name)).
-			Array("asset binary name matchers", func() *zerolog.Array {
-				arr := zerolog.Arr()
-				for _, i := range r.CliParams.AssetBinaries {
-					arr = arr.Str(i)
-				}
-				return arr
-			}()).
-			Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
-			Err(err).
-			Msg("could not create release asset binary selector")
-		return err
-	}
-	binaries, err := binarySelector.Run()
-	if err != nil {
-		log.Error().
-			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
-			Str("release name", releases[0].Name).
-			Str("release asset name", assets[0].Name).
-			Str("downloaded asset", path.Join(downloadDir, assets[0].Name)).
-			Array("asset binary name matchers", func() *zerolog.Array {
-				arr := zerolog.Arr()
-				for _, i := range r.CliParams.AssetBinaries {
-					arr = arr.Str(i)
-				}
-				return arr
-			}()).
-			Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
-			Err(err).
-			Msg("could not select release asset binary")
-		return err
-	}
-
-	binariesOutput := make(map[string]string)
-	for _, binary := range binaries {
-		log.Info().
-			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
-			Str("release name", releases[0].Name).
-			Str("release asset name", assets[0].Name).
-			Str("downloaded asset", path.Join(downloadDir, assets[0].Name)).
-			Str("release asset binary", binary.Name).
-			Msg("processing selected release asset binary")
-		if binary.GetCompressed() {
-			log.Debug().
-				Str("release asset binary", binary.Name).
-				Str("release asset binary archive path", binary.GetFsPath()).
-				Msg("binary is part of an archive")
-			binariesOutput[binary.Name] = "compressed"
-			err = r.installArchivedBinary(binary.GetFs(), binary.GetFsPath())
-		} else {
-			switch binary.GetBinaryType() {
-			case selector.BinaryDebInstaller:
-				log.Debug().
-					Str("release asset binary", binary.Name).
-					Msg("binary is a deb installer")
-				binariesOutput[binary.Name] = "deb"
-				err = r.installDeb(binary.GetDownloadPath())
-			case selector.BinaryRpmInstaller:
-				log.Debug().
-					Str("release asset binary", binary.Name).
-					Msg("binary is a rpm installer")
-				binariesOutput[binary.Name] = "rpm"
-				err = r.installRpm(binary.GetDownloadPath())
-			default:
-				log.Debug().
-					Str("release asset binary", binary.Name).
-					Msg("binary is a plain executable")
-				binariesOutput[binary.Name] = "binary"
-				err = r.installBinary(binary.GetDownloadPath())
-			}
+	for _, asset := range assets {
+		var downloadSpinner *pterm.SpinnerPrinter
+		if r.CliParams.Interactive {
+			downloadSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Downloading asset '%s'...", asset.Name))
 		}
-		if err != nil {
+
+		stdOut, stdErr, execErr := gh.Exec("release", "download", releases[0].Name,
+			"--repo", r.CliParams.Repository, "--pattern", asset.Name, "--dir", downloadDir)
+		if execErr != nil {
+			execErr = fmt.Errorf("failed to run gh command: %s", stdErr.String())
 			log.Error().
 				Str("repository", r.CliParams.Repository).
 				Int("release id", releases[0].GetId()).
 				Str("release name", releases[0].Name).
-				Str("release asset name", assets[0].Name).
-				Str("downloaded asset", path.Join(downloadDir, assets[0].Name)).
+				Str("release asset name", asset.Name).
+				Str("download directory", downloadDir).
+				Err(execErr).
+				Msg("could not download release asset")
+			if r.CliParams.Interactive {
+				downloadSpinner.Fail(fmt.Sprintf("Failed - '%s' failed", stdErr.String()))
+			}
+			return execErr
+		}
+
+		if r.CliParams.Interactive {
+			downloadSpinner.Success("Downloaded!")
+		}
+
+		log.Info().
+			Str("repository", r.CliParams.Repository).
+			Int("release id", releases[0].GetId()).
+			Str("release name", releases[0].Name).
+			Str("release asset name", asset.Name).
+			Str("download directory", downloadDir).
+			Str("output", stdOut.String()).
+			Msg("downloaded release asset")
+
+		binarySelector, execErr := selector.BinarySelector(path.Join(downloadDir,
+			asset.Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive)
+		if execErr != nil {
+			log.Error().
+				Str("repository", r.CliParams.Repository).
+				Int("release id", releases[0].GetId()).
+				Str("release name", releases[0].Name).
+				Str("release asset name", asset.Name).
+				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Array("asset binary name matchers", func() *zerolog.Array {
+					arr := zerolog.Arr()
+					for _, i := range r.CliParams.AssetBinaries {
+						arr = arr.Str(i)
+					}
+					return arr
+				}()).
+				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
+				Err(execErr).
+				Msg("could not create release asset binary selector")
+			return execErr
+		}
+		binaries, execErr := binarySelector.Run()
+		if execErr != nil {
+			log.Error().
+				Str("repository", r.CliParams.Repository).
+				Int("release id", releases[0].GetId()).
+				Str("release name", releases[0].Name).
+				Str("release asset name", asset.Name).
+				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Array("asset binary name matchers", func() *zerolog.Array {
+					arr := zerolog.Arr()
+					for _, i := range r.CliParams.AssetBinaries {
+						arr = arr.Str(i)
+					}
+					return arr
+				}()).
+				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
+				Err(execErr).
+				Msg("could not select release asset binary")
+			return execErr
+		}
+
+		binariesOutput := make(map[string]string)
+		for _, binary := range binaries {
+			log.Info().
+				Str("repository", r.CliParams.Repository).
+				Int("release id", releases[0].GetId()).
+				Str("release name", releases[0].Name).
+				Str("release asset name", asset.Name).
+				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
 				Str("release asset binary", binary.Name).
-				Err(err).
-				Msg("could not install release asset binary")
-			return err
+				Msg("processing selected release asset binary")
+			if binary.GetCompressed() {
+				log.Debug().
+					Str("release asset binary", binary.Name).
+					Str("release asset binary archive path", binary.GetFsPath()).
+					Msg("binary is part of an archive")
+				binariesOutput[binary.Name] = "compressed"
+				execErr = r.installArchivedBinary(binary.GetFs(), binary.GetFsPath())
+			} else {
+				switch binary.GetBinaryType() {
+				case selector.BinaryDebInstaller:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a deb installer")
+					binariesOutput[binary.Name] = "deb"
+					execErr = r.installDeb(binary.GetDownloadPath())
+				case selector.BinaryRpmInstaller:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a rpm installer")
+					binariesOutput[binary.Name] = "rpm"
+					execErr = r.installRpm(binary.GetDownloadPath())
+				default:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a plain executable")
+					binariesOutput[binary.Name] = "binary"
+					execErr = r.installBinary(binary.GetDownloadPath())
+				}
+			}
+			if execErr != nil {
+				log.Error().
+					Str("repository", r.CliParams.Repository).
+					Int("release id", releases[0].GetId()).
+					Str("release name", releases[0].Name).
+					Str("release asset name", asset.Name).
+					Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+					Str("release asset binary", binary.Name).
+					Err(execErr).
+					Msg("could not install release asset binary")
+				return execErr
+			}
+		}
+
+		if !r.CliParams.All {
+			break
 		}
 	}
 	return nil

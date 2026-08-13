@@ -7,7 +7,9 @@ type CLI struct {
 	Interactive             bool              `default:"false" short:"i" help:"Use interactive installation. If true, all non-log related flags are ignored." group:"Interactive Mode"`
 	ReleaseVersion          string            `default:"latest" short:"v" help:"Repository release tag (version) to install." group:"Non-interactive Mode"`
 	ReleaseAsset            string            `optional:"" short:"a" help:"Name of repository release asset to download. If not set, --release-asset-regexp is used." group:"Non-interactive Mode"`
-	ReleaseAssetRegexp      string            `default:"${release_asset_regexp}" short:"A" help:"Regular expression matching release asset to download." group:"Non-interactive Mode"`
+	ReleaseAssetRegexp      string            `optional:"" short:"A" help:"Regular expression matching release asset to download." group:"Non-interactive Mode"`
+	Type                    []string          `default:"${install_types}" short:"T" env:"GH_INSTALL_TYPE" help:"Comma-separated list of types to match and prioritize." group:"Non-interactive Mode"`
+	All                     bool              `default:"false" help:"Install all matched assets instead of just the first one." group:"Non-interactive Mode"`
 	AssetBinaries           []string          `optional:"" short:"b" help:"If release asset is an archive - names of a binaries in the archive to install. If not set, --install-binary-regexp is used." group:"Non-interactive Mode"`
 	AssetBinariesRegexp     string            `optional:"" short:"B" help:"If release asset is an archive - regular expression matching binaries in the archive to install. If not set, repository name is used." group:"Non-interactive Mode"`
 	TargetPath              string            `default:"${install_path}" short:"p" type:"path" help:"Target installation directory."`
