@@ -259,10 +259,6 @@ func getScore(name string, types []string) int {
 			if !strings.Contains(path.Base(name), ".") {
 				return len(types) - i
 			}
-		} else if t == "archive" {
-			if strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.bz2") || strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".tar.xz") {
-				return len(types) - i
-			}
 		} else if t != "" {
 			if strings.HasSuffix(name, "."+t) {
 				return len(types) - i
