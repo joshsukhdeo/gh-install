@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/cli/go-gh/v2"
@@ -294,6 +295,26 @@ func (r *GithubRelease) Install() error {
 			Msg("could not select release asset")
 		return err
 	}
+
+	sort.Slice(assets, func(i, j int) bool {
+		scoreI, scoreJ := 0, 0
+		nameI := strings.ToLower(assets[i].Name)
+		nameJ := strings.ToLower(assets[j].Name)
+
+		if strings.HasSuffix(nameI, ".deb") || strings.HasSuffix(nameI, ".rpm") || strings.HasSuffix(nameI, ".exe") || strings.HasSuffix(nameI, ".dmg") {
+			scoreI = 2
+		} else if strings.HasSuffix(nameI, ".appimage") || strings.HasSuffix(nameI, ".flatpak") {
+			scoreI = 1
+		}
+
+		if strings.HasSuffix(nameJ, ".deb") || strings.HasSuffix(nameJ, ".rpm") || strings.HasSuffix(nameJ, ".exe") || strings.HasSuffix(nameJ, ".dmg") {
+			scoreJ = 2
+		} else if strings.HasSuffix(nameJ, ".appimage") || strings.HasSuffix(nameJ, ".flatpak") {
+			scoreJ = 1
+		}
+
+		return scoreI > scoreJ
+	})
 
 	var downloadSpinner *pterm.SpinnerPrinter
 	if r.CliParams.Interactive {

@@ -158,7 +158,33 @@ func GetDefaultTargetPath() string {
 }
 
 func GetDefaultAssetRegexp() string {
-	return fmt.Sprintf("^.*(?:%s.+%s|%s.+%s)+.*$", runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
+	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
+
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:exe))$`, baseRegex, runtime.GOARCH)
+	} else if runtime.GOOS == "darwin" {
+		return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:dmg))$`, baseRegex, runtime.GOARCH)
+	} else if runtime.GOOS == "linux" {
+		osRelease, err := os.ReadFile("/etc/os-release")
+		isUbuntu := false
+		isFedora := false
+		if err == nil {
+			content := strings.ToLower(string(osRelease))
+			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
+				isUbuntu = true
+			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
+				isFedora = true
+			}
+		}
+
+		if isUbuntu {
+			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:deb|appimage|flatpak))$`, baseRegex, runtime.GOARCH)
+		} else if isFedora {
+			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:rpm|appimage|flatpak))$`, baseRegex, runtime.GOARCH)
+		}
+	}
+
+	return fmt.Sprintf(`^%s$`, baseRegex)
 }
 
 func GetEnvPrefix() string {
