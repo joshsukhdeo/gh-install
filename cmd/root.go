@@ -191,7 +191,21 @@ func GetDefaultInstallTypes() string {
 }
 
 func buildRegexFromTypes(types []string) string {
-	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, runtime.GOARCH, runtime.GOOS, runtime.GOOS, runtime.GOARCH)
+	archRegex := runtime.GOARCH
+	if runtime.GOARCH == "amd64" {
+		archRegex = "(?:amd64|x86_64|x64)"
+	} else if runtime.GOARCH == "arm64" {
+		archRegex = "(?:arm64|aarch64)"
+	}
+
+	osRegex := runtime.GOOS
+	if runtime.GOOS == "darwin" {
+		osRegex = "(?:darwin|macos|apple)"
+	} else if runtime.GOOS == "windows" {
+		osRegex = "(?:windows|win)"
+	}
+
+	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
 
 	var exts []string
 	hasNone := false
@@ -207,9 +221,9 @@ func buildRegexFromTypes(types []string) string {
 	if len(exts) > 0 {
 		extPattern := strings.Join(exts, "|")
 		if hasNone {
-			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, runtime.GOARCH, extPattern)
+			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, archRegex, extPattern)
 		} else {
-			return fmt.Sprintf(`^.*%s.*\.(?i:%s)$`, runtime.GOARCH, extPattern)
+			return fmt.Sprintf(`^.*%s.*\.(?i:%s)$`, archRegex, extPattern)
 		}
 	}
 
