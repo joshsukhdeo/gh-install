@@ -22,6 +22,8 @@ type InstalledApp struct {
 	All                 bool              `json:"all"`
 	AssetBinaries       []string          `json:"asset_binaries"`
 	AssetBinariesRegexp string            `json:"asset_binaries_regexp"`
+	PackageNames        []string          `json:"package_names,omitempty"`
+	Pinned              bool              `json:"pinned,omitempty"`
 }
 
 type State struct {

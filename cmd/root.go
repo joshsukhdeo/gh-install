@@ -287,7 +287,17 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 					if distro != "" && distro != "linux" {
 						osRegexList = append(osRegexList, distro)
 					}
-					break
+				} else if strings.HasPrefix(line, "ID_LIKE=") {
+					// Parse ID_LIKE which can have multiple space-separated values
+					// e.g., ID_LIKE="ubuntu debian" or ID_LIKE=ubuntu
+					idLike := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID_LIKE="), "\""))
+					if idLike != "" {
+						for _, likeDistro := range strings.Fields(idLike) {
+							if likeDistro != "linux" {
+								osRegexList = append(osRegexList, likeDistro)
+							}
+						}
+					}
 				}
 			}
 		}

@@ -27,6 +27,11 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			continue // skip disabled unless specifically targeted
 		}
 
+		if app.Pinned && !specificallyTargeted {
+			log.Info().Msgf("Skipping %s (pinned at %s)", app.Repository, app.Version)
+			continue
+		}
+
 		if r.Update && !r.UpdateAll {
 			if r.Global && !app.Global {
 				continue // wants global only, this is user

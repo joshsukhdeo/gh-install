@@ -29,6 +29,9 @@ type CLI struct {
 	AllowWine           bool              `env:"GH_INSTALL_ALLOW_WINE" help:"Allow installing Windows executables on Linux/macOS/FreeBSD." group:"Non-interactive Mode"`
 	TargetPathCreate    bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist." group:"Non-interactive Mode"`
 	Overwrite           bool              `default:"false" short:"o" help:"Overwrite target binaries." group:"Non-interactive Mode"`
+	Pin                 bool              `default:"false" help:"Pin this installation to the current version (skip during updates)." group:"State Management"`
+	DryRun              bool              `default:"false" help:"Show what would be downloaded and installed without actually doing it." group:"Non-interactive Mode"`
+	VerifyChecksum      bool              `default:"true" help:"Verify asset checksums if checksum files are available in the release." group:"Non-interactive Mode"`
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`
 	LogFormat           string            `default:"console" enum:"console,json" short:"f" help:"Log output format."`
 	LogQuietInteractive bool              `default:"true" negatable:"" help:"Quiet log in interactive mode" group:"Interactive Mode"`

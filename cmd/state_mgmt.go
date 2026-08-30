@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +95,32 @@ func RmState(target string) error {
 
 	for _, r := range toRemove {
 		app := st.Apps[r]
+
+		// Uninstall packages via package manager if they were installed
+		if len(app.PackageNames) > 0 {
+			for _, pkgName := range app.PackageNames {
+				log.Info().Msgf("Uninstalling package %s...", pkgName)
+				var cmd *exec.Cmd
+				// Detect which package manager to use
+				if _, err := exec.LookPath("dpkg"); err == nil {
+					cmd = exec.Command("sudo", "dpkg", "-r", pkgName)
+				} else if _, err := exec.LookPath("rpm"); err == nil {
+					cmd = exec.Command("sudo", "rpm", "-e", pkgName)
+				} else if _, err := exec.LookPath("pacman"); err == nil {
+					cmd = exec.Command("sudo", "pacman", "-R", "--noconfirm", pkgName)
+				} else if _, err := exec.LookPath("pkg"); err == nil {
+					cmd = exec.Command("sudo", "pkg", "delete", "-y", pkgName)
+				}
+				
+				if cmd != nil {
+					if err := cmd.Run(); err != nil {
+						log.Warn().Err(err).Msgf("Failed to uninstall package %s", pkgName)
+					} else {
+						log.Info().Msgf("Successfully uninstalled %s", pkgName)
+					}
+				}
+			}
+		}
 
 		// Delete installed binaries from disk
 		if app.TargetPath != "" {
