@@ -99,6 +99,18 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
+	if r.AddDeps && r.NoDeps {
+		r.AddDeps = false
+		r.NoDeps = false
+	} else if !r.AddDeps && !r.NoDeps {
+		envDeps := strings.ToUpper(os.Getenv("GH_INSTALL_ADD_DEPS"))
+		if envDeps == "TRUE" {
+			r.AddDeps = true
+		} else if envDeps == "FALSE" {
+			r.NoDeps = true
+		}
+	}
+
 	if r.Global && r.TargetPath == GetDefaultTargetPath() {
 		r.TargetPath = "/usr/local/bin"
 	}
