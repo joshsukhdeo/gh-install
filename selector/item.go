@@ -10,6 +10,7 @@ type BinaryType int
 const (
 	BinaryDebInstaller BinaryType = iota
 	BinaryRpmInstaller
+	BinaryPkgInstaller
 	BinaryExecutable
 )
 
@@ -20,6 +21,8 @@ func BinaryTypeFromPath(fromPath string) BinaryType {
 		return BinaryRpmInstaller
 	case ".deb":
 		return BinaryDebInstaller
+	case ".pkg", ".txz":
+		return BinaryPkgInstaller
 	default:
 		return BinaryExecutable
 	}

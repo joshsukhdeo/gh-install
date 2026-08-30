@@ -479,6 +479,12 @@ func (r *GithubRelease) Install() error {
 						Msg("binary is a rpm installer")
 					binariesOutput[binary.Name] = "rpm"
 					execErr = r.installRpm(binary.DownloadPath)
+				case selector.BinaryPkgInstaller:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a freebsd pkg/txz installer")
+					binariesOutput[binary.Name] = "pkg"
+					execErr = r.installPkg(binary.DownloadPath)
 				default:
 					log.Debug().
 						Str("release asset binary", binary.Name).
@@ -523,5 +529,45 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
+	return nil
+}
+
+func (r *GithubRelease) installPkg(binaryPath string) error {
+	var args []string
+	if r.CliParams.NoDeps {
+		args = []string{"pkg", "add", binaryPath}
+	} else if r.CliParams.AddDeps {
+		args = []string{"pkg", "install", "-y", binaryPath}
+	} else {
+		args = []string{"pkg", "install", binaryPath}
+	}
+
+	if r.CliParams.Interactive {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+			return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", binaryPath)
+		}
+	}
+
+	cmd := execCommand("sudo", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		log.Error().
+			Str("installer binary", binaryPath).
+			Err(err).
+			Msgf("'sudo %s' failed", strings.Join(args, " "))
+		if r.CliParams.Interactive {
+			pterm.Error.Println("Failed to install FreeBSD package")
+		}
+		return err
+	}
+	log.Info().
+		Str("installer binary", binaryPath).
+		Msgf("ran 'sudo %s'", strings.Join(args, " "))
+	if r.CliParams.Interactive {
+		pterm.Success.Println("Successfully installed FreeBSD package!")
+	}
 	return nil
 }

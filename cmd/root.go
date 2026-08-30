@@ -237,6 +237,8 @@ func GetDefaultInstallTypes() string {
 			}
 		}
 		return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+	} else if runtime.GOOS == "freebsd" {
+		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
 	}
 	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 }
