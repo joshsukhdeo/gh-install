@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
-	"github.com/maratoid/gh-install/cmd"
+	"github.com/joshsukhdeo/gh-install/cmd"
 )
 
 func main() {

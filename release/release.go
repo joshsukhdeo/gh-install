@@ -14,8 +14,8 @@ import (
 
 	"github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/maratoid/gh-install/params"
-	"github.com/maratoid/gh-install/selector"
+	"github.com/joshsukhdeo/gh-install/params"
+	"github.com/joshsukhdeo/gh-install/selector"
 	"github.com/pterm/pterm"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

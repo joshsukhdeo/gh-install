@@ -1,4 +1,4 @@
-module github.com/maratoid/gh-install
+module github.com/joshsukhdeo/gh-install
 
 go 1.25
 
