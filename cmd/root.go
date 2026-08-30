@@ -269,15 +269,14 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		archRegex = "(?:arm64|aarch64)"
 	}
 
-	osRegex := runtime.GOOS
+	var osRegexList []string
 	if runtime.GOOS == "darwin" {
-		osRegex = "(?:darwin|macos|apple)"
+		osRegexList = append(osRegexList, "(?:darwin|macos|apple)")
 	} else if runtime.GOOS == "windows" {
-		osRegex = "(?:windows|win)"
+		osRegexList = append(osRegexList, "(?:windows|win)")
 	} else if runtime.GOOS == "freebsd" {
-		osRegex = "(?:freebsd)"
+		osRegexList = append(osRegexList, "(?:freebsd)")
 	} else if runtime.GOOS == "linux" {
-		osRegex = "(?:linux"
 		osRelease, err := os.ReadFile("/etc/os-release")
 		if err == nil {
 			content := string(osRelease)
@@ -285,14 +284,14 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 			for _, line := range lines {
 				if strings.HasPrefix(line, "ID=") {
 					distro := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID="), "\""))
-					if distro != "" {
-						osRegex += "|" + distro
+					if distro != "" && distro != "linux" {
+						osRegexList = append(osRegexList, distro)
 					}
 					break
 				}
 			}
 		}
-		osRegex += ")"
+		osRegexList = append(osRegexList, "linux")
 	}
 
 	var matchers []string
@@ -327,16 +326,18 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		return fmt.Sprintf(`^%s$`, baseRegex)
 	}
 
-	if hwSpecific != "" {
-		hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
-		matchers = append(matchers, buildFinal(hwBaseRegex, types))
+	for _, osRegex := range osRegexList {
+		if hwSpecific != "" {
+			hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
+			matchers = append(matchers, buildFinal(hwBaseRegex, types))
+		}
+
+		baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
+		matchers = append(matchers, buildFinal(baseRegex, types))
+
+		fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
+		matchers = append(matchers, buildFinal(fallbackRegex, types))
 	}
-
-	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
-	matchers = append(matchers, buildFinal(baseRegex, types))
-
-	fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
-	matchers = append(matchers, buildFinal(fallbackRegex, types))
 
 	if allowWine && runtime.GOOS != "windows" {
 		winOsRegex := "(?:windows|win)"
