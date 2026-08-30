@@ -5,11 +5,29 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/joshsukhdeo/gh-install/cmd"
+	"github.com/joshsukhdeo/gh-install/config"
 )
 
 func main() {
 
 	var cli cmd.RootCLI
+
+	cfg, _ := config.LoadConfig()
+
+	vars := kong.Vars{
+		"install_types": cmd.GetDefaultInstallTypes(),
+		"install_path":  cmd.GetDefaultTargetPath(),
+		"version":       "2.0.0",
+	}
+
+	if cfg != nil {
+		if cfg.InstallTypes != "" {
+			vars["install_types"] = cfg.InstallTypes
+		}
+		if cfg.InstallPath != "" {
+			vars["install_path"] = cfg.InstallPath
+		}
+	}
 
 	ctx := kong.Parse(&cli,
 		kong.Name("gh-install"),
@@ -18,11 +36,7 @@ func main() {
 			using Homebrew or other package managers.`),
 		kong.DefaultEnvars(cmd.GetEnvPrefix()),
 		kong.PostBuild(cmd.PostBuild),
-		kong.Vars{
-			"install_types": cmd.GetDefaultInstallTypes(),
-			"install_path":  cmd.GetDefaultTargetPath(),
-			"version":       "2.0.0",
-		})
+		vars)
 
 	err := ctx.Run()
 	if err != nil {

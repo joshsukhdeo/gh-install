@@ -16,6 +16,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/joshsukhdeo/gh-install/params"
 	"github.com/joshsukhdeo/gh-install/selector"
+	"github.com/joshsukhdeo/gh-install/state"
 	"github.com/pterm/pterm"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -64,7 +65,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 
 	binaryName := path.Base(binaryPath)
 	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
-	if targetBinaryName, exists := r.CliParams.TargetBinaries[strings.ToLower(binaryName)]; exists {
+	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
 		destinationPath = path.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
@@ -82,7 +83,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 				return fmt.Errorf("%s already exists and user did not want to overwrite", destinationPath)
 			}
 		} else {
-			if !r.CliParams.TargetBinariesOverwrite {
+			if !r.CliParams.Overwrite {
 				return fmt.Errorf("%s already exists and --target-binaries-overwrite is not set", destinationPath)
 			}
 		}
@@ -133,7 +134,7 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 
 	binaryName := path.Base(binaryPath)
 	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
-	if targetBinaryName, exists := r.CliParams.TargetBinaries[strings.ToLower(binaryName)]; exists {
+	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
 		destinationPath = path.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
@@ -151,7 +152,7 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 				return fmt.Errorf("%s already exists and user did not want to overwrite", destinationPath)
 			}
 		} else {
-			if !r.CliParams.TargetBinariesOverwrite {
+			if !r.CliParams.Overwrite {
 				return fmt.Errorf("%s already exists and --target-binaries-overwrite is not set", destinationPath)
 			}
 		}
@@ -484,5 +485,21 @@ func (r *GithubRelease) Install() error {
 			break
 		}
 	}
+
+	st, err := state.LoadState()
+	if err == nil {
+		st.AddApp(&state.InstalledApp{
+			Repository:     r.CliParams.Repository,
+			TargetPath:     r.CliParams.TargetPath,
+			Global:         r.CliParams.Global,
+			ReleaseAsset:   r.CliParams.ReleaseAsset,
+			ReleaseRegexp:  r.CliParams.ReleaseAssetRegexp,
+			Version:        releases[0].Name,
+			Rename:         r.CliParams.Rename,
+		})
+	} else {
+		log.Warn().Err(err).Msg("could not save installed app state")
+	}
+
 	return nil
 }

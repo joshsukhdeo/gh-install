@@ -11,6 +11,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/joshsukhdeo/gh-install/config"
 	"github.com/joshsukhdeo/gh-install/params"
 	"github.com/joshsukhdeo/gh-install/release"
 	"github.com/pterm/pterm"
@@ -27,9 +28,11 @@ const (
 type RootCLI params.CLI
 
 func (r *RootCLI) Validate() error {
-	match, _ := regexp.MatchString(`.+/.+`, r.Repository)
-	if !match {
-		return fmt.Errorf("repository must be in 'user/repository' format (provided: '%s')", r.Repository)
+	if !r.Update && !r.UpdateAll && !r.SetupTopgradeStep {
+		match, _ := regexp.MatchString(`.+/.+`, r.Repository)
+		if !match {
+			return fmt.Errorf("repository must be in 'user/repository' format (provided: '%s')", r.Repository)
+		}
 	}
 
 	if r.TargetPath == "" {
@@ -108,6 +111,12 @@ func (r *RootCLI) Run() error {
 			r.AddDeps = true
 		} else if envDeps == "FALSE" {
 			r.NoDeps = true
+		} else {
+			cfg, _ := config.LoadConfig()
+			if cfg != nil {
+				r.AddDeps = cfg.AddDeps
+				r.NoDeps = cfg.NoDeps
+			}
 		}
 	}
 
@@ -120,6 +129,26 @@ func (r *RootCLI) Run() error {
 		} else {
 			r.TargetPath = "/usr/local/bin"
 		}
+	}
+
+	ghClient, err := api.DefaultRESTClient()
+	if err != nil {
+		log.Error().
+			Err(err).
+			Msg("could not init Gihub REST client")
+		return err
+	}
+
+	if r.SetupTopgradeStep {
+		return SetupTopgrade()
+	}
+
+	if r.Update || r.UpdateAll {
+		return DoUpdate(r, ghClient)
+	}
+
+	if r.Repository == "" {
+		return fmt.Errorf("repository argument is required for installation")
 	}
 
 	if r.AssetBinariesRegexp == "" {
@@ -149,20 +178,12 @@ func (r *RootCLI) Run() error {
 		Str("target path", r.TargetPath).
 		Dict("renaming binaries", func() *zerolog.Event {
 			d := zerolog.Dict()
-			for k, v := range r.TargetBinaries {
+			for k, v := range r.Rename {
 				d = d.Str(k, v)
 			}
 			return d
 		}()).
 		Msg("installing with values")
-
-	ghClient, err := api.DefaultRESTClient()
-	if err != nil {
-		log.Error().
-			Err(err).
-			Msg("could not init Gihub REST client")
-		return err
-	}
 
 	response := struct{ Name string }{}
 	err = ghClient.Get(fmt.Sprintf("repos/%s", r.Repository), &response)
