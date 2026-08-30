@@ -514,19 +514,21 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
-	st, err := state.LoadState()
-	if err == nil {
-		st.AddApp(&state.InstalledApp{
-			Repository:    r.CliParams.Repository,
-			TargetPath:    r.CliParams.TargetPath,
-			Global:        r.CliParams.Global,
-			ReleaseAsset:  r.CliParams.ReleaseAsset,
-			ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
-			Version:       releases[0].Name,
-			Rename:        r.CliParams.Rename,
-		})
-	} else {
-		log.Warn().Err(err).Msg("could not save installed app state")
+	if !r.CliParams.NoSaveState {
+		st, err := state.LoadState()
+		if err == nil {
+			st.AddApp(&state.InstalledApp{
+				Repository:    r.CliParams.Repository,
+				TargetPath:    r.CliParams.TargetPath,
+				Global:        r.CliParams.Global,
+				ReleaseAsset:  r.CliParams.ReleaseAsset,
+				ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
+				Version:       releases[0].Name,
+				Rename:        r.CliParams.Rename,
+			})
+		} else {
+			log.Warn().Err(err).Msg("could not save installed app state")
+		}
 	}
 
 	return nil

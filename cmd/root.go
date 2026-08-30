@@ -122,6 +122,9 @@ func (r *RootCLI) Run() error {
 				if !r.DisablePrompts {
 					r.DisablePrompts = cfg.DisablePrompts
 				}
+				if !r.NoSaveState {
+					r.NoSaveState = cfg.NoSaveState
+				}
 			}
 		}
 	}

@@ -16,6 +16,7 @@ type Config struct {
 	NoDeps         bool   `yaml:"no_deps"`
 	PromptRename   bool   `yaml:"prompt_rename"`
 	DisablePrompts bool   `yaml:"disable_prompts"`
+	NoSaveState    bool   `yaml:"no_save_state"`
 }
 
 func GetConfigPath() string {
