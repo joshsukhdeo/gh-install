@@ -112,7 +112,14 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.Global && r.TargetPath == GetDefaultTargetPath() {
-		r.TargetPath = "/usr/local/bin"
+		if runtime.GOOS == "windows" {
+			r.TargetPath = os.Getenv("ProgramFiles")
+			if r.TargetPath == "" {
+				r.TargetPath = "C:\\Program Files"
+			}
+		} else {
+			r.TargetPath = "/usr/local/bin"
+		}
 	}
 
 	if r.AssetBinariesRegexp == "" {
