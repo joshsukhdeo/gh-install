@@ -20,9 +20,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type IRelease interface {
-	Install() error
-}
 
 var (
 	execCommand = exec.Command
@@ -35,7 +32,7 @@ type GithubRelease struct {
 	ResolvedVersion string
 }
 
-func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) IRelease {
+func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) *GithubRelease {
 
 	return &GithubRelease{
 		CliParams: cliParams,
