@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -24,7 +25,6 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/rs/zerolog/log"
 )
-
 
 var (
 	execCommand = exec.Command
@@ -417,7 +417,7 @@ func (r *GithubRelease) verifyChecksum(filePath, checksumFilePath string) error 
 	if err != nil {
 		return fmt.Errorf("failed to open checksum file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Parse checksum file - format is typically: <hash>  <filename> or <hash> <filename>
 	scanner := bufio.NewScanner(file)
@@ -473,7 +473,7 @@ func (r *GithubRelease) verifyChecksum(filePath, checksumFilePath string) error 
 	if err != nil {
 		return fmt.Errorf("failed to open downloaded file: %w", err)
 	}
-	defer downloadedFile.Close()
+	defer func() { _ = downloadedFile.Close() }()
 
 	if _, err := io.Copy(hasher, downloadedFile); err != nil {
 		return fmt.Errorf("failed to calculate hash: %w", err)
@@ -491,6 +491,78 @@ func (r *GithubRelease) verifyChecksum(filePath, checksumFilePath string) error 
 		Msg("checksum verified successfully")
 
 	return nil
+}
+
+func (r *GithubRelease) installWindows(binaryPath string) error {
+	if r.CliParams.DryRun {
+		log.Info().Msgf("[dry-run] Would install windows pkg: %s", binaryPath)
+		return nil
+	}
+	var args []string
+	if strings.HasSuffix(strings.ToLower(binaryPath), ".msi") {
+		args = []string{"/i", binaryPath, "/qn"}
+		if runtime.GOOS != "windows" && r.CliParams.AllowWine {
+			args = append([]string{"msiexec"}, args...)
+		} else {
+			args = append([]string{"msiexec"}, args...)
+		}
+	} else {
+		args = []string{"/S"}
+		if runtime.GOOS != "windows" && r.CliParams.AllowWine {
+			args = append([]string{binaryPath}, args...)
+			args = append([]string{"wine"}, args...)
+		} else {
+			args = append([]string{binaryPath}, args...)
+		}
+	}
+
+	cmd := execCommand(args[0], args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		log.Error().Err(err).Msgf("Failed to install Windows package")
+		return err
+	}
+	log.Info().Msg("Successfully installed Windows package!")
+	return nil
+}
+
+func (r *GithubRelease) installMac(binaryPath string) error {
+	if r.CliParams.DryRun {
+		log.Info().Msgf("[dry-run] Would install mac pkg: %s", binaryPath)
+		return nil
+	}
+	if strings.HasSuffix(strings.ToLower(binaryPath), ".dmg") {
+		log.Info().Msg("Mounting DMG...")
+		cmd := execCommand("hdiutil", "attach", binaryPath, "-nobrowse", "-mountpoint", "/Volumes/gh-install-dmg")
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		defer func() { _ = execCommand("hdiutil", "detach", "/Volumes/gh-install-dmg").Run() }()
+
+		cpCmd := execCommand("sh", "-c", fmt.Sprintf("cp -R /Volumes/gh-install-dmg/*.app %s/", r.CliParams.TargetPath))
+		if err := cpCmd.Run(); err != nil {
+			return err
+		}
+		log.Info().Msg("Successfully copied app from DMG!")
+		return nil
+	} else if strings.HasSuffix(strings.ToLower(binaryPath), ".pkg") {
+		if err := r.ensureSudo(); err != nil {
+			return err
+		}
+		cmd := execCommand("sudo", "installer", "-pkg", binaryPath, "-target", "/")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		log.Info().Msg("Successfully installed macOS pkg!")
+		return nil
+	}
+	return fmt.Errorf("unsupported mac installer format: %s", binaryPath)
 }
 
 func (r *GithubRelease) Install() error {
@@ -545,8 +617,6 @@ func (r *GithubRelease) Install() error {
 		return scoreI > scoreJ
 	})
 
-
-
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
 		log.Error().
@@ -568,13 +638,13 @@ func (r *GithubRelease) Install() error {
 			for _, a := range allAssetsResponse {
 				allAssets = append(allAssets, &selector.SelectorItem{Name: a.Name})
 			}
-			
+
 			checksumFileName := r.findChecksumFile(allAssets)
 			if checksumFileName != "" {
 				log.Info().
 					Str("checksum_file", checksumFileName).
 					Msg("found checksum file, downloading")
-				
+
 				_, _, execErr := ghExec("release", "download", releases[0].Name,
 					"--repo", r.CliParams.Repository, "--pattern", checksumFileName, "--dir", downloadDir)
 				if execErr != nil {
@@ -677,47 +747,67 @@ func (r *GithubRelease) Install() error {
 				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 				Str("release asset binary", binary.Name).
 				Msg("processing selected release asset binary")
-			if binary.Compressed {
+
+			actualDownloadPath := binary.DownloadPath
+
+			if binary.Compressed && binary.BinaryType != selector.BinaryExecutable {
 				log.Debug().
 					Str("release asset binary", binary.Name).
-					Str("release asset binary archive path", binary.FsPath).
-					Msg("binary is part of an archive")
-				binariesOutput[binary.Name] = "compressed"
-				execErr = r.installArchivedBinary(binary.Fs, binary.FsPath)
-			} else {
-				switch binary.BinaryType {
-				case selector.BinaryDebInstaller:
-					log.Debug().
-						Str("release asset binary", binary.Name).
-						Msg("binary is a deb installer")
-					binariesOutput[binary.Name] = "deb"
-					execErr = r.installDeb(binary.DownloadPath)
-				case selector.BinaryRpmInstaller:
-					log.Debug().
-						Str("release asset binary", binary.Name).
-						Msg("binary is a rpm installer")
-					binariesOutput[binary.Name] = "rpm"
-					execErr = r.installRpm(binary.DownloadPath)
-				case selector.BinaryPacmanInstaller:
-					log.Debug().
-						Str("release asset binary", binary.Name).
-						Msg("binary is a pacman installer")
-					binariesOutput[binary.Name] = "pacman"
-					execErr = r.installPacman(binary.DownloadPath)
-				case selector.BinaryPkgInstaller:
-					log.Debug().
-						Str("release asset binary", binary.Name).
-						Msg("binary is a freebsd pkg/txz installer")
-					binariesOutput[binary.Name] = "pkg"
-					execErr = r.installPkg(binary.DownloadPath)
-				default:
-					log.Debug().
-						Str("release asset binary", binary.Name).
-						Msg("binary is a plain executable")
-					binariesOutput[binary.Name] = "binary"
-					execErr = r.installBinary(binary.DownloadPath)
+					Msg("extracting archived installer to temporary directory")
+
+				actualDownloadPath = filepath.Join(downloadDir, binary.Name)
+				sourceFile, openErr := binary.Fs.Open(binary.FsPath)
+				if openErr != nil {
+					return openErr
+				}
+				destFile, createErr := os.Create(actualDownloadPath)
+				if createErr != nil {
+					_ = sourceFile.Close()
+					return createErr
+				}
+				_, copyErr := io.Copy(destFile, sourceFile)
+				_ = destFile.Close()
+				_ = sourceFile.Close()
+				if copyErr != nil {
+					return copyErr
 				}
 			}
+
+			switch binary.BinaryType {
+			case selector.BinaryDebInstaller:
+				log.Debug().Msg("binary is a deb installer")
+				binariesOutput[binary.Name] = "deb"
+				execErr = r.installDeb(actualDownloadPath)
+			case selector.BinaryRpmInstaller:
+				log.Debug().Msg("binary is a rpm installer")
+				binariesOutput[binary.Name] = "rpm"
+				execErr = r.installRpm(actualDownloadPath)
+			case selector.BinaryPacmanInstaller:
+				log.Debug().Msg("binary is a pacman installer")
+				binariesOutput[binary.Name] = "pacman"
+				execErr = r.installPacman(actualDownloadPath)
+			case selector.BinaryPkgInstaller:
+				log.Debug().Msg("binary is a freebsd pkg/txz installer")
+				binariesOutput[binary.Name] = "pkg"
+				execErr = r.installPkg(actualDownloadPath)
+			case selector.BinaryMacInstaller:
+				log.Debug().Msg("binary is a mac installer")
+				binariesOutput[binary.Name] = "mac"
+				execErr = r.installMac(actualDownloadPath)
+			case selector.BinaryWindowsInstaller:
+				log.Debug().Msg("binary is a windows installer")
+				binariesOutput[binary.Name] = "windows"
+				execErr = r.installWindows(actualDownloadPath)
+			default:
+				log.Debug().Msg("binary is a plain executable")
+				binariesOutput[binary.Name] = "binary"
+				if binary.Compressed {
+					execErr = r.installArchivedBinary(binary.Fs, binary.FsPath)
+				} else {
+					execErr = r.installBinary(actualDownloadPath)
+				}
+			}
+
 			if execErr != nil {
 				log.Error().
 					Str("repository", r.CliParams.Repository).
@@ -740,7 +830,7 @@ func (r *GithubRelease) Install() error {
 	if !r.CliParams.NoSaveState {
 		st, err := state.LoadState()
 		if err == nil {
-			st.AddApp(&state.InstalledApp{
+			_ = st.AddApp(&state.InstalledApp{
 				Repository:          r.CliParams.Repository,
 				TargetPath:          r.CliParams.TargetPath,
 				Global:              r.CliParams.Global,

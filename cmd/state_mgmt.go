@@ -55,7 +55,7 @@ func ListState() error {
 	}
 
 	fmt.Println()
-	pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
+	_ = pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 	fmt.Println()
 	return nil
 }
@@ -111,7 +111,7 @@ func RmState(target string) error {
 				} else if _, err := exec.LookPath("pkg"); err == nil {
 					cmd = exec.Command("sudo", "pkg", "delete", "-y", pkgName)
 				}
-				
+
 				if cmd != nil {
 					if err := cmd.Run(); err != nil {
 						log.Warn().Err(err).Msgf("Failed to uninstall package %s", pkgName)
@@ -212,7 +212,7 @@ func EditState() error {
 		app.Disabled = !selectedMap[label]
 	}
 
-	st.Save()
+	_ = st.Save()
 
 	// 2. Interactive Multi-select for removal
 	pterm.Println()
@@ -233,7 +233,7 @@ func EditState() error {
 				log.Info().Msgf("Removed %s from state.", repo)
 			}
 		}
-		st.Save()
+		_ = st.Save()
 	}
 
 	return nil

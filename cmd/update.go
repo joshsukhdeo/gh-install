@@ -17,7 +17,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	}
 
 	for _, app := range st.Apps {
-		specificallyTargeted := (r.Repository != "" && strings.ToLower(r.Repository) == strings.ToLower(app.Repository))
+		specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
 
 		if r.Repository != "" && !specificallyTargeted {
 			continue // specifically targeted another app

@@ -3,6 +3,7 @@ package selector
 import (
 	"io/fs"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -14,19 +15,32 @@ const (
 	BinaryPkgInstaller
 	BinaryPacmanInstaller
 	BinaryExecutable
+	BinaryMacInstaller
+	BinaryWindowsInstaller
 )
 
 func BinaryTypeFromPath(fromPath string) BinaryType {
 	if strings.HasSuffix(fromPath, ".pkg.tar.zst") || strings.HasSuffix(fromPath, ".pkg.tar.xz") {
 		return BinaryPacmanInstaller
 	}
-	extension := filepath.Ext(fromPath)
+	lowerPath := strings.ToLower(fromPath)
+	if strings.HasSuffix(lowerPath, ".msi") || (strings.Contains(lowerPath, "setup") && strings.HasSuffix(lowerPath, ".exe")) {
+		return BinaryWindowsInstaller
+	}
+	extension := filepath.Ext(lowerPath)
 	switch extension {
 	case ".rpm":
 		return BinaryRpmInstaller
 	case ".deb":
 		return BinaryDebInstaller
-	case ".pkg", ".txz":
+	case ".txz":
+		return BinaryPkgInstaller
+	case ".dmg":
+		return BinaryMacInstaller
+	case ".pkg":
+		if runtime.GOOS == "darwin" {
+			return BinaryMacInstaller
+		}
 		return BinaryPkgInstaller
 	default:
 		return BinaryExecutable

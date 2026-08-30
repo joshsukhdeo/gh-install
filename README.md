@@ -16,6 +16,9 @@ gh extension install joshsukhdeo/gh-install
   - **Fedora/RHEL/CentOS** (`rpm`): `.rpm` → `dnf install` or `rpm -i`
   - **Arch Linux** (`pacman`): `.pkg.tar.zst` / `.pkg.tar.xz` → `pacman -U`
   - **FreeBSD** (`pkg`): `.pkg` / `.txz` → `pkg install` or `pkg add`
+  - **Archive Embedded Installers:** Automatically extracts and correctly routes native installers (like `.deb` or `.rpm`) found inside generic archives (`.tar.gz` or `.zip`).
+  - **Archive Embedded Installers:** Automatically extracts and routes native installers (e.g. `.deb`, `.rpm`, `.msi`) embedded within generic archives.
+  - **MacOS & Windows Support:** Custom installation pipelines for `.dmg`, `.pkg`, `.msi`, and Windows `setup.exe` executables natively or via Wine.
   - **Fallback:** AppImage, Flatpak, Snap, or raw binary extraction for distros without native package managers.
 - **State Management & Updates:** Tracks installed binaries in `state.json` so you can update them all later with a single command. All installation flags (`-T`, `--all`, `--asset-binaries-regexp`) are persisted so updates reproduce the exact same installation behavior.
 - **Uninstall Support:** `--rm-saved-state` removes the application from tracking **and** deletes the installed binary from disk.

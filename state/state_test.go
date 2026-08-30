@@ -37,7 +37,7 @@ func TestStateManagement(t *testing.T) {
 			Disabled:      false,
 		}
 
-		st.AddApp(app)
+		_ = st.AddApp(app)
 		assert.Len(t, st.Apps, 1)
 
 		err = st.Save()
@@ -67,7 +67,7 @@ func TestStateManagement(t *testing.T) {
 			Version:    "v1.4.0", // Updated version
 		}
 
-		st.AddApp(app)
+		_ = st.AddApp(app)
 		assert.Len(t, st.Apps, 1) // Should still be 1
 
 		loadedApp := st.Apps["junegunn/fzf"]

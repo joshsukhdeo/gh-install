@@ -6,6 +6,7 @@ require (
 	atomicgo.dev/keyboard v0.2.9
 	github.com/adrg/xdg v0.5.3
 	github.com/cli/go-gh/v2 v2.11.0
+	github.com/gofrs/flock v0.13.1
 	github.com/mholt/archiver/v4 v4.0.0-alpha.8
 	github.com/stretchr/testify v1.12.1
 )
@@ -16,7 +17,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/gofrs/flock v0.13.1 // indirect
 	github.com/gookit/color v1.6.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect

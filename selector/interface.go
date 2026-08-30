@@ -8,9 +8,9 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"strings"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/mholt/archiver/v4"
 	"github.com/rs/zerolog/log"
@@ -256,6 +256,7 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 			items = append(items, &SelectorItem{
 				Name:       d.Name(),
 				Compressed: true,
+				BinaryType: BinaryTypeFromPath(d.Name()),
 				FsPath:     fsPath,
 				Fs:         fileSystem,
 			})

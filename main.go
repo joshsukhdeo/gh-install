@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
-	"fmt"
 
 	"github.com/alecthomas/kong"
 	"github.com/joshsukhdeo/gh-install/cmd"

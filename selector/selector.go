@@ -50,4 +50,3 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 	}
 	return selectedItems, nil
 }
-

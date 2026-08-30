@@ -59,4 +59,3 @@ func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 
 	return selectedItems, nil
 }
-

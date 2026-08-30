@@ -66,7 +66,7 @@ func (s *State) Save() error {
 	if err := lock.Lock(); err != nil {
 		return err
 	}
-	defer lock.Unlock()
+	defer func() { _ = lock.Unlock() }()
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
