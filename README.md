@@ -183,10 +183,10 @@ The configuration precedence is: `CLI Argument > Environment Variable > config.y
 
 ## Topgrade Integration
 
-`gh-install` can easily be integrated with [Topgrade](https://github.com/topgrade-rs/topgrade) to keep all your installed binaries up to date automatically alongside your system packages. Just add the following to your `topgrade.toml` under the `[custom_commands]` block:
+`gh-install` can easily be integrated with [Topgrade](https://github.com/topgrade-rs/topgrade) to keep all your installed binaries up to date automatically alongside your system packages. Just add the following to your `topgrade.toml` under the `[commands]` block:
 
 ```toml
-[custom_commands]
+[commands]
 "gh-install" = "gh install -U"
 ```
 
