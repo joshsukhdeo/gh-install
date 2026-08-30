@@ -25,6 +25,11 @@ type IRelease interface {
 	Install() error
 }
 
+var (
+	execCommand = exec.Command
+	ghExec      = gh.Exec
+)
+
 type GithubRelease struct {
 	CliParams       *params.CLI
 	Client          selector.GithubClient
@@ -226,7 +231,7 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 		}
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := execCommand("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -266,7 +271,7 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 		}
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := execCommand("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -406,7 +411,7 @@ func (r *GithubRelease) Install() error {
 			downloadSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Downloading asset '%s'...", asset.Name))
 		}
 
-		stdOut, stdErr, execErr := gh.Exec("release", "download", releases[0].Name,
+		stdOut, stdErr, execErr := ghExec("release", "download", releases[0].Name,
 			"--repo", r.CliParams.Repository, "--pattern", asset.Name, "--dir", downloadDir)
 		if execErr != nil {
 			execErr = fmt.Errorf("failed to run gh command: %s", stdErr.String())
