@@ -45,9 +45,18 @@ func ListState() error {
 			autoUpdate = "Disabled"
 		}
 
+		versionDisplay := app.Version
+		if app.Clone {
+			versionDisplay = "git (clone)"
+		} else if app.Fork {
+			versionDisplay = "git (fork)"
+		} else if app.CompileScript != "" {
+			versionDisplay = "source (ai script)"
+		}
+
 		tableData = append(tableData, []string{
 			app.Repository,
-			app.Version,
+			versionDisplay,
 			scope,
 			autoUpdate,
 			app.TargetPath,

@@ -25,6 +25,9 @@ type InstalledApp struct {
 	PackageNames        []string          `json:"package_names,omitempty"`
 	Pinned              bool              `json:"pinned,omitempty"`
 	NativeExtract       bool              `json:"native_extract"`
+	Clone               bool              `json:"clone,omitempty"`
+	Fork                bool              `json:"fork,omitempty"`
+	CompileScript       string            `json:"compile_script,omitempty"`
 }
 
 type State struct {

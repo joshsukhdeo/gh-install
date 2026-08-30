@@ -23,16 +23,16 @@ make tidy
 - `cmd/`:
   - `root.go`: Command routing (`RootCLI.Run()`), default install type heuristics, distro detection (`/etc/os-release`, `ID_LIKE`), and hardware acceleration detection (NPU `/sys/class/accel`, GPU `/dev/dri`).
   - `state_mgmt.go`: State inspection, removal (`--rm-saved-state`), uninstallation logic per package manager (`dpkg -r`, `rpm -e`, `pacman -R`, `pkg delete`, or `os.Remove`), and pin management (`--pin`).
-  - `update.go`: Update runner (`-U`/`-u`), replaying installation params from state entries while preserving pin rules.
-- `params/params.go`: Kong struct tag definitions for all CLI flags, environment variable bindings (`GH_INSTALL_*`), and custom types.
+  - `update.go`: Update runner (`-U`/`-u`), replaying installation params from state entries while preserving pin rules; delegates git repository syncing (`gh repo sync`) for cloned and forked apps.
+- `params/params.go`: Kong struct tag definitions for all CLI flags (including `--clone` and `--fork`), environment variable bindings (`GH_INSTALL_*`), and custom types.
 - `release/`:
   - `release.go`: GitHub REST client (`cli/go-gh/v2`), asset matching, checksum discovery & verification (SHA-256 / SHA-512), extraction, and permission management.
   - `name_cleaner.go`: OS/architecture/version affix removal heuristics for normalized binary renaming (`GenerateCleanName`).
 - `selector/`:
   - `selector.go`: Regex builder (`buildRegexFromTypes`) and priority asset filtering.
   - `interactive_selector.go`: TUI/interactive prompts using `pterm`.
-- `state/state.go`: XDG data store (`$XDG_DATA_HOME/gh-install/state.json`) with file-locking (`flock` on `state.json.lock`).
-- `config/config.go`: XDG configuration parsing (`$XDG_CONFIG_HOME/gh-install/config.yml`).
+- `state/state.go`: XDG data store (`$XDG_DATA_HOME/gh-install/state.json`) with file-locking (`flock` on `state.json.lock`), supporting binary releases and `Clone`/`Fork` tracking.
+- `config/config.go`: XDG configuration parsing (`$XDG_CONFIG_HOME/gh-install/config.yml`), including custom `clone_path` and `fork_path`.
 
 ## Critical Implementation Rules & Gotchas
 1. **GitHub CLI Prerequisite**: Authentication and presence of `gh` CLI is mandatory.

@@ -30,6 +30,9 @@ func TestConfigManagement(t *testing.T) {
 install_types: deb,rpm
 install_path: /custom/bin
 global_path: /custom/global
+clone_path: /custom/src
+fork_path: /custom/projects
+ai_cmd: "my-ai -p '%s'"
 add_deps: true
 prompt_rename: true
 no_save_state: true
@@ -45,6 +48,9 @@ no_save_state: true
 		assert.Equal(t, "deb,rpm", cfg.InstallTypes)
 		assert.Equal(t, "/custom/bin", cfg.InstallPath)
 		assert.Equal(t, "/custom/global", cfg.GlobalPath)
+		assert.Equal(t, "/custom/src", cfg.ClonePath)
+		assert.Equal(t, "/custom/projects", cfg.ForkPath)
+		assert.Equal(t, "my-ai -p '%s'", cfg.AICmd)
 		assert.True(t, cfg.AddDeps)
 		assert.False(t, cfg.NoDeps)
 		assert.True(t, cfg.PromptRename)
