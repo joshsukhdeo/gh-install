@@ -23,6 +23,8 @@ func main() {
 	vars := kong.Vars{
 		"install_types": cmd.GetDefaultInstallTypes(),
 		"install_path":  cmd.GetDefaultTargetPath(),
+		"clone_path":    cmd.GetDefaultClonePath(),
+		"fork_path":     cmd.GetDefaultForkPath(),
 		"version":       "2.0.0",
 	}
 
@@ -32,6 +34,12 @@ func main() {
 		}
 		if cfg.InstallPath != "" {
 			vars["install_path"] = cfg.InstallPath
+		}
+		if cfg.ClonePath != "" {
+			vars["clone_path"] = cfg.ClonePath
+		}
+		if cfg.ForkPath != "" {
+			vars["fork_path"] = cfg.ForkPath
 		}
 	}
 

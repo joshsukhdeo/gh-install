@@ -12,6 +12,9 @@ type Config struct {
 	InstallTypes   string `yaml:"install_types"`
 	InstallPath    string `yaml:"install_path"`
 	GlobalPath     string `yaml:"global_path"`
+	ClonePath      string `yaml:"clone_path"`
+	ForkPath       string `yaml:"fork_path"`
+	AICmd          string `yaml:"ai_cmd"`
 	AddDeps        bool   `yaml:"add_deps"`
 	NoDeps         bool   `yaml:"no_deps"`
 	PromptRename   bool   `yaml:"prompt_rename"`

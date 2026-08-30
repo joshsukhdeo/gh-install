@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -42,6 +45,55 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		}
 
 		log.Info().Msgf("Updating %s...", app.Repository)
+
+		if app.CompileScript != "" {
+			if r.DryRun {
+				log.Info().Msgf("[dry-run] Would execute compile script %s for %s", app.CompileScript, app.Repository)
+				continue
+			}
+
+			var cmd *exec.Cmd
+			if runtime.GOOS == "windows" {
+				cmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", app.CompileScript)
+			} else {
+				cmd = exec.Command("sh", app.CompileScript)
+			}
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			if err := cmd.Run(); err != nil {
+				log.Error().Err(err).Msgf("Failed to update %s via compile script", app.Repository)
+			} else {
+				log.Info().Msgf("Successfully updated %s via compile script", app.Repository)
+			}
+			continue
+		}
+
+		if app.Clone || app.Fork {
+			if r.DryRun {
+				log.Info().Msgf("[dry-run] Would sync repo %s at %s", app.Repository, app.TargetPath)
+				continue
+			}
+
+			var syncArgs []string
+			if app.Fork {
+				syncArgs = []string{"repo", "sync", "--source", app.Repository}
+			} else {
+				syncArgs = []string{"repo", "sync"}
+			}
+
+			// Run gh repo sync in the target repository directory
+			cmd := exec.Command("gh", syncArgs...)
+			cmd.Dir = app.TargetPath
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Error().Err(err).Msgf("Failed to sync %s: %s", app.Repository, string(output))
+			} else {
+				log.Info().Msgf("Successfully synced %s", app.Repository)
+			}
+			continue
+		}
 
 		// Create fresh params for this app based on stored state
 		appParams := *(*params.CLI)(r)
