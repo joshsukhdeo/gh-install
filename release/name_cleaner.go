@@ -15,44 +15,30 @@ func GenerateCleanName(binaryName, repoName string) string {
 
 	clean := binaryName
 
-	// Common OS and Arch strings to strip
-	affixes := []string{
-		"linux", "darwin", "windows", "mac", "macos", "apple", "win",
-		"amd64", "x86_64", "x64", "x86", "arm64", "aarch64", "armv7", "armv6", "arm", "386", "i386",
-		"musl", "gnu", "unknown", "pc", "msvc",
+	// We will aggressively extract any valid alpha-based extension so tokenization works.
+	ext := ""
+	if match := regexp.MustCompile(`(?i)(\.[a-z][a-z0-9]*)$`).FindStringSubmatch(clean); len(match) > 0 {
+		ext = match[1]
+		clean = clean[:len(clean)-len(ext)]
 	}
 
-	// Remove common extensions first (like .exe for logic, though we might add it back later if on windows)
-	exts := []string{".exe", ".bin", ".elf"}
-	for _, ext := range exts {
-		if strings.HasSuffix(strings.ToLower(clean), ext) {
-			clean = clean[:len(clean)-len(ext)]
-		}
-	}
-
-	// We want to split the name by common delimiters (- or _)
-	// But we have to be careful not to strip parts of the actual app name like "docker-compose"
-	// Heuristic: If a token matches a known OS/Arch affix exactly, remove it.
-	tokens := regexp.MustCompile(`[-_]`).Split(clean, -1)
-	var finalTokens []string
+	// Regex to remove common affixes
+	// We want to remove these words when they appear bounded by word boundaries or punctuation.
+	affixPattern := `(?i)(?:^|[-_.])(?:linux|darwin|windows|mac|macos|apple|win|amd64|x86_64|x64|x86|arm64|aarch64|armv7|armv6|arm|386|i386|musl|gnu|unknown|pc|msvc)(?:[-_.]|$)`
 	
-	for _, token := range tokens {
-		isAffix := false
-		lowerToken := strings.ToLower(token)
-		for _, affix := range affixes {
-			if lowerToken == affix {
-				isAffix = true
-				break
-			}
+	// Keep replacing until no more matches (since overlapping boundaries might prevent single-pass removal)
+	for {
+		newClean := regexp.MustCompile(affixPattern).ReplaceAllString(clean, "-")
+		if newClean == clean {
+			break
 		}
-		if !isAffix {
-			finalTokens = append(finalTokens, token)
-		}
+		clean = newClean
 	}
 
-	if len(finalTokens) > 0 {
-		clean = strings.Join(finalTokens, "-")
-	}
+	// Clean up leftover punctuation
+	clean = regexp.MustCompile(`[-_.]+$`).ReplaceAllString(clean, "")
+	clean = regexp.MustCompile(`^[-_.]+`).ReplaceAllString(clean, "")
+	clean = regexp.MustCompile(`[-_]{2,}`).ReplaceAllString(clean, "-")
 
 	// Fallback to repoName if we stripped everything somehow
 	if clean == "" {

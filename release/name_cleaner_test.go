@@ -53,7 +53,7 @@ func TestGenerateCleanName(t *testing.T) {
 			name:       "cli/cli (github cli)",
 			binaryName: "gh_2.32.0_linux_amd64",
 			repoName:   "cli",
-			expected:   "gh-2.32.0",
+			expected:   "gh_2.32.0",
 		},
 	}
 

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -72,8 +71,12 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 		repoName := repoParts[len(repoParts)-1]
 
 		proposedName := GenerateCleanName(binaryName, repoName)
-		if (runtime.GOOS == "windows" || strings.HasSuffix(strings.ToLower(binaryName), ".exe")) && !strings.HasSuffix(proposedName, ".exe") {
-			proposedName += ".exe"
+
+		if extMatch := regexp.MustCompile(`(?i)(\.[a-z][a-z0-9]*)$`).FindStringSubmatch(binaryName); len(extMatch) > 0 {
+			ext := extMatch[1]
+			if !strings.HasSuffix(proposedName, ext) {
+				proposedName += ext
+			}
 		}
 
 		if len(binaryName) > len(proposedName)+3 { // If it has significant affixes
