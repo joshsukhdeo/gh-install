@@ -17,8 +17,8 @@ gh extension install joshsukhdeo/gh-install
 - **Intelligent Asset Selection:** Automatically prioritizes system packages (`.deb`, `.rpm`) and containerized formats (Snap, Flatpak, AppImage) over raw archives depending on your OS.
 - **State Management & Updates:** Tracks installed binaries so you can update them all later with a single command.
 - **Dependency Resolution:** Can automatically resolve and install dependencies for `.deb`/`.rpm` via `apt` or `dnf`.
-- **Cross-Platform:** Supports Linux, macOS, and Windows.
-- **Wine Support:** Can seamlessly pull and install Windows `.exe`/`.msi` binaries on Linux systems if `--allow-wine` is enabled.
+- **Cross-Platform:** Supports Linux, macOS, Windows, and FreeBSD.
+- **Wine Support:** Can seamlessly pull and install Windows `.exe`/`.msi` binaries on Linux and FreeBSD systems if `--allow-wine` is enabled.
 - **Clean Naming:** Automatically strips messy hardware/OS tags (like `-x86_64-linux`) and redundant version strings from the final installed binary name.
 
 ---
@@ -111,7 +111,7 @@ Non-interactive Mode
                                    (prevents tracking for updates)
                                    ($GH_INSTALL_NO_SAVE_STATE).
       --allow-wine                 Allow installing Windows executables on
-                                   Linux/macOS ($GH_INSTALL_ALLOW_WINE).
+                                   Linux/macOS/FreeBSD ($GH_INSTALL_ALLOW_WINE).
       --[no-]target-path-create    Create target installation
                                    directory if it does not exist
                                    ($GH_INSTALL_TARGET_PATH_CREATE).
