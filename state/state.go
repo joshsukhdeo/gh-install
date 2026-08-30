@@ -10,13 +10,14 @@ import (
 )
 
 type InstalledApp struct {
-	Repository     string            `json:"repository"`
-	TargetPath     string            `json:"target_path"`
-	Global         bool              `json:"global"`
-	ReleaseAsset   string            `json:"release_asset"`
-	ReleaseRegexp  string            `json:"release_regexp"`
-	Version        string            `json:"version"`
-	Rename map[string]string `json:"target_binaries"`
+	Repository    string            `json:"repository"`
+	TargetPath    string            `json:"target_path"`
+	Global        bool              `json:"global"`
+	ReleaseAsset  string            `json:"release_asset"`
+	ReleaseRegexp string            `json:"release_regexp"`
+	Version       string            `json:"version"`
+	Rename        map[string]string `json:"target_binaries"`
+	Disabled      bool              `json:"disabled"`
 }
 
 type State struct {

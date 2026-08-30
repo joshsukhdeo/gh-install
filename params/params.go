@@ -8,6 +8,9 @@ type CLI struct {
 	UpdateAll           bool              `short:"U" help:"Update all installed applications (user and global)."`
 	Update              bool              `short:"u" help:"Update user installations (add -g for global only)."`
 	SetupTopgradeStep   bool              `help:"Add an entry to the topgrade configuration for gh-install."`
+	ListSavedState      bool              `help:"List saved state in a user-friendly format." group:"State Management"`
+	EditSavedState      bool              `help:"Edit saved state (enable/disable updates or remove apps)." group:"State Management"`
+	RmSavedState        string            `help:"Remove a saved app from state by repository slug or binary name." group:"State Management"`
 	ReleaseVersion      string            `default:"latest" short:"v" help:"Repository release tag (version) to install." group:"Non-interactive Mode"`
 	ReleaseAsset        string            `optional:"" short:"a" help:"Name of repository release asset to download. If not set, --release-asset-regexp is used." group:"Non-interactive Mode"`
 	ReleaseAssetRegexp  string            `optional:"" short:"A" help:"Regular expression matching release asset to download." group:"Non-interactive Mode"`

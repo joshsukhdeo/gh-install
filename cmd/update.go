@@ -20,6 +20,16 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	}
 
 	for _, app := range st.Apps {
+		specificallyTargeted := (r.Repository != "" && strings.ToLower(r.Repository) == strings.ToLower(app.Repository))
+
+		if r.Repository != "" && !specificallyTargeted {
+			continue // specifically targeted another app
+		}
+
+		if app.Disabled && !specificallyTargeted {
+			continue // skip disabled unless specifically targeted
+		}
+
 		if r.Update && !r.UpdateAll {
 			if r.Global && !app.Global {
 				continue // wants global only, this is user
