@@ -65,3 +65,12 @@ Arguments:
   <repository>    Github repository in OWNER/REPOSITORY_NAME format ($YEET_REPOSITORY).
 ...
 ```
+
+## Topgrade Integration
+
+`gh-install` can easily be integrated with [Topgrade](https://github.com/topgrade-rs/topgrade) to keep all your installed binaries up to date automatically. Just add the following to your `topgrade.toml` under the `[custom_commands]` block:
+
+```toml
+[custom_commands]
+"gh-install" = "gh install -U"
+```
