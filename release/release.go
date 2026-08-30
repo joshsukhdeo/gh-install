@@ -368,27 +368,7 @@ func (r *GithubRelease) Install() error {
 		return scoreI > scoreJ
 	})
 
-	if r.CliParams.AddSavedStateOnly {
-		log.Info().Msgf("Skipping download and install for %s, saving to state only.", r.CliParams.Repository)
-		st, err := state.LoadState()
-		if err == nil {
-			st.AddApp(&state.InstalledApp{
-				Repository:    r.CliParams.Repository,
-				TargetPath:    r.CliParams.TargetPath,
-				Global:        r.CliParams.Global,
-				ReleaseAsset:  r.CliParams.ReleaseAsset,
-				ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
-				Version:       releases[0].Name,
-				Rename:        r.CliParams.Rename,
-			})
-			if r.CliParams.Interactive {
-				pterm.Success.Printf("Successfully added %s to state!\n", r.CliParams.Repository)
-			}
-		} else {
-			log.Warn().Err(err).Msg("could not save installed app state")
-		}
-		return nil
-	}
+
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {

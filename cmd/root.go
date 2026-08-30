@@ -28,7 +28,7 @@ const (
 type RootCLI params.CLI
 
 func (r *RootCLI) Validate() error {
-	if !r.Update && !r.UpdateAll && !r.SetupTopgradeStep && !r.ListSavedState && !r.EditSavedState && r.RmSavedState == "" {
+	if !r.Update && !r.UpdateAll && !r.ListSavedState && !r.EditSavedState && r.RmSavedState == "" {
 		match, _ := regexp.MatchString(`.+/.+`, r.Repository)
 		if !match {
 			return fmt.Errorf("repository must be in 'user/repository' format (provided: '%s')", r.Repository)
@@ -151,10 +151,6 @@ func (r *RootCLI) Run() error {
 		return err
 	}
 
-	if r.SetupTopgradeStep {
-		return SetupTopgrade()
-	}
-
 	if r.ListSavedState {
 		return ListState()
 	}
@@ -223,7 +219,6 @@ func GetDefaultTargetPath() string {
 
 	return filepath.Join(homeDir, ".local", "bin")
 }
-
 
 func GetDefaultInstallTypes() string {
 	tarballRgx := `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`

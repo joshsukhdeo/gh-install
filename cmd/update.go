@@ -1,11 +1,8 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/adrg/xdg"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/joshsukhdeo/gh-install/params"
 	"github.com/joshsukhdeo/gh-install/release"
@@ -61,43 +58,5 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		}
 	}
 
-	return nil
-}
-
-func SetupTopgrade() error {
-	topgradePath := filepath.Join(xdg.ConfigHome, "topgrade.toml")
-
-	content, err := os.ReadFile(topgradePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			content = []byte("[custom_commands]\n")
-		} else {
-			return err
-		}
-	}
-
-	conf := string(content)
-	if strings.Contains(conf, "\"gh-install\" =") {
-		log.Info().Msg("Topgrade configuration already contains gh-install step.")
-		return nil
-	}
-
-	if !strings.Contains(conf, "[custom_commands]") {
-		conf += "\n[custom_commands]\n"
-	}
-
-	newLine := "\"gh-install\" = \"gh install -U\"\n"
-
-	// Just append to the bottom or under [custom_commands]
-	// A simple approach is appending. But if [custom_commands] is not at the bottom,
-	// it might be cleaner to replace it.
-	conf = strings.Replace(conf, "[custom_commands]", "[custom_commands]\n"+newLine, 1)
-
-	err = os.WriteFile(topgradePath, []byte(conf), 0644)
-	if err != nil {
-		return err
-	}
-
-	log.Info().Msg("Successfully added gh-install to Topgrade custom commands.")
 	return nil
 }
