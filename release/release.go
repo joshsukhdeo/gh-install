@@ -17,7 +17,6 @@ import (
 	"github.com/joshsukhdeo/gh-install/selector"
 	"github.com/joshsukhdeo/gh-install/state"
 	"github.com/pterm/pterm"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -451,13 +450,7 @@ func (r *GithubRelease) Install() error {
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
 				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
-				Array("asset binary name matchers", func() *zerolog.Array {
-					arr := zerolog.Arr()
-					for _, i := range r.CliParams.AssetBinaries {
-						arr = arr.Str(i)
-					}
-					return arr
-				}()).
+				Strs("asset binary name matchers", r.CliParams.AssetBinaries).
 				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
 				Err(execErr).
 				Msg("could not create release asset binary selector")
@@ -471,13 +464,7 @@ func (r *GithubRelease) Install() error {
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
 				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
-				Array("asset binary name matchers", func() *zerolog.Array {
-					arr := zerolog.Arr()
-					for _, i := range r.CliParams.AssetBinaries {
-						arr = arr.Str(i)
-					}
-					return arr
-				}()).
+				Strs("asset binary name matchers", r.CliParams.AssetBinaries).
 				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
 				Err(execErr).
 				Msg("could not select release asset binary")

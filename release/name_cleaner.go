@@ -24,13 +24,8 @@ func GenerateCleanName(binaryName, repoName, resolvedVersion string) string {
 
 	// Directly strip the exact resolved version, with or without 'v'
 	if resolvedVersion != "" {
-		vStr := resolvedVersion
 		noVStr := strings.TrimPrefix(resolvedVersion, "v")
-		if noVStr == resolvedVersion {
-			vStr = "v" + resolvedVersion
-		}
-		
-		clean = strings.ReplaceAll(clean, vStr, "")
+		clean = strings.ReplaceAll(clean, "v"+noVStr, "")
 		clean = strings.ReplaceAll(clean, noVStr, "")
 	}
 
