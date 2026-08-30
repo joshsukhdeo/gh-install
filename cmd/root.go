@@ -108,11 +108,12 @@ func (r *RootCLI) Run() error {
 		r.NoDeps = false
 	} else if !r.AddDeps && !r.NoDeps {
 		envDeps := strings.ToUpper(os.Getenv("GH_INSTALL_ADD_DEPS"))
-		if envDeps == "TRUE" {
+		switch envDeps {
+		case "TRUE":
 			r.AddDeps = true
-		} else if envDeps == "FALSE" {
+		case "FALSE":
 			r.NoDeps = true
-		} else {
+		default:
 			cfg, _ := config.LoadConfig()
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
@@ -134,12 +135,13 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.Global && r.TargetPath == GetDefaultTargetPath() {
-		if runtime.GOOS == "windows" {
+		switch runtime.GOOS {
+		case "windows":
 			r.TargetPath = os.Getenv("ProgramFiles")
 			if r.TargetPath == "" {
 				r.TargetPath = "C:\\Program Files"
 			}
-		} else {
+		default:
 			r.TargetPath = "/usr/local/bin"
 		}
 	}
@@ -222,12 +224,13 @@ func GetDefaultTargetPath() string {
 }
 
 func GetDefaultInstallTypes() string {
-	tarballRgx := `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
-	if runtime.GOOS == "windows" {
+	tarballRgx := `t(ar\\.)?([gxl]z|bz2?|zst),tar(\\.lzma)?`
+	switch runtime.GOOS {
+	case "windows":
 		return fmt.Sprintf("exe,msi,7z,%s,zip,py,ts,js", tarballRgx)
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		return fmt.Sprintf("dmg,7z,%s,zip,py,ts,js,none", tarballRgx)
-	} else if runtime.GOOS == "linux" {
+	case "linux":
 		hasDpkg := false
 		hasRpm := false
 		if _, err := exec.LookPath("dpkg"); err == nil {
@@ -252,31 +255,33 @@ func GetDefaultInstallTypes() string {
 			}
 			return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 		}
-		
+
 		// Arch or others without rpm/deb natively
 		return fmt.Sprintf("appimage,flatpak,snap,7z,%s,zip,py,ts,js,none", tarballRgx)
-	} else if runtime.GOOS == "freebsd" {
+	case "freebsd":
 		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
+	default:
+		return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 	}
-	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 }
-
 func buildRegexFromTypes(types []string, allowWine bool) []string {
 	archRegex := runtime.GOARCH
-	if runtime.GOARCH == "amd64" {
+	switch runtime.GOARCH {
+	case "amd64":
 		archRegex = "(?:amd64|x86_64|x64)"
-	} else if runtime.GOARCH == "arm64" {
+	case "arm64":
 		archRegex = "(?:arm64|aarch64)"
 	}
 
 	var osRegexList []string
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		osRegexList = append(osRegexList, "(?:darwin|macos|apple)")
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		osRegexList = append(osRegexList, "(?:windows|win)")
-	} else if runtime.GOOS == "freebsd" {
+	case "freebsd":
 		osRegexList = append(osRegexList, "(?:freebsd)")
-	} else if runtime.GOOS == "linux" {
+	case "linux":
 		osRelease, err := os.ReadFile("/etc/os-release")
 		if err == nil {
 			content := string(osRelease)
@@ -288,8 +293,6 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 						osRegexList = append(osRegexList, distro)
 					}
 				} else if strings.HasPrefix(line, "ID_LIKE=") {
-					// Parse ID_LIKE which can have multiple space-separated values
-					// e.g., ID_LIKE="ubuntu debian" or ID_LIKE=ubuntu
 					idLike := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID_LIKE="), "\""))
 					if idLike != "" {
 						for _, likeDistro := range strings.Fields(idLike) {
