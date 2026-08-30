@@ -182,13 +182,22 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 }
 
 func (r *GithubRelease) installDeb(binaryPath string) error {
+	var args []string
+	if r.CliParams.NoDeps {
+		args = []string{"dpkg", "-i", binaryPath}
+	} else if r.CliParams.AddDeps {
+		args = []string{"apt-get", "install", "-y", binaryPath}
+	} else {
+		args = []string{"apt-get", "install", binaryPath}
+	}
+
 	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo dpkg -i %s'?", binaryPath)) {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
 			return fmt.Errorf("'%s' is a DEB installer and user did not want to run it", binaryPath)
 		}
 	}
 
-	cmd := exec.Command("sudo", "dpkg", "-i", binaryPath)
+	cmd := exec.Command("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -197,7 +206,7 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 		log.Error().
 			Str("installer binary", binaryPath).
 			Err(err).
-			Msgf("'sudo dpkg -i %s' failed", binaryPath)
+			Msgf("'sudo %s' failed", strings.Join(args, " "))
 		if r.CliParams.Interactive {
 			pterm.Error.Println("Failed to install .deb package")
 		}
@@ -205,7 +214,7 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 	}
 	log.Info().
 		Str("installer binary", binaryPath).
-		Msgf("ran 'sudo dpkg -i %s'", binaryPath)
+		Msgf("ran 'sudo %s'", strings.Join(args, " "))
 	if r.CliParams.Interactive {
 		pterm.Success.Println("Successfully installed .deb package!")
 	}
@@ -213,13 +222,22 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 }
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
+	var args []string
+	if r.CliParams.NoDeps {
+		args = []string{"rpm", "-i", binaryPath}
+	} else if r.CliParams.AddDeps {
+		args = []string{"dnf", "localinstall", "-y", binaryPath}
+	} else {
+		args = []string{"dnf", "localinstall", binaryPath}
+	}
+
 	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo dnf localinstall %s'?", binaryPath)) {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
 			return fmt.Errorf("'%s' is a RPM installer and user did not want to run it", binaryPath)
 		}
 	}
 
-	cmd := exec.Command("sudo", "dnf", "localinstall", binaryPath)
+	cmd := exec.Command("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -228,7 +246,7 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 		log.Error().
 			Str("installer binary", binaryPath).
 			Err(err).
-			Msgf("'sudo dnf localinstall %s' failed", binaryPath)
+			Msgf("'sudo %s' failed", strings.Join(args, " "))
 		if r.CliParams.Interactive {
 			pterm.Error.Println("Failed to install .rpm package")
 		}
@@ -236,7 +254,7 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 	}
 	log.Info().
 		Str("installer binary", binaryPath).
-		Msgf("ran 'sudo dnf localinstall %s'", binaryPath)
+		Msgf("ran 'sudo %s'", strings.Join(args, " "))
 	if r.CliParams.Interactive {
 		pterm.Success.Println("Successfully installed .rpm package!")
 	}
@@ -289,14 +307,14 @@ func (r *GithubRelease) Install() error {
 	}
 
 	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].GetId(),
-		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexp, r.CliParams.Interactive)
+		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive)
 	if err != nil {
 		log.Error().
 			Str("repository", r.CliParams.Repository).
 			Int("release id", releases[0].GetId()).
 			Str("release name", releases[0].Name).
 			Str("asset name matcher", r.CliParams.ReleaseAsset).
-			Str("asset regexp matcher", r.CliParams.ReleaseAssetRegexp).
+			Strs("asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
 			Err(err).
 			Msg("could not create release asset selector")
 		return err
@@ -307,7 +325,7 @@ func (r *GithubRelease) Install() error {
 			Str("repository", r.CliParams.Repository).
 			Int("release id", releases[0].GetId()).
 			Str("release asset name matcher", r.CliParams.ReleaseAsset).
-			Str("release asset regexp matcher", r.CliParams.ReleaseAssetRegexp).
+			Strs("release asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
 			Err(err).
 			Msg("could not select release asset")
 		return err

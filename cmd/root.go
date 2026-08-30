@@ -99,19 +99,26 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
+	if r.Global && r.TargetPath == GetDefaultTargetPath() {
+		r.TargetPath = "/usr/local/bin"
+	}
+
 	if r.AssetBinariesRegexp == "" {
 		r.AssetBinariesRegexp = fmt.Sprintf("^%s$", strings.Split(r.Repository, "/")[1])
 	}
 
 	if r.ReleaseAssetRegexp == "" {
-		r.ReleaseAssetRegexp = buildRegexFromTypes(r.Type)
+		r.ReleaseAssetRegexps = buildRegexFromTypes(r.Type)
+		r.ReleaseAssetRegexp = strings.Join(r.ReleaseAssetRegexps, " | ")
+	} else {
+		r.ReleaseAssetRegexps = []string{r.ReleaseAssetRegexp}
 	}
 
 	log.Info().
 		Str("repository", r.Repository).
 		Str("release version", r.ReleaseVersion).
 		Str("release asset name", r.ReleaseAsset).
-		Str("release asset regexp", r.ReleaseAssetRegexp).
+		Strs("release asset regexps", r.ReleaseAssetRegexps).
 		Array("release asset binary names", func() *zerolog.Array {
 			arr := zerolog.Arr()
 			for _, i := range r.AssetBinaries {
@@ -180,17 +187,17 @@ func GetDefaultInstallTypes() string {
 		if err == nil {
 			content := strings.ToLower(string(osRelease))
 			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				return fmt.Sprintf("deb,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+				return fmt.Sprintf("deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				return fmt.Sprintf("rpm,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+				return fmt.Sprintf("rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 			}
 		}
-		return fmt.Sprintf("deb,rpm,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
 	}
 	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 }
 
-func buildRegexFromTypes(types []string) string {
+func buildRegexFromTypes(types []string) []string {
 	archRegex := runtime.GOARCH
 	if runtime.GOARCH == "amd64" {
 		archRegex = "(?:amd64|x86_64|x64)"
@@ -205,29 +212,47 @@ func buildRegexFromTypes(types []string) string {
 		osRegex = "(?:windows|win)"
 	}
 
-	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
+	var matchers []string
 
-	var exts []string
-	hasNone := false
-	for _, t := range types {
-		t = strings.ToLower(strings.TrimSpace(t))
-		if t == "none" {
-			hasNone = true
-		} else if t != "" {
-			exts = append(exts, t)
+	hwSpecific := ""
+	if runtime.GOOS == "linux" {
+		if _, err := os.Stat("/sys/class/accel"); err == nil {
+			hwSpecific = "npu"
+		} else if _, err := os.Stat("/dev/dri"); err == nil {
+			hwSpecific = "(?:gpu|cuda|rocm)"
 		}
 	}
 
-	if len(exts) > 0 {
-		extPattern := strings.Join(exts, "|")
-		if hasNone {
-			return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, archRegex, extPattern)
-		} else {
+	buildFinal := func(baseRegex string) string {
+		var exts []string
+		hasNone := false
+		for _, t := range types {
+			t = strings.ToLower(strings.TrimSpace(t))
+			if t == "none" {
+				hasNone = true
+			} else if t != "" {
+				exts = append(exts, t)
+			}
+		}
+		if len(exts) > 0 {
+			extPattern := strings.Join(exts, "|")
+			if hasNone {
+				return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, archRegex, extPattern)
+			}
 			return fmt.Sprintf(`^.*%s.*\.(?i:%s)$`, archRegex, extPattern)
 		}
+		return fmt.Sprintf(`^%s$`, baseRegex)
 	}
 
-	return fmt.Sprintf(`^%s$`, baseRegex)
+	if hwSpecific != "" {
+		hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
+		matchers = append(matchers, buildFinal(hwBaseRegex))
+	}
+
+	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
+	matchers = append(matchers, buildFinal(baseRegex))
+
+	return matchers
 }
 
 func GetEnvPrefix() string {

@@ -8,11 +8,15 @@ type CLI struct {
 	ReleaseVersion          string            `default:"latest" short:"v" help:"Repository release tag (version) to install." group:"Non-interactive Mode"`
 	ReleaseAsset            string            `optional:"" short:"a" help:"Name of repository release asset to download. If not set, --release-asset-regexp is used." group:"Non-interactive Mode"`
 	ReleaseAssetRegexp      string            `optional:"" short:"A" help:"Regular expression matching release asset to download." group:"Non-interactive Mode"`
+	ReleaseAssetRegexps     []string          `kong:"-"`
 	Type                    []string          `default:"${install_types}" short:"T" env:"GH_INSTALL_TYPE" help:"Comma-separated list of types to match and prioritize." group:"Non-interactive Mode"`
 	All                     bool              `default:"false" help:"Install all matched assets instead of just the first one." group:"Non-interactive Mode"`
 	AssetBinaries           []string          `optional:"" short:"b" help:"If release asset is an archive - names of a binaries in the archive to install. If not set, --install-binary-regexp is used." group:"Non-interactive Mode"`
 	AssetBinariesRegexp     string            `optional:"" short:"B" help:"If release asset is an archive - regular expression matching binaries in the archive to install. If not set, repository name is used." group:"Non-interactive Mode"`
-	TargetPath              string            `default:"${install_path}" short:"p" type:"path" help:"Target installation directory."`
+	TargetPath              string            `default:"${install_path}" short:"p" type:"path" help:"Target installation directory (default: ~/.local/bin or /usr/local/bin if --global)."`
+	Global                  bool              `short:"g" help:"Install globally (e.g. /usr/local/bin) instead of user bin." group:"Non-interactive Mode"`
+	AddDeps                 bool              `short:"y" help:"Automatically resolve and install dependencies without prompting." group:"Non-interactive Mode"`
+	NoDeps                  bool              `short:"n" help:"Do not install dependencies (use dpkg/rpm directly)." group:"Non-interactive Mode"`
 	TargetBinaries          map[string]string `optional:"" short:"t" help:"Rename binaries installed at target path, \"<asset archive binary | asset>=<renamed binary>;...\"" group:"Non-interactive Mode"`
 	TargetPathCreate        bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist." group:"Non-interactive Mode"`
 	TargetBinariesOverwrite bool              `default:"false" short:"o" help:"Overwrite target binaries." group:"Non-interactive Mode"`

@@ -103,15 +103,16 @@ func ReleaseSelector(ghClient *api.RESTClient, repo string, version string, inte
 		Msgf("using release %s", versionMatcher)
 
 	return &Selector{
-		Kind:          Release,
-		Items:         items,
-		RegexpMatcher: versionMatcher,
-		Single:        true,
+		Kind:           Release,
+		Items:          items,
+		ItemOrder:      itemsOrder,
+		RegexpMatchers: []string{versionMatcher},
+		Single:         true,
 	}, nil
 }
 
 func AssetSelector(ghClient *api.RESTClient, repo string,
-	releaseId int, name string, matcher string, interactive bool) (ISelector, error) {
+	releaseId int, name string, matchers []string, interactive bool) (ISelector, error) {
 	var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
 	itemsOrder := make([]string, 0, 10)
 	items := make(map[string]*SelectorItem)
@@ -122,7 +123,7 @@ func AssetSelector(ghClient *api.RESTClient, repo string,
 		Str("repository", repo).
 		Int("release id", releaseId).
 		Str("asset matching name", name).
-		Str("asset matching regexp", matcher).
+		Strs("asset matching regexps", matchers).
 		Msg("getting release assets")
 
 	findNextPage := func(response *http.Response) (string, bool) {
@@ -192,11 +193,12 @@ func AssetSelector(ghClient *api.RESTClient, repo string,
 	}
 
 	return &Selector{
-		Kind:          Asset,
-		Items:         items,
-		NamesMatcher:  namesMatcher,
-		RegexpMatcher: matcher,
-		Single:        true,
+		Kind:           Asset,
+		Items:          items,
+		ItemOrder:      itemsOrder,
+		NamesMatcher:   namesMatcher,
+		RegexpMatchers: matchers,
+		Single:         true,
 	}, nil
 }
 
@@ -243,11 +245,11 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 			}
 
 			return &Selector{
-				Kind:          Binary,
-				Items:         items,
-				NamesMatcher:  names,
-				RegexpMatcher: path.Base(downloadPath),
-				Single:        true,
+				Kind:           Binary,
+				Items:          items,
+				NamesMatcher:   names,
+				RegexpMatchers: []string{path.Base(downloadPath)},
+				Single:         true,
 			}, nil
 		}
 		return nil, err
@@ -288,10 +290,10 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	}
 
 	return &Selector{
-		Kind:          Binary,
-		Items:         items,
-		NamesMatcher:  names,
-		RegexpMatcher: matcher,
-		Single:        false,
+		Kind:           Binary,
+		Items:          items,
+		NamesMatcher:   names,
+		RegexpMatchers: []string{matcher},
+		Single:         false,
 	}, nil
 }
