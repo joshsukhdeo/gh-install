@@ -9,11 +9,13 @@ import (
 )
 
 type Config struct {
-	InstallTypes string `yaml:"install_types"`
-	InstallPath  string `yaml:"install_path"`
-	GlobalPath   string `yaml:"global_path"`
-	AddDeps      bool   `yaml:"add_deps"`
-	NoDeps       bool   `yaml:"no_deps"`
+	InstallTypes   string `yaml:"install_types"`
+	InstallPath    string `yaml:"install_path"`
+	GlobalPath     string `yaml:"global_path"`
+	AddDeps        bool   `yaml:"add_deps"`
+	NoDeps         bool   `yaml:"no_deps"`
+	PromptRename   bool   `yaml:"prompt_rename"`
+	DisablePrompts bool   `yaml:"disable_prompts"`
 }
 
 func GetConfigPath() string {

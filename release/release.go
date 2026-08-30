@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -40,6 +41,9 @@ func MakeGithubRelease(cliParams *params.CLI, cli *api.RESTClient) IRelease {
 }
 
 func (r *GithubRelease) interactiveConfirm(prompt string) bool {
+	if r.CliParams.DisablePrompts {
+		return true
+	}
 	result, _ := pterm.DefaultInteractiveConfirm.
 		WithDefaultValue(true).
 		Show(prompt)
@@ -47,10 +51,50 @@ func (r *GithubRelease) interactiveConfirm(prompt string) bool {
 }
 
 func (r *GithubRelease) interactiveInput(prompt string, defaultValue string) string {
+	if r.CliParams.DisablePrompts {
+		return defaultValue
+	}
 	result, _ := pterm.DefaultInteractiveTextInput.
 		WithDefaultValue(defaultValue).
 		Show(prompt)
 	return result
+}
+
+func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
+	binaryName := path.Base(binaryPath)
+	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
+
+	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
+		return path.Join(r.CliParams.TargetPath, targetBinaryName)
+	}
+
+	if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
+		repoParts := strings.Split(r.CliParams.Repository, "/")
+		repoName := repoParts[len(repoParts)-1]
+
+		proposedName := repoName
+		if !strings.HasPrefix(strings.ToLower(binaryName), strings.ToLower(repoName)) {
+			proposedName = binaryName
+		}
+		if runtime.GOOS == "windows" && !strings.HasSuffix(proposedName, ".exe") {
+			proposedName += ".exe"
+		}
+
+		if len(binaryName) > len(proposedName)+3 { // If it has significant affixes
+			if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' is long. Do you want to strip OS/hardware affixes?", binaryName)) {
+				newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
+				if newName != "" {
+					return path.Join(r.CliParams.TargetPath, newName)
+				}
+			}
+		}
+	}
+
+	if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+		return r.interactiveInput(fmt.Sprintf("Install %s to", binaryPath), destinationPath)
+	}
+
+	return destinationPath
 }
 
 func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath string) error {
@@ -63,15 +107,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 		err = errors.Join(err, sourceFile.Close())
 	}()
 
-	binaryName := path.Base(binaryPath)
-	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
-	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
-		destinationPath = path.Join(r.CliParams.TargetPath, targetBinaryName)
-	}
-
-	if r.CliParams.Interactive {
-		destinationPath = r.interactiveInput(fmt.Sprintf("Install %s to", binaryPath), destinationPath)
-	}
+	destinationPath := r.resolveDestinationPath(binaryPath)
 
 	log.Info().
 		Msgf("will install %s to %s", binaryPath, destinationPath)
@@ -132,15 +168,7 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 		err = errors.Join(err, source.Close())
 	}()
 
-	binaryName := path.Base(binaryPath)
-	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
-	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
-		destinationPath = path.Join(r.CliParams.TargetPath, targetBinaryName)
-	}
-
-	if r.CliParams.Interactive {
-		destinationPath = r.interactiveInput(fmt.Sprintf("Install %s to", binaryPath), destinationPath)
-	}
+	destinationPath := r.resolveDestinationPath(binaryPath)
 
 	log.Info().
 		Msgf("will install %s to %s", binaryPath, destinationPath)
@@ -489,13 +517,13 @@ func (r *GithubRelease) Install() error {
 	st, err := state.LoadState()
 	if err == nil {
 		st.AddApp(&state.InstalledApp{
-			Repository:     r.CliParams.Repository,
-			TargetPath:     r.CliParams.TargetPath,
-			Global:         r.CliParams.Global,
-			ReleaseAsset:   r.CliParams.ReleaseAsset,
-			ReleaseRegexp:  r.CliParams.ReleaseAssetRegexp,
-			Version:        releases[0].Name,
-			Rename:         r.CliParams.Rename,
+			Repository:    r.CliParams.Repository,
+			TargetPath:    r.CliParams.TargetPath,
+			Global:        r.CliParams.Global,
+			ReleaseAsset:  r.CliParams.ReleaseAsset,
+			ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
+			Version:       releases[0].Name,
+			Rename:        r.CliParams.Rename,
 		})
 	} else {
 		log.Warn().Err(err).Msg("could not save installed app state")
