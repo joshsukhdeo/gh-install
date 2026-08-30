@@ -258,6 +258,23 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		osRegex = "(?:windows|win)"
 	} else if runtime.GOOS == "freebsd" {
 		osRegex = "(?:freebsd)"
+	} else if runtime.GOOS == "linux" {
+		osRegex = "(?:linux"
+		osRelease, err := os.ReadFile("/etc/os-release")
+		if err == nil {
+			content := string(osRelease)
+			lines := strings.Split(content, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "ID=") {
+					distro := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID="), "\""))
+					if distro != "" {
+						osRegex += "|" + distro
+					}
+					break
+				}
+			}
+		}
+		osRegex += ")"
 	}
 
 	var matchers []string
@@ -299,6 +316,9 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 
 	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
 	matchers = append(matchers, buildFinal(baseRegex, types))
+
+	fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
+	matchers = append(matchers, buildFinal(fallbackRegex, types))
 
 	if allowWine && runtime.GOOS != "windows" {
 		winOsRegex := "(?:windows|win)"
