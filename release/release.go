@@ -36,6 +36,8 @@ type GithubRelease struct {
 	Client                selector.GithubClient
 	ResolvedVersion       string
 	InstalledPackageNames []string
+	PendingDebs           []string
+	PendingRpms           []string
 }
 
 func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) *GithubRelease {
@@ -266,101 +268,21 @@ func extractPackageName(binaryPath string, pkgType string) string {
 
 func (r *GithubRelease) installDeb(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install deb: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would queue deb for batch install: %s", binaryPath)
 		return nil
 	}
-	if err := r.ensureSudo(); err != nil {
-		return err
-	}
-	if name := extractPackageName(binaryPath, "deb"); name != "" {
-		r.InstalledPackageNames = append(r.InstalledPackageNames, name)
-	}
-	var args []string
-	if r.CliParams.NoDeps {
-		args = []string{"dpkg", "-i", binaryPath}
-	} else if r.CliParams.AddDeps {
-		args = []string{"apt-get", "install", "-y", binaryPath}
-	} else {
-		args = []string{"apt-get", "install", binaryPath}
-	}
-
-	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-			return fmt.Errorf("'%s' is a DEB installer and user did not want to run it", binaryPath)
-		}
-	}
-
-	cmd := execCommand("sudo", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		log.Error().
-			Str("installer binary", binaryPath).
-			Err(err).
-			Msgf("'sudo %s' failed", strings.Join(args, " "))
-		if r.CliParams.Interactive {
-			pterm.Error.Println("Failed to install .deb package")
-		}
-		return err
-	}
-	log.Info().
-		Str("installer binary", binaryPath).
-		Msgf("ran 'sudo %s'", strings.Join(args, " "))
-	if r.CliParams.Interactive {
-		pterm.Success.Println("Successfully installed .deb package!")
-	}
+	log.Info().Msgf("Queuing %s for batch installation...", binaryPath)
+	r.PendingDebs = append(r.PendingDebs, binaryPath)
 	return nil
 }
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install rpm: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would queue rpm for batch install: %s", binaryPath)
 		return nil
 	}
-	if err := r.ensureSudo(); err != nil {
-		return err
-	}
-	if name := extractPackageName(binaryPath, "rpm"); name != "" {
-		r.InstalledPackageNames = append(r.InstalledPackageNames, name)
-	}
-	var args []string
-	if r.CliParams.NoDeps {
-		args = []string{"rpm", "-i", binaryPath}
-	} else if r.CliParams.AddDeps {
-		args = []string{"dnf", "localinstall", "-y", binaryPath}
-	} else {
-		args = []string{"dnf", "localinstall", binaryPath}
-	}
-
-	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-			return fmt.Errorf("'%s' is a RPM installer and user did not want to run it", binaryPath)
-		}
-	}
-
-	cmd := execCommand("sudo", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		log.Error().
-			Str("installer binary", binaryPath).
-			Err(err).
-			Msgf("'sudo %s' failed", strings.Join(args, " "))
-		if r.CliParams.Interactive {
-			pterm.Error.Println("Failed to install .rpm package")
-		}
-		return err
-	}
-	log.Info().
-		Str("installer binary", binaryPath).
-		Msgf("ran 'sudo %s'", strings.Join(args, " "))
-	if r.CliParams.Interactive {
-		pterm.Success.Println("Successfully installed .rpm package!")
-	}
+	log.Info().Msgf("Queuing %s for batch installation...", binaryPath)
+	r.PendingRpms = append(r.PendingRpms, binaryPath)
 	return nil
 }
 
@@ -824,6 +746,74 @@ func (r *GithubRelease) Install() error {
 
 		if !r.CliParams.All {
 			break
+		}
+	}
+
+	if len(r.PendingDebs) > 0 {
+		if err := r.ensureSudo(); err != nil {
+			return err
+		}
+		for _, p := range r.PendingDebs {
+			if name := extractPackageName(p, "deb"); name != "" {
+				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
+			}
+		}
+		var args []string
+		if r.CliParams.NoDeps {
+			args = append([]string{"dpkg", "-i"}, r.PendingDebs...)
+		} else if r.CliParams.AddDeps {
+			args = append([]string{"apt-get", "install", "-y"}, r.PendingDebs...)
+		} else {
+			args = append([]string{"apt-get", "install"}, r.PendingDebs...)
+		}
+
+		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+			if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+				return fmt.Errorf("user aborted batched .deb installation")
+			}
+		}
+
+		cmd := execCommand("sudo", args...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		log.Info().Msgf("Executing batched package install: sudo %s", strings.Join(args, " "))
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("batched .deb installation failed: %w", err)
+		}
+	}
+
+	if len(r.PendingRpms) > 0 {
+		if err := r.ensureSudo(); err != nil {
+			return err
+		}
+		for _, p := range r.PendingRpms {
+			if name := extractPackageName(p, "rpm"); name != "" {
+				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
+			}
+		}
+		var args []string
+		if r.CliParams.NoDeps {
+			args = append([]string{"rpm", "-i"}, r.PendingRpms...)
+		} else if r.CliParams.AddDeps {
+			args = append([]string{"dnf", "localinstall", "-y"}, r.PendingRpms...)
+		} else {
+			args = append([]string{"dnf", "localinstall"}, r.PendingRpms...)
+		}
+
+		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+			if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+				return fmt.Errorf("user aborted batched .rpm installation")
+			}
+		}
+
+		cmd := execCommand("sudo", args...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		log.Info().Msgf("Executing batched package install: sudo %s", strings.Join(args, " "))
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("batched .rpm installation failed: %w", err)
 		}
 	}
 

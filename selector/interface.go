@@ -206,9 +206,10 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	}
 
 	var items []*SelectorItem
-	isPacmanPkg := strings.HasSuffix(downloadPath, ".pkg.tar.zst") || strings.HasSuffix(downloadPath, ".pkg.tar.xz")
-	if isPacmanPkg {
-		err = archiver.ErrNoMatch // Force it to be treated as a binary installer
+	lowerPath := strings.ToLower(downloadPath)
+	isNativePkg := strings.HasSuffix(lowerPath, ".pkg.tar.zst") || strings.HasSuffix(lowerPath, ".pkg.tar.xz") || strings.HasSuffix(lowerPath, ".deb") || strings.HasSuffix(lowerPath, ".rpm") || strings.HasSuffix(lowerPath, ".msi") || strings.HasSuffix(lowerPath, ".dmg") || strings.HasSuffix(lowerPath, ".pkg")
+	if isNativePkg {
+		err = archiver.ErrNoMatch
 	} else {
 		_, _, err = archiver.Identify(downloadPath, inputStream)
 	}
