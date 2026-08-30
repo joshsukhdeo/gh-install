@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -91,6 +93,34 @@ func RmState(target string) error {
 	}
 
 	for _, r := range toRemove {
+		app := st.Apps[r]
+
+		// Delete installed binaries from disk
+		if app.TargetPath != "" {
+			parts := strings.Split(r, "/")
+			repoName := parts[len(parts)-1]
+
+			// If renamed binaries exist, delete those specific files
+			if len(app.Rename) > 0 {
+				for _, renamed := range app.Rename {
+					binPath := filepath.Join(app.TargetPath, renamed)
+					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+						log.Warn().Err(err).Msgf("Failed to remove binary %s", binPath)
+					} else if err == nil {
+						log.Info().Msgf("Deleted %s", binPath)
+					}
+				}
+			} else {
+				// Try the repo name as the binary name
+				binPath := filepath.Join(app.TargetPath, repoName)
+				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+					log.Warn().Err(err).Msgf("Failed to remove binary %s", binPath)
+				} else if err == nil {
+					log.Info().Msgf("Deleted %s", binPath)
+				}
+			}
+		}
+
 		delete(st.Apps, r)
 		log.Info().Msgf("Removed %s from managed state.", r)
 	}

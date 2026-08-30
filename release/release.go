@@ -211,7 +211,21 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 	return nil
 }
 
+func (r *GithubRelease) ensureSudo() error {
+	check := execCommand("sudo", "-n", "true")
+	if err := check.Run(); err != nil {
+		if !r.CliParams.Interactive {
+			return fmt.Errorf("sudo session expired or unavailable; cannot prompt for password in headless mode (-D). Run 'sudo -v' beforehand or use an interactive session")
+		}
+		log.Warn().Msg("sudo session not cached; you may be prompted for your password")
+	}
+	return nil
+}
+
 func (r *GithubRelease) installDeb(binaryPath string) error {
+	if err := r.ensureSudo(); err != nil {
+		return err
+	}
 	var args []string
 	if r.CliParams.NoDeps {
 		args = []string{"dpkg", "-i", binaryPath}
@@ -252,6 +266,9 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 }
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
+	if err := r.ensureSudo(); err != nil {
+		return err
+	}
 	var args []string
 	if r.CliParams.NoDeps {
 		args = []string{"rpm", "-i", binaryPath}
@@ -543,6 +560,9 @@ func (r *GithubRelease) Install() error {
 }
 
 func (r *GithubRelease) installPkg(binaryPath string) error {
+	if err := r.ensureSudo(); err != nil {
+		return err
+	}
 	var args []string
 	if r.CliParams.NoDeps {
 		args = []string{"pkg", "add", binaryPath}
@@ -583,6 +603,9 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 }
 
 func (r *GithubRelease) installPacman(binaryPath string) error {
+	if err := r.ensureSudo(); err != nil {
+		return err
+	}
 	log.Debug().
 		Str("binaryPath", binaryPath).
 		Msg("installing pacman package")
