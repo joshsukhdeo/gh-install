@@ -189,13 +189,7 @@ func (r *RootCLI) Run() error {
 		Str("release version", r.ReleaseVersion).
 		Str("release asset name", r.ReleaseAsset).
 		Strs("release asset regexps", r.ReleaseAssetRegexps).
-		Array("release asset binary names", func() *zerolog.Array {
-			arr := zerolog.Arr()
-			for _, i := range r.AssetBinaries {
-				arr = arr.Str(i)
-			}
-			return arr
-		}()).
+		Strs("release asset binary names", r.AssetBinaries).
 		Str("release asset binary name regexp", r.AssetBinariesRegexp).
 		Str("target path", r.TargetPath).
 		Dict("renaming binaries", func() *zerolog.Event {
@@ -230,12 +224,9 @@ func GetDefaultTargetPath() string {
 	return filepath.Join(homeDir, ".local", "bin")
 }
 
-func getTarballRgx() string {
-	return `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
-}
 
 func GetDefaultInstallTypes() string {
-	tarballRgx := getTarballRgx()
+	tarballRgx := `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("exe,msi,7z,%s,zip,py,ts,js", tarballRgx)
 	} else if runtime.GOOS == "darwin" {
