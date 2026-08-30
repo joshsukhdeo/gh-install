@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -227,16 +228,33 @@ func GetDefaultInstallTypes() string {
 	} else if runtime.GOOS == "darwin" {
 		return fmt.Sprintf("dmg,7z,%s,zip,py,ts,js,none", tarballRgx)
 	} else if runtime.GOOS == "linux" {
-		osRelease, err := os.ReadFile("/etc/os-release")
-		if err == nil {
-			content := strings.ToLower(string(osRelease))
-			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				return fmt.Sprintf("deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
-			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				return fmt.Sprintf("rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
-			}
+		hasDpkg := false
+		hasRpm := false
+		if _, err := exec.LookPath("dpkg"); err == nil {
+			hasDpkg = true
 		}
-		return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		if _, err := exec.LookPath("rpm"); err == nil {
+			hasRpm = true
+		}
+
+		if hasDpkg && !hasRpm {
+			return fmt.Sprintf("deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		} else if hasRpm && !hasDpkg {
+			return fmt.Sprintf("rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		} else if hasRpm && hasDpkg {
+			// If both exist (e.g. alien installed), try to check os-release
+			osRelease, err := os.ReadFile("/etc/os-release")
+			if err == nil {
+				content := strings.ToLower(string(osRelease))
+				if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
+					return fmt.Sprintf("rpm,deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+				}
+			}
+			return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		}
+		
+		// Arch or others without rpm/deb natively
+		return fmt.Sprintf("appimage,flatpak,snap,7z,%s,zip,py,ts,js,none", tarballRgx)
 	} else if runtime.GOOS == "freebsd" {
 		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
 	}
