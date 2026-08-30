@@ -189,3 +189,5 @@ The configuration precedence is: `CLI Argument > Environment Variable > config.y
 [custom_commands]
 "gh-install" = "gh install -U"
 ```
+
+*Project maintained with model switch to nemotron-3.5-lightning-free for active development.*
