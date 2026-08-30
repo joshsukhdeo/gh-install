@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 	"regexp"
 
 	"github.com/mholt/archiver/v4"
@@ -230,9 +230,9 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	_, _, err = archiver.Identify(downloadPath, inputStream)
 	if err != nil {
 		if err == archiver.ErrNoMatch {
-			itemsOrder = append(itemsOrder, path.Base(downloadPath))
-			items[path.Base(downloadPath)] = MakeSelectorItem(
-				path.Base(downloadPath),
+			itemsOrder = append(itemsOrder, filepath.Base(downloadPath))
+			items[filepath.Base(downloadPath)] = MakeSelectorItem(
+				filepath.Base(downloadPath),
 				false).
 				SetCompressed(false).
 				SetBinaryType(BinaryTypeFromPath(downloadPath)).
@@ -253,7 +253,7 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 				Kind:           Binary,
 				Items:          items,
 				NamesMatcher:   names,
-				RegexpMatchers: []string{path.Base(downloadPath)},
+				RegexpMatchers: []string{filepath.Base(downloadPath)},
 				Single:         true,
 			}, nil
 		}

@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -60,22 +60,19 @@ func (r *GithubRelease) interactiveInput(prompt string, defaultValue string) str
 }
 
 func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
-	binaryName := path.Base(binaryPath)
-	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
+	binaryName := filepath.Base(binaryPath)
+	destinationPath := filepath.Join(r.CliParams.TargetPath, binaryName)
 
 	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
-		return path.Join(r.CliParams.TargetPath, targetBinaryName)
+		return filepath.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
 	if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
 		repoParts := strings.Split(r.CliParams.Repository, "/")
 		repoName := repoParts[len(repoParts)-1]
 
-		proposedName := repoName
-		if !strings.HasPrefix(strings.ToLower(binaryName), strings.ToLower(repoName)) {
-			proposedName = binaryName
-		}
-		if runtime.GOOS == "windows" && !strings.HasSuffix(proposedName, ".exe") {
+		proposedName := GenerateCleanName(binaryName, repoName)
+		if (runtime.GOOS == "windows" || strings.HasSuffix(strings.ToLower(binaryName), ".exe")) && !strings.HasSuffix(proposedName, ".exe") {
 			proposedName += ".exe"
 		}
 
@@ -83,7 +80,7 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 			if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' is long. Do you want to strip OS/hardware affixes?", binaryName)) {
 				newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
 				if newName != "" {
-					return path.Join(r.CliParams.TargetPath, newName)
+					return filepath.Join(r.CliParams.TargetPath, newName)
 				}
 			}
 		}
@@ -294,7 +291,7 @@ func getScore(name string, types []string) int {
 	for i, t := range types {
 		t = strings.ToLower(strings.TrimSpace(t))
 		if t == "none" {
-			if !strings.Contains(path.Base(name), ".") {
+			if !strings.Contains(filepath.Base(name), ".") {
 				return len(types) - i
 			}
 		} else if t != "" {
@@ -435,7 +432,7 @@ func (r *GithubRelease) Install() error {
 			Str("output", stdOut.String()).
 			Msg("downloaded release asset")
 
-		binarySelector, execErr := selector.BinarySelector(path.Join(downloadDir,
+		binarySelector, execErr := selector.BinarySelector(filepath.Join(downloadDir,
 			asset.Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive)
 		if execErr != nil {
 			log.Error().
@@ -443,7 +440,7 @@ func (r *GithubRelease) Install() error {
 				Int("release id", releases[0].GetId()).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 				Array("asset binary name matchers", func() *zerolog.Array {
 					arr := zerolog.Arr()
 					for _, i := range r.CliParams.AssetBinaries {
@@ -463,7 +460,7 @@ func (r *GithubRelease) Install() error {
 				Int("release id", releases[0].GetId()).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 				Array("asset binary name matchers", func() *zerolog.Array {
 					arr := zerolog.Arr()
 					for _, i := range r.CliParams.AssetBinaries {
@@ -484,7 +481,7 @@ func (r *GithubRelease) Install() error {
 				Int("release id", releases[0].GetId()).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 				Str("release asset binary", binary.Name).
 				Msg("processing selected release asset binary")
 			if binary.GetCompressed() {
@@ -522,7 +519,7 @@ func (r *GithubRelease) Install() error {
 					Int("release id", releases[0].GetId()).
 					Str("release name", releases[0].Name).
 					Str("release asset name", asset.Name).
-					Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+					Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 					Str("release asset binary", binary.Name).
 					Err(execErr).
 					Msg("could not install release asset binary")

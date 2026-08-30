@@ -3,7 +3,7 @@ package selector
 import (
 	"fmt"
 	"io/fs"
-	"path"
+	"path/filepath"
 )
 
 const (
@@ -71,7 +71,7 @@ func (ss BinaryType) String() string {
 }
 
 func BinaryTypeFromPath(fromPath string) BinaryType {
-	extension := path.Ext(fromPath)
+	extension := filepath.Ext(fromPath)
 	switch extension {
 	case ".rpm":
 		return BinaryRpmInstaller
