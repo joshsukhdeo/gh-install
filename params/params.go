@@ -7,7 +7,6 @@ type CLI struct {
 	Interactive         bool              `default:"false" short:"i" help:"Use interactive installation. If true, all non-log related flags are ignored." group:"Interactive Mode"`
 	UpdateAll           bool              `short:"U" help:"Update all installed applications (user and global)."`
 	Update              bool              `short:"u" help:"Update user installations (add -g for global only)."`
-	SetupTopgradeStep   bool              `help:"Add an entry to the topgrade configuration for gh-install."`
 	ListSavedState      bool              `help:"List saved state in a user-friendly format." group:"State Management"`
 	EditSavedState      bool              `help:"Edit saved state (enable/disable updates or remove apps)." group:"State Management"`
 	RmSavedState        string            `help:"Remove a saved app from state by repository slug or binary name." group:"State Management"`
@@ -27,7 +26,7 @@ type CLI struct {
 	PromptRename        bool              `short:"r" help:"Prompt to strip OS/hardware affixes from long binary names." group:"Interactive Mode"`
 	DisablePrompts      bool              `short:"D" env:"GH_INSTALL_DISABLE_PROMPTS" help:"Disable all interactive prompts." group:"Non-interactive Mode"`
 	NoSaveState         bool              `short:"S" env:"GH_INSTALL_NO_SAVE_STATE" help:"Do not save installation to state (prevents tracking for updates)." group:"Non-interactive Mode"`
-	AddSavedStateOnly   bool              `help:"Resolve and add a release to the saved state without downloading or installing it." group:"State Management"`
+	AllowWine           bool              `env:"GH_INSTALL_ALLOW_WINE" help:"Allow installing Windows executables on Linux/macOS/FreeBSD." group:"Non-interactive Mode"`
 	TargetPathCreate    bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist." group:"Non-interactive Mode"`
 	Overwrite           bool              `default:"false" short:"o" help:"Overwrite target binaries." group:"Non-interactive Mode"`
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`

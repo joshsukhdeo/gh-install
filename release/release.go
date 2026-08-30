@@ -7,9 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -18,20 +17,22 @@ import (
 	"github.com/joshsukhdeo/gh-install/selector"
 	"github.com/joshsukhdeo/gh-install/state"
 	"github.com/pterm/pterm"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-type IRelease interface {
-	Install() error
-}
+
+var (
+	execCommand = exec.Command
+	ghExec      = gh.Exec
+)
 
 type GithubRelease struct {
-	CliParams *params.CLI
-	Client    selector.GithubClient
+	CliParams       *params.CLI
+	Client          selector.GithubClient
+	ResolvedVersion string
 }
 
-func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) IRelease {
+func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) *GithubRelease {
 
 	return &GithubRelease{
 		CliParams: cliParams,
@@ -60,30 +61,31 @@ func (r *GithubRelease) interactiveInput(prompt string, defaultValue string) str
 }
 
 func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
-	binaryName := path.Base(binaryPath)
-	destinationPath := path.Join(r.CliParams.TargetPath, binaryName)
+	binaryName := filepath.Base(binaryPath)
+	destinationPath := filepath.Join(r.CliParams.TargetPath, binaryName)
 
 	if targetBinaryName, exists := r.CliParams.Rename[strings.ToLower(binaryName)]; exists {
-		return path.Join(r.CliParams.TargetPath, targetBinaryName)
+		return filepath.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
 	if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
 		repoParts := strings.Split(r.CliParams.Repository, "/")
 		repoName := repoParts[len(repoParts)-1]
 
-		proposedName := repoName
-		if !strings.HasPrefix(strings.ToLower(binaryName), strings.ToLower(repoName)) {
-			proposedName = binaryName
-		}
-		if runtime.GOOS == "windows" && !strings.HasSuffix(proposedName, ".exe") {
-			proposedName += ".exe"
+		proposedName := GenerateCleanName(binaryName, repoName, r.ResolvedVersion)
+
+		if extMatch := regexp.MustCompile(`(?i)(\.[a-z][a-z0-9]*)$`).FindStringSubmatch(binaryName); len(extMatch) > 0 {
+			ext := extMatch[1]
+			if !strings.HasSuffix(proposedName, ext) {
+				proposedName += ext
+			}
 		}
 
 		if len(binaryName) > len(proposedName)+3 { // If it has significant affixes
 			if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' is long. Do you want to strip OS/hardware affixes?", binaryName)) {
 				newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
 				if newName != "" {
-					return path.Join(r.CliParams.TargetPath, newName)
+					return filepath.Join(r.CliParams.TargetPath, newName)
 				}
 			}
 		}
@@ -225,7 +227,7 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 		}
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := execCommand("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -265,7 +267,7 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 		}
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := execCommand("sudo", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -294,7 +296,7 @@ func getScore(name string, types []string) int {
 	for i, t := range types {
 		t = strings.ToLower(strings.TrimSpace(t))
 		if t == "none" {
-			if !strings.Contains(path.Base(name), ".") {
+			if !strings.Contains(filepath.Base(name), ".") {
 				return len(types) - i
 			}
 		} else if t != "" {
@@ -333,13 +335,14 @@ func (r *GithubRelease) Install() error {
 			Msg("could not select a release")
 		return err
 	}
+	r.ResolvedVersion = releases[0].Name
 
-	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].GetId(),
+	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].Id,
 		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive)
 	if err != nil {
 		log.Error().
 			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
+			Int("release id", releases[0].Id).
 			Str("release name", releases[0].Name).
 			Str("asset name matcher", r.CliParams.ReleaseAsset).
 			Strs("asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
@@ -351,7 +354,7 @@ func (r *GithubRelease) Install() error {
 	if err != nil {
 		log.Error().
 			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
+			Int("release id", releases[0].Id).
 			Str("release asset name matcher", r.CliParams.ReleaseAsset).
 			Strs("release asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
 			Err(err).
@@ -365,27 +368,7 @@ func (r *GithubRelease) Install() error {
 		return scoreI > scoreJ
 	})
 
-	if r.CliParams.AddSavedStateOnly {
-		log.Info().Msgf("Skipping download and install for %s, saving to state only.", r.CliParams.Repository)
-		st, err := state.LoadState()
-		if err == nil {
-			st.AddApp(&state.InstalledApp{
-				Repository:    r.CliParams.Repository,
-				TargetPath:    r.CliParams.TargetPath,
-				Global:        r.CliParams.Global,
-				ReleaseAsset:  r.CliParams.ReleaseAsset,
-				ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
-				Version:       releases[0].Name,
-				Rename:        r.CliParams.Rename,
-			})
-			if r.CliParams.Interactive {
-				pterm.Success.Printf("Successfully added %s to state!\n", r.CliParams.Repository)
-			}
-		} else {
-			log.Warn().Err(err).Msg("could not save installed app state")
-		}
-		return nil
-	}
+
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
@@ -404,13 +387,13 @@ func (r *GithubRelease) Install() error {
 			downloadSpinner, _ = pterm.DefaultSpinner.Start(fmt.Sprintf("Downloading asset '%s'...", asset.Name))
 		}
 
-		stdOut, stdErr, execErr := gh.Exec("release", "download", releases[0].Name,
+		stdOut, stdErr, execErr := ghExec("release", "download", releases[0].Name,
 			"--repo", r.CliParams.Repository, "--pattern", asset.Name, "--dir", downloadDir)
 		if execErr != nil {
 			execErr = fmt.Errorf("failed to run gh command: %s", stdErr.String())
 			log.Error().
 				Str("repository", r.CliParams.Repository).
-				Int("release id", releases[0].GetId()).
+				Int("release id", releases[0].Id).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
 				Str("download directory", downloadDir).
@@ -428,29 +411,23 @@ func (r *GithubRelease) Install() error {
 
 		log.Info().
 			Str("repository", r.CliParams.Repository).
-			Int("release id", releases[0].GetId()).
+			Int("release id", releases[0].Id).
 			Str("release name", releases[0].Name).
 			Str("release asset name", asset.Name).
 			Str("download directory", downloadDir).
 			Str("output", stdOut.String()).
 			Msg("downloaded release asset")
 
-		binarySelector, execErr := selector.BinarySelector(path.Join(downloadDir,
+		binarySelector, execErr := selector.BinarySelector(filepath.Join(downloadDir,
 			asset.Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive)
 		if execErr != nil {
 			log.Error().
 				Str("repository", r.CliParams.Repository).
-				Int("release id", releases[0].GetId()).
+				Int("release id", releases[0].Id).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
-				Array("asset binary name matchers", func() *zerolog.Array {
-					arr := zerolog.Arr()
-					for _, i := range r.CliParams.AssetBinaries {
-						arr = arr.Str(i)
-					}
-					return arr
-				}()).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
+				Strs("asset binary name matchers", r.CliParams.AssetBinaries).
 				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
 				Err(execErr).
 				Msg("could not create release asset binary selector")
@@ -460,17 +437,11 @@ func (r *GithubRelease) Install() error {
 		if execErr != nil {
 			log.Error().
 				Str("repository", r.CliParams.Repository).
-				Int("release id", releases[0].GetId()).
+				Int("release id", releases[0].Id).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
-				Array("asset binary name matchers", func() *zerolog.Array {
-					arr := zerolog.Arr()
-					for _, i := range r.CliParams.AssetBinaries {
-						arr = arr.Str(i)
-					}
-					return arr
-				}()).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
+				Strs("asset binary name matchers", r.CliParams.AssetBinaries).
 				Str("asset binary regexp matcher", r.CliParams.AssetBinariesRegexp).
 				Err(execErr).
 				Msg("could not select release asset binary")
@@ -481,48 +452,54 @@ func (r *GithubRelease) Install() error {
 		for _, binary := range binaries {
 			log.Info().
 				Str("repository", r.CliParams.Repository).
-				Int("release id", releases[0].GetId()).
+				Int("release id", releases[0].Id).
 				Str("release name", releases[0].Name).
 				Str("release asset name", asset.Name).
-				Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+				Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 				Str("release asset binary", binary.Name).
 				Msg("processing selected release asset binary")
-			if binary.GetCompressed() {
+			if binary.Compressed {
 				log.Debug().
 					Str("release asset binary", binary.Name).
-					Str("release asset binary archive path", binary.GetFsPath()).
+					Str("release asset binary archive path", binary.FsPath).
 					Msg("binary is part of an archive")
 				binariesOutput[binary.Name] = "compressed"
-				execErr = r.installArchivedBinary(binary.GetFs(), binary.GetFsPath())
+				execErr = r.installArchivedBinary(binary.Fs, binary.FsPath)
 			} else {
-				switch binary.GetBinaryType() {
+				switch binary.BinaryType {
 				case selector.BinaryDebInstaller:
 					log.Debug().
 						Str("release asset binary", binary.Name).
 						Msg("binary is a deb installer")
 					binariesOutput[binary.Name] = "deb"
-					execErr = r.installDeb(binary.GetDownloadPath())
+					execErr = r.installDeb(binary.DownloadPath)
 				case selector.BinaryRpmInstaller:
 					log.Debug().
 						Str("release asset binary", binary.Name).
 						Msg("binary is a rpm installer")
 					binariesOutput[binary.Name] = "rpm"
-					execErr = r.installRpm(binary.GetDownloadPath())
+					execErr = r.installRpm(binary.DownloadPath)
+				case selector.BinaryPkgInstaller:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a freebsd pkg/txz installer")
+					binariesOutput[binary.Name] = "pkg"
+					execErr = r.installPkg(binary.DownloadPath)
 				default:
 					log.Debug().
 						Str("release asset binary", binary.Name).
 						Msg("binary is a plain executable")
 					binariesOutput[binary.Name] = "binary"
-					execErr = r.installBinary(binary.GetDownloadPath())
+					execErr = r.installBinary(binary.DownloadPath)
 				}
 			}
 			if execErr != nil {
 				log.Error().
 					Str("repository", r.CliParams.Repository).
-					Int("release id", releases[0].GetId()).
+					Int("release id", releases[0].Id).
 					Str("release name", releases[0].Name).
 					Str("release asset name", asset.Name).
-					Str("downloaded asset", path.Join(downloadDir, asset.Name)).
+					Str("downloaded asset", filepath.Join(downloadDir, asset.Name)).
 					Str("release asset binary", binary.Name).
 					Err(execErr).
 					Msg("could not install release asset binary")
@@ -552,5 +529,45 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
+	return nil
+}
+
+func (r *GithubRelease) installPkg(binaryPath string) error {
+	var args []string
+	if r.CliParams.NoDeps {
+		args = []string{"pkg", "add", binaryPath}
+	} else if r.CliParams.AddDeps {
+		args = []string{"pkg", "install", "-y", binaryPath}
+	} else {
+		args = []string{"pkg", "install", binaryPath}
+	}
+
+	if r.CliParams.Interactive {
+		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+			return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", binaryPath)
+		}
+	}
+
+	cmd := execCommand("sudo", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		log.Error().
+			Str("installer binary", binaryPath).
+			Err(err).
+			Msgf("'sudo %s' failed", strings.Join(args, " "))
+		if r.CliParams.Interactive {
+			pterm.Error.Println("Failed to install FreeBSD package")
+		}
+		return err
+	}
+	log.Info().
+		Str("installer binary", binaryPath).
+		Msgf("ran 'sudo %s'", strings.Join(args, " "))
+	if r.CliParams.Interactive {
+		pterm.Success.Println("Successfully installed FreeBSD package!")
+	}
 	return nil
 }

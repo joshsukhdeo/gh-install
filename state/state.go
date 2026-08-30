@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/adrg/xdg"
+	"github.com/gofrs/flock"
 )
 
 type InstalledApp struct {
@@ -22,7 +22,6 @@ type InstalledApp struct {
 
 type State struct {
 	Apps map[string]*InstalledApp `json:"apps"`
-	mu   sync.Mutex
 }
 
 func GetStatePath() string {
@@ -51,14 +50,17 @@ func LoadState() (*State, error) {
 }
 
 func (s *State) Save() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	path := GetStatePath()
 	err := os.MkdirAll(filepath.Dir(path), 0755)
 	if err != nil {
 		return err
 	}
+
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	defer lock.Unlock()
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -69,8 +71,6 @@ func (s *State) Save() error {
 }
 
 func (s *State) AddApp(app *InstalledApp) error {
-	s.mu.Lock()
 	s.Apps[app.Repository] = app
-	s.mu.Unlock()
 	return s.Save()
 }

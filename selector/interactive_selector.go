@@ -6,17 +6,21 @@ import (
 )
 
 type InteractiveSelector struct {
-	Kind      SelectorKind
-	ItemOrder []string
-	Items     map[string]*SelectorItem
-	Prompt    string
-	Single    bool
+	Kind   SelectorKind
+	Items  []*SelectorItem
+	Prompt string
+	Single bool
 }
 
 func (s *InteractiveSelector) showPrompt() ([]string, error) {
+	var itemOrder []string
+	for _, item := range s.Items {
+		itemOrder = append(itemOrder, item.Name)
+	}
+
 	if s.Single {
 		selectedItem, err := pterm.DefaultInteractiveSelect.
-			WithOptions(s.ItemOrder).
+			WithOptions(itemOrder).
 			WithDefaultText(s.Prompt).Show()
 		if err != nil {
 			return nil, err
@@ -25,7 +29,7 @@ func (s *InteractiveSelector) showPrompt() ([]string, error) {
 	}
 
 	selectedItems, err := pterm.DefaultInteractiveMultiselect.
-		WithOptions(s.ItemOrder).
+		WithOptions(itemOrder).
 		WithDefaultText(s.Prompt).
 		WithKeyConfirm(keys.Enter).
 		WithKeySelect(keys.Space).
@@ -42,13 +46,15 @@ func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.Single {
-		return []*SelectorItem{s.Items[selectedNames[0]]}, nil
-	}
 
 	var selectedItems []*SelectorItem
 	for _, selectedName := range selectedNames {
-		selectedItems = append(selectedItems, s.Items[selectedName])
+		for _, item := range s.Items {
+			if item.Name == selectedName {
+				selectedItems = append(selectedItems, item)
+				break
+			}
+		}
 	}
 
 	return selectedItems, nil

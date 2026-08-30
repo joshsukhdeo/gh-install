@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -28,7 +28,7 @@ const (
 type RootCLI params.CLI
 
 func (r *RootCLI) Validate() error {
-	if !r.Update && !r.UpdateAll && !r.SetupTopgradeStep && !r.ListSavedState && !r.EditSavedState && r.RmSavedState == "" {
+	if !r.Update && !r.UpdateAll && !r.ListSavedState && !r.EditSavedState && r.RmSavedState == "" {
 		match, _ := regexp.MatchString(`.+/.+`, r.Repository)
 		if !match {
 			return fmt.Errorf("repository must be in 'user/repository' format (provided: '%s')", r.Repository)
@@ -125,6 +125,9 @@ func (r *RootCLI) Run() error {
 				if !r.NoSaveState {
 					r.NoSaveState = cfg.NoSaveState
 				}
+				if !r.AllowWine {
+					r.AllowWine = cfg.AllowWine
+				}
 			}
 		}
 	}
@@ -146,10 +149,6 @@ func (r *RootCLI) Run() error {
 			Err(err).
 			Msg("could not init Gihub REST client")
 		return err
-	}
-
-	if r.SetupTopgradeStep {
-		return SetupTopgrade()
 	}
 
 	if r.ListSavedState {
@@ -175,7 +174,7 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.ReleaseAssetRegexp == "" {
-		r.ReleaseAssetRegexps = buildRegexFromTypes(r.Type)
+		r.ReleaseAssetRegexps = buildRegexFromTypes(r.Type, r.AllowWine)
 		r.ReleaseAssetRegexp = strings.Join(r.ReleaseAssetRegexps, " | ")
 	} else {
 		r.ReleaseAssetRegexps = []string{r.ReleaseAssetRegexp}
@@ -186,13 +185,7 @@ func (r *RootCLI) Run() error {
 		Str("release version", r.ReleaseVersion).
 		Str("release asset name", r.ReleaseAsset).
 		Strs("release asset regexps", r.ReleaseAssetRegexps).
-		Array("release asset binary names", func() *zerolog.Array {
-			arr := zerolog.Arr()
-			for _, i := range r.AssetBinaries {
-				arr = arr.Str(i)
-			}
-			return arr
-		}()).
+		Strs("release asset binary names", r.AssetBinaries).
 		Str("release asset binary name regexp", r.AssetBinariesRegexp).
 		Str("target path", r.TargetPath).
 		Dict("renaming binaries", func() *zerolog.Event {
@@ -224,19 +217,11 @@ func GetDefaultTargetPath() string {
 		return ""
 	}
 
-	return path.Join(homeDir, ".local", "bin")
-}
-
-func getTarballRgx() string {
-	val := os.Getenv("TARBALL_RGX")
-	if val != "" {
-		return val
-	}
-	return `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
+	return filepath.Join(homeDir, ".local", "bin")
 }
 
 func GetDefaultInstallTypes() string {
-	tarballRgx := getTarballRgx()
+	tarballRgx := `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("exe,msi,7z,%s,zip,py,ts,js", tarballRgx)
 	} else if runtime.GOOS == "darwin" {
@@ -252,11 +237,13 @@ func GetDefaultInstallTypes() string {
 			}
 		}
 		return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+	} else if runtime.GOOS == "freebsd" {
+		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
 	}
 	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
 }
 
-func buildRegexFromTypes(types []string) []string {
+func buildRegexFromTypes(types []string, allowWine bool) []string {
 	archRegex := runtime.GOARCH
 	if runtime.GOARCH == "amd64" {
 		archRegex = "(?:amd64|x86_64|x64)"
@@ -269,6 +256,8 @@ func buildRegexFromTypes(types []string) []string {
 		osRegex = "(?:darwin|macos|apple)"
 	} else if runtime.GOOS == "windows" {
 		osRegex = "(?:windows|win)"
+	} else if runtime.GOOS == "freebsd" {
+		osRegex = "(?:freebsd)"
 	}
 
 	var matchers []string
@@ -282,10 +271,10 @@ func buildRegexFromTypes(types []string) []string {
 		}
 	}
 
-	buildFinal := func(baseRegex string) string {
+	buildFinal := func(baseRegex string, currentTypes []string) string {
 		var exts []string
 		hasNone := false
-		for _, t := range types {
+		for _, t := range currentTypes {
 			t = strings.ToLower(strings.TrimSpace(t))
 			if t == "none" {
 				hasNone = true
@@ -296,20 +285,29 @@ func buildRegexFromTypes(types []string) []string {
 		if len(exts) > 0 {
 			extPattern := strings.Join(exts, "|")
 			if hasNone {
-				return fmt.Sprintf(`^(?:%s|.*%s.*\.(?i:%s))$`, baseRegex, archRegex, extPattern)
+				return fmt.Sprintf(`^(?:%s|%s\.(?i:%s))$`, baseRegex, baseRegex, extPattern)
 			}
-			return fmt.Sprintf(`^.*%s.*\.(?i:%s)$`, archRegex, extPattern)
+			return fmt.Sprintf(`^%s\.(?i:%s)$`, baseRegex, extPattern)
 		}
 		return fmt.Sprintf(`^%s$`, baseRegex)
 	}
 
 	if hwSpecific != "" {
 		hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
-		matchers = append(matchers, buildFinal(hwBaseRegex))
+		matchers = append(matchers, buildFinal(hwBaseRegex, types))
 	}
 
 	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
-	matchers = append(matchers, buildFinal(baseRegex))
+	matchers = append(matchers, buildFinal(baseRegex, types))
+
+	if allowWine && runtime.GOOS != "windows" {
+		winOsRegex := "(?:windows|win)"
+		winBaseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, winOsRegex, winOsRegex, archRegex)
+
+		// Ensure windows extensions are checked
+		winTypes := append([]string{"exe", "msi"}, types...)
+		matchers = append(matchers, buildFinal(winBaseRegex, winTypes))
+	}
 
 	return matchers
 }

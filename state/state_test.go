@@ -1,6 +1,7 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -72,5 +73,96 @@ func TestStateManagement(t *testing.T) {
 
 		loadedApp := st.Apps["junegunn/fzf"]
 		assert.Equal(t, "v1.4.0", loadedApp.Version)
+	})
+
+	t.Run("LoadState_FileReadErrorReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "readerror"))
+		xdg.Reload()
+		stateDir := filepath.Join(tmpDir, "readerror", "gh-install")
+		err := os.MkdirAll(stateDir, 0755)
+		require.NoError(t, err)
+
+		statePath := filepath.Join(stateDir, "state.json")
+		// Create a directory instead of a file so os.ReadFile will fail
+		err = os.MkdirAll(statePath, 0755)
+		require.NoError(t, err)
+
+		s, err := LoadState()
+		assert.Error(t, err)
+		assert.Nil(t, s)
+	})
+
+	t.Run("LoadState_InvalidJsonReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "invalid"))
+		xdg.Reload()
+		stateDir := filepath.Join(tmpDir, "invalid", "gh-install")
+		err := os.MkdirAll(stateDir, 0755)
+		require.NoError(t, err)
+
+		statePath := filepath.Join(stateDir, "state.json")
+		err = os.WriteFile(statePath, []byte("invalid json"), 0644)
+		require.NoError(t, err)
+
+		s, err := LoadState()
+		assert.Error(t, err)
+		assert.Nil(t, s)
+	})
+
+	t.Run("Save_MkdirErrorReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "mkdirerror"))
+		xdg.Reload()
+		// Create a file where directory should be
+		err := os.MkdirAll(filepath.Join(tmpDir, "mkdirerror"), 0755)
+		require.NoError(t, err)
+		err = os.WriteFile(filepath.Join(tmpDir, "mkdirerror", "gh-install"), []byte("file"), 0644)
+		require.NoError(t, err)
+
+		st := &State{Apps: make(map[string]*InstalledApp)}
+		err = st.Save()
+		assert.Error(t, err)
+	})
+
+	t.Run("Save_FileWriteErrorReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "writeerror"))
+		xdg.Reload()
+		// Create a directory where file should be
+		err := os.MkdirAll(filepath.Join(tmpDir, "writeerror", "gh-install", "state.json"), 0755)
+		require.NoError(t, err)
+
+		st := &State{Apps: make(map[string]*InstalledApp)}
+		err = st.Save()
+		assert.Error(t, err)
+	})
+
+	t.Run("Save_LockErrorReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "lockerror"))
+		xdg.Reload()
+		err := os.MkdirAll(filepath.Join(tmpDir, "lockerror", "gh-install"), 0755)
+		require.NoError(t, err)
+
+		// Create a directory where the lock file would go, so lock.Lock() fails
+		lockPath := filepath.Join(tmpDir, "lockerror", "gh-install", "state.json.lock")
+		err = os.MkdirAll(lockPath, 0755)
+		require.NoError(t, err)
+
+		st := &State{Apps: make(map[string]*InstalledApp)}
+		err = st.Save()
+		assert.Error(t, err)
+	})
+
+	t.Run("LoadState_AppsIsNil", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "nilapps"))
+		xdg.Reload()
+		stateDir := filepath.Join(tmpDir, "nilapps", "gh-install")
+		err := os.MkdirAll(stateDir, 0755)
+		require.NoError(t, err)
+
+		statePath := filepath.Join(stateDir, "state.json")
+		err = os.WriteFile(statePath, []byte(`{}`), 0644)
+		require.NoError(t, err)
+
+		s, err := LoadState()
+		require.NoError(t, err)
+		assert.NotNil(t, s.Apps)
 	})
 }

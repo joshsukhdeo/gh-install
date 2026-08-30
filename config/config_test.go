@@ -50,4 +50,39 @@ no_save_state: true
 		assert.True(t, cfg.PromptRename)
 		assert.True(t, cfg.NoSaveState)
 	})
+
+	t.Run("LoadConfig_InvalidYamlReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "invalid"))
+		xdg.Reload()
+		err := os.MkdirAll(filepath.Join(tmpDir, "invalid", "gh-install"), 0755)
+		require.NoError(t, err)
+
+		yamlContent := []byte(`
+install_types: [invalid yaml
+`)
+		configPath := filepath.Join(tmpDir, "invalid", "gh-install", "config.yml")
+		err = os.WriteFile(configPath, yamlContent, 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
+
+	t.Run("LoadConfig_FileReadErrorReturnsError", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "readerror"))
+		xdg.Reload()
+		configDir := filepath.Join(tmpDir, "readerror", "gh-install")
+		err := os.MkdirAll(configDir, 0755)
+		require.NoError(t, err)
+
+		configPath := filepath.Join(configDir, "config.yml")
+		// Create a directory instead of a file so os.ReadFile will fail
+		err = os.MkdirAll(configPath, 0755)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
 }
