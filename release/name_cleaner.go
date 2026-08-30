@@ -1,8 +1,9 @@
 package release
 
 import (
-	"strings"
+	"fmt"
 	"regexp"
+	"strings"
 )
 
 // GenerateCleanName attempts to heuristically strip OS, Architecture, and Extension
@@ -24,15 +25,14 @@ func GenerateCleanName(binaryName, repoName, resolvedVersion string) string {
 
 	// Directly strip the exact resolved version, with or without 'v'
 	if resolvedVersion != "" {
-		noVStr := strings.TrimPrefix(resolvedVersion, "v")
-		clean = strings.ReplaceAll(clean, "v"+noVStr, "")
-		clean = strings.ReplaceAll(clean, noVStr, "")
+		noVStr := regexp.QuoteMeta(strings.TrimPrefix(strings.ToLower(resolvedVersion), "v"))
+		clean = regexp.MustCompile(fmt.Sprintf(`(?i)v?%s`, noVStr)).ReplaceAllString(clean, "")
 	}
 
 	// Regex to remove common affixes
 	// We want to remove these words when they appear bounded by word boundaries or punctuation.
 	affixPattern := `(?i)(?:^|[-_.])(?:linux|darwin|windows|mac|macos|apple|win|amd64|x86_64|x64|x86|arm64|aarch64|armv7|armv6|arm|386|i386|musl|gnu|unknown|pc|msvc)(?:[-_.]|$)`
-	
+
 	// Keep replacing until no more matches (since overlapping boundaries might prevent single-pass removal)
 	for {
 		newClean := regexp.MustCompile(affixPattern).ReplaceAllString(clean, "-")
