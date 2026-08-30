@@ -4,19 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path"
 	"regexp"
 
-	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/mholt/archiver/v4"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 type SelectorKind int
+
+type GithubClient interface {
+	Get(path string, response interface{}) error
+	Request(method string, path string, body io.Reader) (*http.Response, error)
+}
 
 const (
 	Release SelectorKind = iota
@@ -42,7 +47,7 @@ type ISelector interface {
 	Run() ([]*SelectorItem, error)
 }
 
-func ReleaseSelector(ghClient *api.RESTClient, repo string, version string, interactive bool) (ISelector, error) {
+func ReleaseSelector(ghClient GithubClient, repo string, version string, interactive bool) (ISelector, error) {
 	log.Info().
 		Str("repository", repo).
 		Msg("getting Github repository releases")
@@ -111,7 +116,7 @@ func ReleaseSelector(ghClient *api.RESTClient, repo string, version string, inte
 	}, nil
 }
 
-func AssetSelector(ghClient *api.RESTClient, repo string,
+func AssetSelector(ghClient GithubClient, repo string,
 	releaseId int, name string, matchers []string, interactive bool) (ISelector, error) {
 	var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
 	itemsOrder := make([]string, 0, 10)

@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2"
-	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/joshsukhdeo/gh-install/params"
 	"github.com/joshsukhdeo/gh-install/selector"
 	"github.com/joshsukhdeo/gh-install/state"
@@ -29,10 +28,10 @@ type IRelease interface {
 
 type GithubRelease struct {
 	CliParams *params.CLI
-	Client    *api.RESTClient
+	Client    selector.GithubClient
 }
 
-func MakeGithubRelease(cliParams *params.CLI, cli *api.RESTClient) IRelease {
+func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) IRelease {
 
 	return &GithubRelease{
 		CliParams: cliParams,
@@ -365,6 +364,28 @@ func (r *GithubRelease) Install() error {
 		scoreJ := getScore(assets[j].Name, r.CliParams.Type)
 		return scoreI > scoreJ
 	})
+
+	if r.CliParams.AddSavedStateOnly {
+		log.Info().Msgf("Skipping download and install for %s, saving to state only.", r.CliParams.Repository)
+		st, err := state.LoadState()
+		if err == nil {
+			st.AddApp(&state.InstalledApp{
+				Repository:    r.CliParams.Repository,
+				TargetPath:    r.CliParams.TargetPath,
+				Global:        r.CliParams.Global,
+				ReleaseAsset:  r.CliParams.ReleaseAsset,
+				ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
+				Version:       releases[0].Name,
+				Rename:        r.CliParams.Rename,
+			})
+			if r.CliParams.Interactive {
+				pterm.Success.Printf("Successfully added %s to state!\n", r.CliParams.Repository)
+			}
+		} else {
+			log.Warn().Err(err).Msg("could not save installed app state")
+		}
+		return nil
+	}
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
