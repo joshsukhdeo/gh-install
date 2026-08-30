@@ -46,6 +46,12 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		appParams.ReleaseAsset = app.ReleaseAsset
 		appParams.ReleaseAssetRegexp = app.ReleaseRegexp
 		appParams.Rename = app.Rename
+		if len(app.Type) > 0 {
+			appParams.Type = app.Type
+		}
+		appParams.All = app.All
+		appParams.AssetBinaries = app.AssetBinaries
+		appParams.AssetBinariesRegexp = app.AssetBinariesRegexp
 		// Reset version to latest to ensure we get the latest
 		appParams.ReleaseVersion = "latest"
 

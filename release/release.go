@@ -516,13 +516,17 @@ func (r *GithubRelease) Install() error {
 		st, err := state.LoadState()
 		if err == nil {
 			st.AddApp(&state.InstalledApp{
-				Repository:    r.CliParams.Repository,
-				TargetPath:    r.CliParams.TargetPath,
-				Global:        r.CliParams.Global,
-				ReleaseAsset:  r.CliParams.ReleaseAsset,
-				ReleaseRegexp: r.CliParams.ReleaseAssetRegexp,
-				Version:       releases[0].Name,
-				Rename:        r.CliParams.Rename,
+				Repository:          r.CliParams.Repository,
+				TargetPath:          r.CliParams.TargetPath,
+				Global:              r.CliParams.Global,
+				ReleaseAsset:        r.CliParams.ReleaseAsset,
+				ReleaseRegexp:       r.CliParams.ReleaseAssetRegexp,
+				Version:             releases[0].Name,
+				Rename:              r.CliParams.Rename,
+				Type:                r.CliParams.Type,
+				All:                 r.CliParams.All,
+				AssetBinaries:       r.CliParams.AssetBinaries,
+				AssetBinariesRegexp: r.CliParams.AssetBinariesRegexp,
 			})
 		} else {
 			log.Warn().Err(err).Msg("could not save installed app state")
