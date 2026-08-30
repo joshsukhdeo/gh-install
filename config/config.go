@@ -18,6 +18,7 @@ type Config struct {
 	DisablePrompts bool   `yaml:"disable_prompts"`
 	NoSaveState    bool   `yaml:"no_save_state"`
 	AllowWine      bool   `yaml:"allow_wine"`
+	NativeExtract  bool   `yaml:"native_extract"`
 }
 
 func GetConfigPath() string {

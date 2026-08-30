@@ -130,6 +130,9 @@ func (r *RootCLI) Run() error {
 				if !r.AllowWine {
 					r.AllowWine = cfg.AllowWine
 				}
+				if !r.NativeExtract {
+					r.NativeExtract = cfg.NativeExtract
+				}
 			}
 		}
 	}

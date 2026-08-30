@@ -630,7 +630,7 @@ func (r *GithubRelease) Install() error {
 		}
 
 		binarySelector, execErr := selector.BinarySelector(filepath.Join(downloadDir,
-			asset.Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive)
+			asset.Name), r.CliParams.AssetBinaries, r.CliParams.AssetBinariesRegexp, r.CliParams.Interactive, r.CliParams.NativeExtract)
 		if execErr != nil {
 			log.Error().
 				Str("repository", r.CliParams.Repository).
@@ -834,6 +834,7 @@ func (r *GithubRelease) Install() error {
 				AssetBinariesRegexp: r.CliParams.AssetBinariesRegexp,
 				PackageNames:        r.InstalledPackageNames,
 				Pinned:              r.CliParams.Pin,
+				NativeExtract:       r.CliParams.NativeExtract,
 			})
 		} else {
 			log.Warn().Err(err).Msg("could not save installed app state")

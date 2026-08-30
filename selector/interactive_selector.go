@@ -59,3 +59,7 @@ func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 
 	return selectedItems, nil
 }
+
+func (s *InteractiveSelector) GetKind() SelectorKind {
+	return s.Kind
+}

@@ -24,6 +24,7 @@ type InstalledApp struct {
 	AssetBinariesRegexp string            `json:"asset_binaries_regexp"`
 	PackageNames        []string          `json:"package_names,omitempty"`
 	Pinned              bool              `json:"pinned,omitempty"`
+	NativeExtract       bool              `json:"native_extract"`
 }
 
 type State struct {

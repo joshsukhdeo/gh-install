@@ -46,7 +46,11 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 	}
 
 	if len(selectedItems) == 0 {
-		return nil, fmt.Errorf("no %d matches for names '%s' or regexps '%v' found", s.Kind, s.NamesMatcher, s.RegexpMatchers)
+		return nil, fmt.Errorf("no %s matches for names '%s' or regexps '%v' found", s.Kind.String(), s.NamesMatcher, s.RegexpMatchers)
 	}
 	return selectedItems, nil
+}
+
+func (s *Selector) GetKind() SelectorKind {
+	return s.Kind
 }
