@@ -12,7 +12,6 @@ import (
 	"regexp"
 
 	"github.com/mholt/archiver/v4"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,25 +60,25 @@ func ReleaseSelector(ghClient GithubClient, repo string, version string, interac
 		return nil, err
 	}
 
-	items := make(map[string]*SelectorItem)
-	itemsOrder := make([]string, 0, len(response))
+	var items []*SelectorItem
+
 	for _, val := range response {
 		log.Debug().
 			Str("repository", repo).
 			Str("release tag", val.Tag_name).
 			Int("release id", val.Id).
 			Msg("got release...")
-		itemsOrder = append(itemsOrder, val.Tag_name)
-		items[val.Tag_name] = MakeSelectorItem(val.Tag_name, false).SetId(val.Id)
+
+		items = append(items, &SelectorItem{Name: val.Tag_name, Id: val.Id})
 	}
 
 	if interactive {
 		return &InteractiveSelector{
-			Kind:      Release,
-			Items:     items,
-			ItemOrder: itemsOrder,
-			Prompt:    fmt.Sprintf("Please select %s release tag", repo),
-			Single:    true,
+			Kind:  Release,
+			Items: items,
+
+			Prompt: fmt.Sprintf("Please select %s release tag", repo),
+			Single: true,
 		}, nil
 	}
 
@@ -108,9 +107,9 @@ func ReleaseSelector(ghClient GithubClient, repo string, version string, interac
 		Msgf("using release %s", versionMatcher)
 
 	return &Selector{
-		Kind:           Release,
-		Items:          items,
-		ItemOrder:      itemsOrder,
+		Kind:  Release,
+		Items: items,
+
 		RegexpMatchers: []string{versionMatcher},
 		Single:         true,
 	}, nil
@@ -119,8 +118,8 @@ func ReleaseSelector(ghClient GithubClient, repo string, version string, interac
 func AssetSelector(ghClient GithubClient, repo string,
 	releaseId int, name string, matchers []string, interactive bool) (ISelector, error) {
 	var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
-	itemsOrder := make([]string, 0, 10)
-	items := make(map[string]*SelectorItem)
+
+	var items []*SelectorItem
 	page := 1
 	requestPath := fmt.Sprintf("repos/%s/releases/%d/assets", repo, releaseId)
 
@@ -157,8 +156,8 @@ func AssetSelector(ghClient GithubClient, repo string,
 		}
 
 		for index, val := range responseData {
-			itemsOrder = append(itemsOrder, val.Name)
-			items[val.Name] = MakeSelectorItem(val.Name, false).SetId(index)
+
+			items = append(items, &SelectorItem{Name: val.Name, Id: index})
 			log.Debug().
 				Str("repository", repo).
 				Int("release id", releaseId).
@@ -184,11 +183,11 @@ func AssetSelector(ghClient GithubClient, repo string,
 
 	if interactive {
 		return &InteractiveSelector{
-			Kind:      Asset,
-			Items:     items,
-			ItemOrder: itemsOrder,
-			Prompt:    fmt.Sprintf("Please select %s asset", repo),
-			Single:    true,
+			Kind:  Asset,
+			Items: items,
+
+			Prompt: fmt.Sprintf("Please select %s asset", repo),
+			Single: true,
 		}, nil
 	}
 
@@ -198,9 +197,9 @@ func AssetSelector(ghClient GithubClient, repo string,
 	}
 
 	return &Selector{
-		Kind:           Asset,
-		Items:          items,
-		ItemOrder:      itemsOrder,
+		Kind:  Asset,
+		Items: items,
+
 		NamesMatcher:   namesMatcher,
 		RegexpMatchers: matchers,
 		Single:         true,
@@ -210,13 +209,7 @@ func AssetSelector(ghClient GithubClient, repo string,
 func BinarySelector(downloadPath string, names []string, matcher string, interactive bool) (ISelector, error) {
 	log.Info().
 		Str("asset download path", downloadPath).
-		Array("asset matching binary names", func() *zerolog.Array {
-			arr := zerolog.Arr()
-			for _, i := range names {
-				arr = arr.Str(i)
-			}
-			return arr
-		}()).
+		Strs("asset matching binary names", names).
 		Str("asset matching binary regexp", matcher).
 		Msg("getting release asset binaries")
 
@@ -225,27 +218,23 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 		return nil, err
 	}
 
-	itemsOrder := make([]string, 0, 10)
-	items := make(map[string]*SelectorItem)
+	var items []*SelectorItem
 	_, _, err = archiver.Identify(downloadPath, inputStream)
 	if err != nil {
 		if err == archiver.ErrNoMatch {
-			itemsOrder = append(itemsOrder, filepath.Base(downloadPath))
-			items[filepath.Base(downloadPath)] = MakeSelectorItem(
-				filepath.Base(downloadPath),
-				false).
-				SetCompressed(false).
-				SetBinaryType(BinaryTypeFromPath(downloadPath)).
-				SetDownloadPath(downloadPath).
-				SetId(0)
+			items = append(items, &SelectorItem{
+				Name:         filepath.Base(downloadPath),
+				Compressed:   false,
+				BinaryType:   BinaryTypeFromPath(downloadPath),
+				DownloadPath: downloadPath,
+			})
 
 			if interactive {
 				return &InteractiveSelector{
-					Kind:      Binary,
-					Items:     items,
-					ItemOrder: itemsOrder,
-					Prompt:    "Confirm release binary to be installed",
-					Single:    true,
+					Kind:   Binary,
+					Items:  items,
+					Prompt: "Confirm release binary to be installed",
+					Single: true,
 				}, nil
 			}
 
@@ -271,12 +260,12 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 		}
 
 		if !d.IsDir() {
-			itemsOrder = append(itemsOrder, d.Name())
-			items[d.Name()] = MakeSelectorItem(d.Name(), false).
-				SetId(0).
-				SetCompressed(true).
-				SetFsPath(fsPath).
-				SetFs(fileSystem)
+			items = append(items, &SelectorItem{
+				Name:       d.Name(),
+				Compressed: true,
+				FsPath:     fsPath,
+				Fs:         fileSystem,
+			})
 		}
 		return nil
 	})
@@ -286,11 +275,10 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 
 	if interactive {
 		return &InteractiveSelector{
-			Kind:      Binary,
-			Items:     items,
-			ItemOrder: itemsOrder,
-			Prompt:    "Select binaries to be installed",
-			Single:    false,
+			Kind:   Binary,
+			Items:  items,
+			Prompt: "Select binaries to be installed",
+			Single: false,
 		}, nil
 	}
 

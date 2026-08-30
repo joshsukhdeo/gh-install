@@ -231,10 +231,6 @@ func GetDefaultTargetPath() string {
 }
 
 func getTarballRgx() string {
-	val := os.Getenv("TARBALL_RGX")
-	if val != "" {
-		return val
-	}
 	return `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
 }
 

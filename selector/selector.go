@@ -8,8 +8,7 @@ import (
 
 type Selector struct {
 	Kind           SelectorKind
-	Items          map[string]*SelectorItem
-	ItemOrder      []string
+	Items          []*SelectorItem
 	NamesMatcher   []string
 	RegexpMatchers []string
 	Single         bool
@@ -18,24 +17,10 @@ type Selector struct {
 func (s *Selector) Run() ([]*SelectorItem, error) {
 	var selectedItems []*SelectorItem
 
-	// Ensure we iterate in the provided order if available
-	var order []string
-	if len(s.ItemOrder) > 0 {
-		order = s.ItemOrder
-	} else {
-		for k := range s.Items {
-			order = append(order, k)
-		}
-	}
-
 	if len(s.NamesMatcher) > 0 {
-		for _, itemName := range order {
-			item, ok := s.Items[itemName]
-			if !ok {
-				continue
-			}
+		for _, item := range s.Items {
 			for _, name := range s.NamesMatcher {
-				if strings.Compare(strings.ToLower(name), strings.ToLower(itemName)) == 0 {
+				if strings.Compare(strings.ToLower(name), strings.ToLower(item.Name)) == 0 {
 					item.Selected = true
 					selectedItems = append(selectedItems, item)
 				}
@@ -44,12 +29,8 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 	} else if len(s.RegexpMatchers) > 0 {
 		// Try regex matchers in priority order
 		for _, rx := range s.RegexpMatchers {
-			for _, itemName := range order {
-				item, ok := s.Items[itemName]
-				if !ok {
-					continue
-				}
-				match, err := regexp.MatchString(rx, itemName)
+			for _, item := range s.Items {
+				match, err := regexp.MatchString(rx, item.Name)
 				if err != nil {
 					return nil, err
 				}
