@@ -29,21 +29,7 @@ const (
 	Binary
 )
 
-func (ss SelectorKind) String() string {
-	switch ss {
-	case Release:
-		return "release_selector"
-	case Asset:
-		return "asset_selector"
-	case Binary:
-		return "binary_selector"
-	default:
-		return fmt.Sprintf("Unknown(%d)", ss)
-	}
-}
-
 type ISelector interface {
-	GetKind() SelectorKind
 	Run() ([]*SelectorItem, error)
 }
 
