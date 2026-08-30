@@ -26,8 +26,9 @@ type IRelease interface {
 }
 
 type GithubRelease struct {
-	CliParams *params.CLI
-	Client    selector.GithubClient
+	CliParams       *params.CLI
+	Client          selector.GithubClient
+	ResolvedVersion string
 }
 
 func MakeGithubRelease(cliParams *params.CLI, cli selector.GithubClient) IRelease {
@@ -70,7 +71,7 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 		repoParts := strings.Split(r.CliParams.Repository, "/")
 		repoName := repoParts[len(repoParts)-1]
 
-		proposedName := GenerateCleanName(binaryName, repoName)
+		proposedName := GenerateCleanName(binaryName, repoName, r.ResolvedVersion)
 
 		if extMatch := regexp.MustCompile(`(?i)(\.[a-z][a-z0-9]*)$`).FindStringSubmatch(binaryName); len(extMatch) > 0 {
 			ext := extMatch[1]
@@ -333,6 +334,7 @@ func (r *GithubRelease) Install() error {
 			Msg("could not select a release")
 		return err
 	}
+	r.ResolvedVersion = releases[0].Name
 
 	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].GetId(),
 		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive)

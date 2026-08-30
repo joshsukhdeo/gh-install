@@ -7,7 +7,7 @@ import (
 
 // GenerateCleanName attempts to heuristically strip OS, Architecture, and Extension
 // affixes from a binary name, returning a clean executable name.
-func GenerateCleanName(binaryName, repoName string) string {
+func GenerateCleanName(binaryName, repoName, resolvedVersion string) string {
 	// If it's already shorter than the repo name and has no weird chars, it's likely already clean (e.g. "rg" for "ripgrep")
 	if len(binaryName) <= len(repoName) && !strings.ContainsAny(binaryName, "-_.") {
 		return binaryName
@@ -20,6 +20,18 @@ func GenerateCleanName(binaryName, repoName string) string {
 	if match := regexp.MustCompile(`(?i)(\.[a-z][a-z0-9]*)$`).FindStringSubmatch(clean); len(match) > 0 {
 		ext = match[1]
 		clean = clean[:len(clean)-len(ext)]
+	}
+
+	// Directly strip the exact resolved version, with or without 'v'
+	if resolvedVersion != "" {
+		vStr := resolvedVersion
+		noVStr := strings.TrimPrefix(resolvedVersion, "v")
+		if noVStr == resolvedVersion {
+			vStr = "v" + resolvedVersion
+		}
+		
+		clean = strings.ReplaceAll(clean, vStr, "")
+		clean = strings.ReplaceAll(clean, noVStr, "")
 	}
 
 	// Regex to remove common affixes
