@@ -10,14 +10,21 @@ import (
 )
 
 type InstalledApp struct {
-	Repository    string            `json:"repository"`
-	TargetPath    string            `json:"target_path"`
-	Global        bool              `json:"global"`
-	ReleaseAsset  string            `json:"release_asset"`
-	ReleaseRegexp string            `json:"release_regexp"`
-	Version       string            `json:"version"`
-	Rename        map[string]string `json:"target_binaries"`
-	Disabled      bool              `json:"disabled"`
+	Repository          string            `json:"repository"`
+	TargetPath          string            `json:"target_path"`
+	Global              bool              `json:"global"`
+	ReleaseAsset        string            `json:"release_asset"`
+	ReleaseRegexp       string            `json:"release_regexp"`
+	Version             string            `json:"version"`
+	Rename              map[string]string `json:"target_binaries"`
+	Disabled            bool              `json:"disabled"`
+	Type                []string          `json:"type"`
+	All                 bool              `json:"all"`
+	AssetBinaries       []string          `json:"asset_binaries"`
+	AssetBinariesRegexp string            `json:"asset_binaries_regexp"`
+	PackageNames        []string          `json:"package_names,omitempty"`
+	Pinned              bool              `json:"pinned,omitempty"`
+	NativeExtract       bool              `json:"native_extract"`
 }
 
 type State struct {
@@ -60,7 +67,7 @@ func (s *State) Save() error {
 	if err := lock.Lock(); err != nil {
 		return err
 	}
-	defer lock.Unlock()
+	defer func() { _ = lock.Unlock() }()
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

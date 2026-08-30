@@ -8,8 +8,11 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strings"
 
 	"github.com/mholt/archiver/v4"
 	"github.com/rs/zerolog/log"
@@ -206,7 +209,7 @@ func AssetSelector(ghClient GithubClient, repo string,
 	}, nil
 }
 
-func BinarySelector(downloadPath string, names []string, matcher string, interactive bool) (ISelector, error) {
+func BinarySelector(downloadPath string, names []string, matcher string, interactive bool, nativeExtract bool) (ISelector, error) {
 	log.Info().
 		Str("asset download path", downloadPath).
 		Strs("asset matching binary names", names).
@@ -219,7 +222,75 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	}
 
 	var items []*SelectorItem
-	_, _, err = archiver.Identify(downloadPath, inputStream)
+	lowerPath := strings.ToLower(downloadPath)
+	isNativePkg := strings.HasSuffix(lowerPath, ".pkg.tar.zst") || strings.HasSuffix(lowerPath, ".pkg.tar.xz") || strings.HasSuffix(lowerPath, ".deb") || strings.HasSuffix(lowerPath, ".rpm") || strings.HasSuffix(lowerPath, ".msi") || strings.HasSuffix(lowerPath, ".dmg") || strings.HasSuffix(lowerPath, ".pkg")
+	isTarball := strings.HasSuffix(lowerPath, ".tar.gz") || strings.HasSuffix(lowerPath, ".tgz")
+	isZip := strings.HasSuffix(lowerPath, ".zip")
+
+	if isNativePkg {
+		err = archiver.ErrNoMatch
+	} else if nativeExtract && (isTarball || isZip) {
+		log.Info().Msg("delegating archive extraction to native OS utilities for maximum performance")
+		extractDir, _ := os.MkdirTemp("", "gh-ext-")
+		extracted := false
+		if isZip {
+			if err := exec.Command("unzip", "-q", downloadPath, "-d", extractDir).Run(); err == nil {
+				extracted = true
+			} else if err := exec.Command("7z", "x", downloadPath, "-o"+extractDir, "-y").Run(); err == nil {
+				extracted = true
+			} else if err := exec.Command("tar", "-xf", downloadPath, "-C", extractDir).Run(); err == nil {
+				extracted = true
+			}
+		} else {
+			if err := exec.Command("tar", "-xzf", downloadPath, "-C", extractDir).Run(); err == nil {
+				extracted = true
+			} else {
+				if runtime.GOOS == "windows" {
+					if err := exec.Command("cmd", "/c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", downloadPath, extractDir)).Run(); err == nil {
+						extracted = true
+					}
+				} else {
+					if err := exec.Command("sh", "-c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", downloadPath, extractDir)).Run(); err == nil {
+						extracted = true
+					}
+				}
+			}
+		}
+
+		if extracted {
+			_ = filepath.Walk(extractDir, func(path string, info os.FileInfo, err error) error {
+				if err == nil && !info.IsDir() {
+					items = append(items, &SelectorItem{
+						Name:         info.Name(),
+						Compressed:   false,
+						BinaryType:   BinaryTypeFromPath(info.Name()),
+						DownloadPath: path,
+					})
+				}
+				return nil
+			})
+			if interactive {
+				return &InteractiveSelector{
+					Kind:   Binary,
+					Items:  items,
+					Prompt: "Select binaries to be installed",
+					Single: false,
+				}, nil
+			}
+			return &Selector{
+				Kind:           Binary,
+				Items:          items,
+				NamesMatcher:   names,
+				RegexpMatchers: []string{matcher},
+				Single:         false,
+			}, nil
+		}
+		log.Warn().Msg("native extraction failed, falling back to pure Go archiver")
+		_, _, err = archiver.Identify(downloadPath, inputStream)
+	} else {
+		_, _, err = archiver.Identify(downloadPath, inputStream)
+	}
+
 	if err != nil {
 		if err == archiver.ErrNoMatch {
 			items = append(items, &SelectorItem{
@@ -242,7 +313,7 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 				Kind:           Binary,
 				Items:          items,
 				NamesMatcher:   names,
-				RegexpMatchers: []string{filepath.Base(downloadPath)},
+				RegexpMatchers: []string{regexp.QuoteMeta(filepath.Base(downloadPath))},
 				Single:         true,
 			}, nil
 		}
@@ -258,11 +329,11 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 		if err != nil {
 			return err
 		}
-
 		if !d.IsDir() {
 			items = append(items, &SelectorItem{
 				Name:       d.Name(),
 				Compressed: true,
+				BinaryType: BinaryTypeFromPath(d.Name()),
 				FsPath:     fsPath,
 				Fs:         fileSystem,
 			})

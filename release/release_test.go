@@ -130,7 +130,7 @@ func TestGetScore(t *testing.T) {
 	// It's a non-exported func so we can't call it if it's in another package.
 	// But tests are in the `release` package, so we can!
 	score := getScore("something.deb", types)
-	assert.Equal(t, 3, score) // deb is index 0 -> priority 3
+	assert.Equal(t, 30, score) // deb is index 0 -> priority (3 - 0) * 10 = 30
 	assert.True(t, score > 0)
 
 	score0 := getScore("something.xyz", types)
@@ -234,4 +234,54 @@ func TestGithubRelease_Install(t *testing.T) {
 
 func TestGithubRelease_GetTopgradeConfigPath(t *testing.T) {
 	// Not testing SetupTopgrade anymore because it was deleted in main branch!
+}
+
+func TestGithubRelease_InstallPacman(t *testing.T) {
+	origExecCommand := execCommand
+	execCommand = helperCommand
+	defer func() { execCommand = origExecCommand }()
+
+	gr := &GithubRelease{
+		CliParams: &params.CLI{
+			NoDeps: true,
+		},
+	}
+
+	err := gr.installPacman("/tmp/test.pkg.tar.zst")
+	require.NoError(t, err)
+
+	// test with AddDeps
+	gr.CliParams.NoDeps = false
+	gr.CliParams.AddDeps = true
+	err = gr.installPacman("/tmp/test.pkg.tar.zst")
+	require.NoError(t, err)
+}
+
+func TestGithubRelease_EnsureSudo(t *testing.T) {
+	origExecCommand := execCommand
+	execCommand = helperCommand
+	defer func() { execCommand = origExecCommand }()
+
+	gr := &GithubRelease{
+		CliParams: &params.CLI{
+			DisablePrompts: true,
+		},
+	}
+	err := gr.ensureSudo()
+	// With the helper we return success (0 exit) so there should be no error.
+	assert.NoError(t, err)
+}
+
+
+func TestGithubRelease_DryRun(t *testing.T) {
+	gr := &GithubRelease{
+		CliParams: &params.CLI{
+			DryRun: true,
+		},
+	}
+	// All should return nil immediately
+	assert.NoError(t, gr.installRpm("/tmp/test.rpm"))
+	assert.NoError(t, gr.installDeb("/tmp/test.deb"))
+	assert.NoError(t, gr.installPkg("/tmp/test.pkg"))
+	assert.NoError(t, gr.installPacman("/tmp/test.pkg.tar.zst"))
 }

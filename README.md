@@ -1,9 +1,5 @@
 # gh-install
 
-A GitHub CLI extension for rapidly and intelligently installing GitHub repository releases.
-
-`gh-install` is intended for quickly installing release binaries for projects that do not distribute using Homebrew, apt, or other traditional package managers. It handles extraction, execution matching, system package installations (like `.deb`, `.rpm`), and state management for seamless future updates.
-
 ## Installation
 
 ```bash
@@ -14,12 +10,24 @@ gh extension install joshsukhdeo/gh-install
 
 ## Features & Capabilities
 
-- **Intelligent Asset Selection:** Automatically prioritizes system packages (`.deb`, `.rpm`) and containerized formats (Snap, Flatpak, AppImage) over raw archives depending on your OS.
-- **State Management & Updates:** Tracks installed binaries so you can update them all later with a single command.
-- **Dependency Resolution:** Can automatically resolve and install dependencies for `.deb`/`.rpm` via `apt` or `dnf`.
+- **Intelligent Asset Selection:** Automatically detects your Linux distribution via `/etc/os-release` and prioritizes distro-specific assets (e.g. `ubuntu` or `fedora` tagged releases) over generic `linux` ones.
+- **Native Package Manager Routing:** Detects which package managers are available on your system and routes installations accordingly:
+  - **Ubuntu/Debian** (`dpkg`): `.deb` → `apt-get install` or `dpkg -i`
+  - **Fedora/RHEL/CentOS** (`rpm`): `.rpm` → `dnf install` or `rpm -i`
+  - **Arch Linux** (`pacman`): `.pkg.tar.zst` / `.pkg.tar.xz` → `pacman -U`
+  - **FreeBSD** (`pkg`): `.pkg` / `.txz` → `pkg install` or `pkg add`
+  - **Archive Embedded Installers:** Automatically extracts and correctly routes native installers (like `.deb` or `.rpm`) found inside generic archives (`.tar.gz` or `.zip`).
+  - **Archive Embedded Installers:** Automatically extracts and routes native installers (e.g. `.deb`, `.rpm`, `.msi`) embedded within generic archives.
+  - **MacOS & Windows Support:** Custom installation pipelines for `.dmg`, `.pkg`, `.msi`, and Windows `setup.exe` executables natively or via Wine.
+  - **Fallback:** AppImage, Flatpak, Snap, or raw binary extraction for distros without native package managers.
+- **State Management & Updates:** Tracks installed binaries in `state.json` so you can update them all later with a single command. All installation flags (`-T`, `--all`, `--asset-binaries-regexp`) are persisted so updates reproduce the exact same installation behavior.
+- **Uninstall Support:** `--rm-saved-state` removes the application from tracking **and** deletes the installed binary from disk.
+- **Dependency Resolution:** Automatically resolves and installs dependencies for `.deb` (via `apt`), `.rpm` (via `dnf`), and `.pkg.tar.zst` (via `pacman`) with the `-y` flag.
 - **Cross-Platform:** Supports Linux, macOS, Windows, and FreeBSD.
 - **Wine Support:** Can seamlessly pull and install Windows `.exe`/`.msi` binaries on Linux and FreeBSD systems if `--allow-wine` is enabled.
 - **Clean Naming:** Automatically strips messy hardware/OS tags (like `-x86_64-linux`) and redundant version strings from the final installed binary name.
+- **Sudo Safety:** Before running any `sudo` command, verifies that a sudo session is cached. In headless mode (`-D`), fails fast with a clear error instead of silently hanging waiting for a password prompt.
+- **Prerequisite Validation:** Checks that the GitHub CLI (`gh`) is installed and in PATH before doing anything, with a clear error and install link if missing.
 
 ---
 
@@ -67,8 +75,8 @@ State Management
                              ($GH_INSTALL_LIST_SAVED_STATE).
   --edit-saved-state         Edit saved state (enable/disable updates or remove
                              apps) ($GH_INSTALL_EDIT_SAVED_STATE).
-  --rm-saved-state=STRING    Remove a saved app from state by repository slug or
-                             binary name ($GH_INSTALL_RM_SAVED_STATE).
+  --rm-saved-state=STRING    Remove a saved app from state and delete installed
+                             binaries from disk ($GH_INSTALL_RM_SAVED_STATE).
 
 Non-interactive Mode
   -v, --release-version="latest"
@@ -80,8 +88,7 @@ Non-interactive Mode
   -A, --release-asset-regexp=STRING
                                    Regular expression matching release asset to
                                    download ($GH_INSTALL_RELEASE_ASSET_REGEXP).
-  -T, --format=deb,snap,flatpak,appimage,7z,t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?,zip,py,ts,js,none,...
-                                   Comma-separated list of types to match and
+  -T, --format=FORMAT,...          Comma-separated list of types to match and
                                    prioritize ($GH_INSTALL_TYPE).
       --all                        Install all matched assets instead of just
                                    the first one ($GH_INSTALL_ALL).
@@ -121,9 +128,27 @@ Non-interactive Mode
 
 ---
 
+## Package Manager Detection
+
+On Linux, `gh-install` dynamically detects which package managers are available on your system using `exec.LookPath` and adjusts the default asset priority accordingly:
+
+| Distribution | Detected via | Default priority |
+|---|---|---|
+| Ubuntu / Debian | `dpkg` in PATH | `deb > snap > flatpak > appimage > tar.gz` |
+| Fedora / RHEL / CentOS | `rpm` in PATH | `rpm > snap > flatpak > appimage > tar.gz` |
+| Arch Linux / Manjaro | Neither `dpkg` nor `rpm` | `appimage > flatpak > snap > tar.gz` |
+| FreeBSD | `GOOS=freebsd` | `pkg > txz > tar.gz` |
+| macOS | `GOOS=darwin` | `dmg > tar.gz > zip` |
+
+Additionally, `.pkg.tar.zst` and `.pkg.tar.xz` files are intercepted before archive extraction and routed directly to `sudo pacman -U` on Arch-based systems.
+
+The default priority can always be overridden with `-T` (e.g. `-T rpm,deb,tar.gz`).
+
+---
+
 ## State Management & Update System
 
-By default, every successful installation is saved to an internal `state.json` file inside your XDG Data directory. This tracks the repository, current version, target path, and scope (User/Global).
+By default, every successful installation is saved to an internal `state.json` file inside your XDG Data directory. This tracks the repository, current version, target path, scope (User/Global), and all installation flags (format types, `--all`, `--asset-binaries-regexp`).
 
 You can instantly update all tracked applications by running:
 ```bash
@@ -132,9 +157,9 @@ gh install -U
 *(`-U` updates all global and user packages. `-u` updates only user packages. `-u -g` updates only global packages).*
 
 To view and manage your current state:
-- `gh install --list-saved-state`: Prints a beautiful table of all currently tracked applications.
+- `gh install --list-saved-state`: Prints a table of all currently tracked applications.
 - `gh install --edit-saved-state`: Launches an interactive terminal UI to enable/disable automatic updates for specific apps, or delete them from the tracker.
-- `gh install --rm-saved-state="fzf"`: Immediately drops an application from state tracking.
+- `gh install --rm-saved-state="fzf"`: Removes the application from state tracking **and deletes the installed binary from disk**.
 
 If you are running `gh install` in a temporary script and don't want to track it for updates, pass the `-S` (`--no-save-state`) flag.
 
@@ -158,9 +183,11 @@ The configuration precedence is: `CLI Argument > Environment Variable > config.y
 
 ## Topgrade Integration
 
-`gh-install` can easily be integrated with [Topgrade](https://github.com/topgrade-rs/topgrade) to keep all your installed binaries up to date automatically alongside your system packages. Just add the following to your `topgrade.toml` under the `[custom_commands]` block:
+`gh-install` can easily be integrated with [Topgrade](https://github.com/topgrade-rs/topgrade) to keep all your installed binaries up to date automatically alongside your system packages. Just add the following to your `topgrade.toml` under the `[commands]` block:
 
 ```toml
-[custom_commands]
+[commands]
 "gh-install" = "gh install -U"
 ```
+
+*Project maintained with model switch to nemotron-3.5-lightning-free for active development.*

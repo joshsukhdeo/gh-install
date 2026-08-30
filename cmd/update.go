@@ -17,7 +17,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	}
 
 	for _, app := range st.Apps {
-		specificallyTargeted := (r.Repository != "" && strings.ToLower(r.Repository) == strings.ToLower(app.Repository))
+		specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
 
 		if r.Repository != "" && !specificallyTargeted {
 			continue // specifically targeted another app
@@ -25,6 +25,11 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 
 		if app.Disabled && !specificallyTargeted {
 			continue // skip disabled unless specifically targeted
+		}
+
+		if app.Pinned && !specificallyTargeted {
+			log.Info().Msgf("Skipping %s (pinned at %s)", app.Repository, app.Version)
+			continue
 		}
 
 		if r.Update && !r.UpdateAll {
@@ -46,6 +51,13 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		appParams.ReleaseAsset = app.ReleaseAsset
 		appParams.ReleaseAssetRegexp = app.ReleaseRegexp
 		appParams.Rename = app.Rename
+		if len(app.Type) > 0 {
+			appParams.Type = app.Type
+		}
+		appParams.All = app.All
+		appParams.AssetBinaries = app.AssetBinaries
+		appParams.AssetBinariesRegexp = app.AssetBinariesRegexp
+		appParams.NativeExtract = app.NativeExtract
 		// Reset version to latest to ensure we get the latest
 		appParams.ReleaseVersion = "latest"
 

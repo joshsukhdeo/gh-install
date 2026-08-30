@@ -41,6 +41,25 @@ func (m *MockGithubClient) Request(method string, path string, body io.Reader) (
 	return &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(`[]`)))}, nil
 }
 
+func TestSelector_PrioritizesNonMusl(t *testing.T) {
+	items := []*SelectorItem{
+		{Name: "app-linux-musl-x64.tar.gz"},
+		{Name: "app-linux-x64.tar.gz"},
+	}
+
+	sel := &Selector{
+		Kind:           Asset,
+		Items:          items,
+		RegexpMatchers: []string{`.*(?:amd64|x86_64|x64).*\.(?i:tar\.gz)$`},
+		Single:         true,
+	}
+
+	selected, err := sel.Run()
+	assert.NoError(t, err)
+	assert.Len(t, selected, 1)
+	assert.Equal(t, "app-linux-x64.tar.gz", selected[0].Name)
+}
+
 func TestSelector_Run(t *testing.T) {
 	s := &Selector{
 		Kind: Release,
@@ -162,7 +181,7 @@ func TestBinarySelector(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("NonInteractive", func(t *testing.T) {
-		sel, err := BinarySelector(path, []string{"dummy-binary"}, ".*", false)
+		sel, err := BinarySelector(path, []string{"dummy-binary"}, ".*", false, false)
 		require.NoError(t, err)
 		assert.Equal(t, Binary, sel.GetKind())
 		s, ok := sel.(*Selector)
@@ -175,7 +194,7 @@ func TestBinarySelector(t *testing.T) {
 	})
 
 	t.Run("Interactive", func(t *testing.T) {
-		sel, err := BinarySelector(path, []string{"dummy-binary"}, ".*", true)
+		sel, err := BinarySelector(path, []string{"dummy-binary"}, ".*", true, false)
 		require.NoError(t, err)
 		is, ok := sel.(*InteractiveSelector)
 		require.True(t, ok)

@@ -27,19 +27,35 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 			}
 		}
 	} else if len(s.RegexpMatchers) > 0 {
+		muslRegex := regexp.MustCompile(`(?i)[-_]musl[-_.]`)
 		// Try regex matchers in priority order
 		for _, rx := range s.RegexpMatchers {
+			compiledRx, err := regexp.Compile(rx)
+			if err != nil {
+				return nil, err
+			}
+			var currentMatches []*SelectorItem
 			for _, item := range s.Items {
-				match, err := regexp.MatchString(rx, item.Name)
-				if err != nil {
-					return nil, err
+				if compiledRx.MatchString(item.Name) {
+					currentMatches = append(currentMatches, item)
 				}
-				if match {
+			}
+			if len(currentMatches) > 0 {
+				// If multiple items match, prefer non-musl over musl on Linux/standard distros
+				var nonMusl []*SelectorItem
+				for _, item := range currentMatches {
+					if !muslRegex.MatchString(item.Name) {
+						nonMusl = append(nonMusl, item)
+					}
+				}
+				if len(nonMusl) > 0 {
+					currentMatches = nonMusl
+				}
+
+				for _, item := range currentMatches {
 					item.Selected = true
 					selectedItems = append(selectedItems, item)
 				}
-			}
-			if len(selectedItems) > 0 {
 				break // Found matches with this priority regex, don't fallback
 			}
 		}

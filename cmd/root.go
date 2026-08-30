@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -107,11 +108,12 @@ func (r *RootCLI) Run() error {
 		r.NoDeps = false
 	} else if !r.AddDeps && !r.NoDeps {
 		envDeps := strings.ToUpper(os.Getenv("GH_INSTALL_ADD_DEPS"))
-		if envDeps == "TRUE" {
+		switch envDeps {
+		case "TRUE":
 			r.AddDeps = true
-		} else if envDeps == "FALSE" {
+		case "FALSE":
 			r.NoDeps = true
-		} else {
+		default:
 			cfg, _ := config.LoadConfig()
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
@@ -128,17 +130,21 @@ func (r *RootCLI) Run() error {
 				if !r.AllowWine {
 					r.AllowWine = cfg.AllowWine
 				}
+				if !r.NativeExtract {
+					r.NativeExtract = cfg.NativeExtract
+				}
 			}
 		}
 	}
 
 	if r.Global && r.TargetPath == GetDefaultTargetPath() {
-		if runtime.GOOS == "windows" {
+		switch runtime.GOOS {
+		case "windows":
 			r.TargetPath = os.Getenv("ProgramFiles")
 			if r.TargetPath == "" {
 				r.TargetPath = "C:\\Program Files"
 			}
-		} else {
+		default:
 			r.TargetPath = "/usr/local/bin"
 		}
 	}
@@ -221,46 +227,88 @@ func GetDefaultTargetPath() string {
 }
 
 func GetDefaultInstallTypes() string {
-	tarballRgx := `t(ar\.)?([gxl]z|bz2?|zst),tar(\.lzma)?`
-	if runtime.GOOS == "windows" {
+	tarballRgx := `t(ar\\.)?([gxl]z|bz2?|zst),tar(\\.lzma)?`
+	switch runtime.GOOS {
+	case "windows":
 		return fmt.Sprintf("exe,msi,7z,%s,zip,py,ts,js", tarballRgx)
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		return fmt.Sprintf("dmg,7z,%s,zip,py,ts,js,none", tarballRgx)
-	} else if runtime.GOOS == "linux" {
-		osRelease, err := os.ReadFile("/etc/os-release")
-		if err == nil {
-			content := strings.ToLower(string(osRelease))
-			if strings.Contains(content, "id=ubuntu") || strings.Contains(content, "id=debian") {
-				return fmt.Sprintf("deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
-			} else if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
-				return fmt.Sprintf("rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
-			}
+	case "linux":
+		hasDpkg := false
+		hasRpm := false
+		if _, err := exec.LookPath("dpkg"); err == nil {
+			hasDpkg = true
 		}
-		return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
-	} else if runtime.GOOS == "freebsd" {
-		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
-	}
-	return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
-}
+		if _, err := exec.LookPath("rpm"); err == nil {
+			hasRpm = true
+		}
 
+		if hasDpkg && !hasRpm {
+			return fmt.Sprintf("deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		} else if hasRpm && !hasDpkg {
+			return fmt.Sprintf("rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		} else if hasRpm && hasDpkg {
+			// If both exist (e.g. alien installed), try to check os-release
+			osRelease, err := os.ReadFile("/etc/os-release")
+			if err == nil {
+				content := strings.ToLower(string(osRelease))
+				if strings.Contains(content, "id=fedora") || strings.Contains(content, "id=rhel") || strings.Contains(content, "id=centos") {
+					return fmt.Sprintf("rpm,deb,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+				}
+			}
+			return fmt.Sprintf("deb,rpm,snap,flatpak,appimage,7z,%s,zip,py,ts,js,none", tarballRgx)
+		}
+
+		// Arch or others without rpm/deb natively
+		return fmt.Sprintf("appimage,flatpak,snap,7z,%s,zip,py,ts,js,none", tarballRgx)
+	case "freebsd":
+		return fmt.Sprintf("pkg,txz,7z,%s,zip,py,ts,js,none", tarballRgx)
+	default:
+		return fmt.Sprintf("7z,%s,zip,none", tarballRgx)
+	}
+}
 func buildRegexFromTypes(types []string, allowWine bool) []string {
 	archRegex := runtime.GOARCH
-	if runtime.GOARCH == "amd64" {
+	switch runtime.GOARCH {
+	case "amd64":
 		archRegex = "(?:amd64|x86_64|x64)"
-	} else if runtime.GOARCH == "arm64" {
+	case "arm64":
 		archRegex = "(?:arm64|aarch64)"
 	}
 
-	osRegex := runtime.GOOS
-	if runtime.GOOS == "darwin" {
-		osRegex = "(?:darwin|macos|apple)"
-	} else if runtime.GOOS == "windows" {
-		osRegex = "(?:windows|win)"
-	} else if runtime.GOOS == "freebsd" {
-		osRegex = "(?:freebsd)"
+	var osRegexList []string
+	switch runtime.GOOS {
+	case "darwin":
+		osRegexList = append(osRegexList, "(?:darwin|macos|apple)")
+	case "windows":
+		osRegexList = append(osRegexList, "(?:windows|win)")
+	case "freebsd":
+		osRegexList = append(osRegexList, "(?:freebsd)")
+	case "linux":
+		osRelease, err := os.ReadFile("/etc/os-release")
+		if err == nil {
+			content := string(osRelease)
+			lines := strings.Split(content, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "ID=") {
+					distro := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID="), "\""))
+					if distro != "" && distro != "linux" {
+						osRegexList = append(osRegexList, distro)
+					}
+				} else if strings.HasPrefix(line, "ID_LIKE=") {
+					idLike := strings.ToLower(strings.Trim(strings.TrimPrefix(line, "ID_LIKE="), "\""))
+					if idLike != "" {
+						for _, likeDistro := range strings.Fields(idLike) {
+							if likeDistro != "linux" {
+								osRegexList = append(osRegexList, likeDistro)
+							}
+						}
+					}
+				}
+			}
+		}
+		osRegexList = append(osRegexList, "linux")
 	}
-
-	var matchers []string
 
 	hwSpecific := ""
 	if runtime.GOOS == "linux" {
@@ -271,42 +319,56 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		}
 	}
 
-	buildFinal := func(baseRegex string, currentTypes []string) string {
-		var exts []string
-		hasNone := false
-		for _, t := range currentTypes {
-			t = strings.ToLower(strings.TrimSpace(t))
-			if t == "none" {
-				hasNone = true
-			} else if t != "" {
-				exts = append(exts, t)
-			}
-		}
-		if len(exts) > 0 {
-			extPattern := strings.Join(exts, "|")
-			if hasNone {
-				return fmt.Sprintf(`^(?:%s|%s\.(?i:%s))$`, baseRegex, baseRegex, extPattern)
-			}
-			return fmt.Sprintf(`^%s\.(?i:%s)$`, baseRegex, extPattern)
+	buildFinal := func(baseRegex string, t string) string {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "none" {
+			return fmt.Sprintf(`^%s$`, baseRegex)
+		} else if t != "" {
+			return fmt.Sprintf(`^%s\.(?i:%s)$`, baseRegex, t)
 		}
 		return fmt.Sprintf(`^%s$`, baseRegex)
 	}
 
-	if hwSpecific != "" {
-		hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
-		matchers = append(matchers, buildFinal(hwBaseRegex, types))
-	}
+	var matchers []string
 
-	baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
-	matchers = append(matchers, buildFinal(baseRegex, types))
+	for _, t := range types {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+
+		lowerT := strings.ToLower(t)
+		isOsFormatPkg := lowerT == "deb" || lowerT == "rpm" || lowerT == "pkg" || lowerT == "txz" || lowerT == "dmg"
+
+		for _, osRegex := range osRegexList {
+			if hwSpecific != "" {
+				hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
+				matchers = append(matchers, buildFinal(hwBaseRegex, t))
+			}
+
+			baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
+			matchers = append(matchers, buildFinal(baseRegex, t))
+		}
+
+		// Format-specific fallback: format already implies OS (e.g. .deb implies debian/ubuntu), match arch
+		if isOsFormatPkg {
+			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
+			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+		}
+
+		// Fallback: OS only
+		for _, osRegex := range osRegexList {
+			fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
+			matchers = append(matchers, buildFinal(fallbackRegex, t))
+		}
+	}
 
 	if allowWine && runtime.GOOS != "windows" {
 		winOsRegex := "(?:windows|win)"
 		winBaseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, winOsRegex, winOsRegex, archRegex)
-
-		// Ensure windows extensions are checked
-		winTypes := append([]string{"exe", "msi"}, types...)
-		matchers = append(matchers, buildFinal(winBaseRegex, winTypes))
+		for _, t := range append([]string{"exe", "msi"}, types...) {
+			matchers = append(matchers, buildFinal(winBaseRegex, t))
+		}
 	}
 
 	return matchers

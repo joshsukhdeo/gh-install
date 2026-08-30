@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -52,7 +55,7 @@ func ListState() error {
 	}
 
 	fmt.Println()
-	pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
+	_ = pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
 	fmt.Println()
 	return nil
 }
@@ -91,6 +94,60 @@ func RmState(target string) error {
 	}
 
 	for _, r := range toRemove {
+		app := st.Apps[r]
+
+		// Uninstall packages via package manager if they were installed
+		if len(app.PackageNames) > 0 {
+			for _, pkgName := range app.PackageNames {
+				log.Info().Msgf("Uninstalling package %s...", pkgName)
+				var cmd *exec.Cmd
+				// Detect which package manager to use
+				if _, err := exec.LookPath("dpkg"); err == nil {
+					cmd = exec.Command("sudo", "dpkg", "-r", pkgName)
+				} else if _, err := exec.LookPath("rpm"); err == nil {
+					cmd = exec.Command("sudo", "rpm", "-e", pkgName)
+				} else if _, err := exec.LookPath("pacman"); err == nil {
+					cmd = exec.Command("sudo", "pacman", "-R", "--noconfirm", pkgName)
+				} else if _, err := exec.LookPath("pkg"); err == nil {
+					cmd = exec.Command("sudo", "pkg", "delete", "-y", pkgName)
+				}
+
+				if cmd != nil {
+					if err := cmd.Run(); err != nil {
+						log.Warn().Err(err).Msgf("Failed to uninstall package %s", pkgName)
+					} else {
+						log.Info().Msgf("Successfully uninstalled %s", pkgName)
+					}
+				}
+			}
+		}
+
+		// Delete installed binaries from disk
+		if app.TargetPath != "" {
+			parts := strings.Split(r, "/")
+			repoName := parts[len(parts)-1]
+
+			// If renamed binaries exist, delete those specific files
+			if len(app.Rename) > 0 {
+				for _, renamed := range app.Rename {
+					binPath := filepath.Join(app.TargetPath, renamed)
+					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+						log.Warn().Err(err).Msgf("Failed to remove binary %s", binPath)
+					} else if err == nil {
+						log.Info().Msgf("Deleted %s", binPath)
+					}
+				}
+			} else {
+				// Try the repo name as the binary name
+				binPath := filepath.Join(app.TargetPath, repoName)
+				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+					log.Warn().Err(err).Msgf("Failed to remove binary %s", binPath)
+				} else if err == nil {
+					log.Info().Msgf("Deleted %s", binPath)
+				}
+			}
+		}
+
 		delete(st.Apps, r)
 		log.Info().Msgf("Removed %s from managed state.", r)
 	}
@@ -155,7 +212,7 @@ func EditState() error {
 		app.Disabled = !selectedMap[label]
 	}
 
-	st.Save()
+	_ = st.Save()
 
 	// 2. Interactive Multi-select for removal
 	pterm.Println()
@@ -176,7 +233,7 @@ func EditState() error {
 				log.Info().Msgf("Removed %s from state.", repo)
 			}
 		}
-		st.Save()
+		_ = st.Save()
 	}
 
 	return nil

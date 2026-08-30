@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/alecthomas/kong"
 	"github.com/joshsukhdeo/gh-install/cmd"
@@ -9,6 +11,10 @@ import (
 )
 
 func main() {
+	if _, err := exec.LookPath("gh"); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: GitHub CLI ('gh') is not installed or not in PATH. It is required for gh-install. Please install it from https://cli.github.com/")
+		os.Exit(1)
+	}
 
 	var cli cmd.RootCLI
 
