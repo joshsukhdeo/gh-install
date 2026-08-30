@@ -288,27 +288,45 @@ func (r *GithubRelease) installRpm(binaryPath string) error {
 
 func getScore(name string, types []string) int {
 	name = strings.ToLower(name)
+	score := -1
 	for i, t := range types {
 		t = strings.ToLower(strings.TrimSpace(t))
 		if t == "none" {
 			if !strings.Contains(filepath.Base(name), ".") {
-				return len(types) - i
+				score = (len(types) - i) * 10
+				break
 			}
 		} else if t != "" {
 			matched, _ := regexp.MatchString(`(?i)\.`+t+`$`, name)
 			if matched {
-				return len(types) - i
+				score = (len(types) - i) * 10
+				break
 			}
 		}
 	}
 
-	for i, t := range types {
-		if strings.ToLower(strings.TrimSpace(t)) == "none" {
-			return len(types) - i
+	if score == -1 {
+		for i, t := range types {
+			if strings.ToLower(strings.TrimSpace(t)) == "none" {
+				score = (len(types) - i) * 10
+				break
+			}
 		}
 	}
 
-	return -1
+	if score != -1 && runtime.GOOS == "linux" {
+		isMusl, _ := regexp.MatchString(`[-_]musl[-_.]`, name)
+		if isMusl {
+			score -= 5
+		} else {
+			isGlibc, _ := regexp.MatchString(`[-_](?:glibc|gnu)[-_.]`, name)
+			if isGlibc {
+				score += 2
+			}
+		}
+	}
+
+	return score
 }
 
 // findChecksumFile looks for a checksum file in the release assets.

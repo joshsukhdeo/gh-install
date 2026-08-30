@@ -310,8 +310,6 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		osRegexList = append(osRegexList, "linux")
 	}
 
-	var matchers []string
-
 	hwSpecific := ""
 	if runtime.GOOS == "linux" {
 		if _, err := os.Stat("/sys/class/accel"); err == nil {
@@ -321,47 +319,56 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		}
 	}
 
-	buildFinal := func(baseRegex string, currentTypes []string) string {
-		var exts []string
-		hasNone := false
-		for _, t := range currentTypes {
-			t = strings.ToLower(strings.TrimSpace(t))
-			if t == "none" {
-				hasNone = true
-			} else if t != "" {
-				exts = append(exts, t)
-			}
-		}
-		if len(exts) > 0 {
-			extPattern := strings.Join(exts, "|")
-			if hasNone {
-				return fmt.Sprintf(`^(?:%s|%s\.(?i:%s))$`, baseRegex, baseRegex, extPattern)
-			}
-			return fmt.Sprintf(`^%s\.(?i:%s)$`, baseRegex, extPattern)
+	buildFinal := func(baseRegex string, t string) string {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "none" {
+			return fmt.Sprintf(`^%s$`, baseRegex)
+		} else if t != "" {
+			return fmt.Sprintf(`^%s\.(?i:%s)$`, baseRegex, t)
 		}
 		return fmt.Sprintf(`^%s$`, baseRegex)
 	}
 
-	for _, osRegex := range osRegexList {
-		if hwSpecific != "" {
-			hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
-			matchers = append(matchers, buildFinal(hwBaseRegex, types))
+	var matchers []string
+
+	for _, t := range types {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
 		}
 
-		baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
-		matchers = append(matchers, buildFinal(baseRegex, types))
+		lowerT := strings.ToLower(t)
+		isOsFormatPkg := lowerT == "deb" || lowerT == "rpm" || lowerT == "pkg" || lowerT == "txz" || lowerT == "dmg"
 
-		fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
-		matchers = append(matchers, buildFinal(fallbackRegex, types))
+		for _, osRegex := range osRegexList {
+			if hwSpecific != "" {
+				hwBaseRegex := fmt.Sprintf(`.*(?:%s.+%s.+%s|%s.+%s.+%s|%s.+%s|%s.+%s).*`, archRegex, osRegex, hwSpecific, osRegex, archRegex, hwSpecific, hwSpecific, archRegex, archRegex, hwSpecific)
+				matchers = append(matchers, buildFinal(hwBaseRegex, t))
+			}
+
+			baseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, osRegex, osRegex, archRegex)
+			matchers = append(matchers, buildFinal(baseRegex, t))
+		}
+
+		// Format-specific fallback: format already implies OS (e.g. .deb implies debian/ubuntu), match arch
+		if isOsFormatPkg {
+			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
+			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+		}
+
+		// Fallback: OS only
+		for _, osRegex := range osRegexList {
+			fallbackRegex := fmt.Sprintf(`.*%s.*`, osRegex)
+			matchers = append(matchers, buildFinal(fallbackRegex, t))
+		}
 	}
 
 	if allowWine && runtime.GOOS != "windows" {
 		winOsRegex := "(?:windows|win)"
 		winBaseRegex := fmt.Sprintf(`.*(?:%s.+%s|%s.+%s).*`, archRegex, winOsRegex, winOsRegex, archRegex)
-
-		// Ensure windows extensions are checked
-		winTypes := append([]string{"exe", "msi"}, types...)
-		matchers = append(matchers, buildFinal(winBaseRegex, winTypes))
+		for _, t := range append([]string{"exe", "msi"}, types...) {
+			matchers = append(matchers, buildFinal(winBaseRegex, t))
+		}
 	}
 
 	return matchers
