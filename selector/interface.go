@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"path/filepath"
 	"regexp"
 
@@ -219,7 +220,13 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	}
 
 	var items []*SelectorItem
-	_, _, err = archiver.Identify(downloadPath, inputStream)
+	isPacmanPkg := strings.HasSuffix(downloadPath, ".pkg.tar.zst") || strings.HasSuffix(downloadPath, ".pkg.tar.xz")
+	if isPacmanPkg {
+		err = archiver.ErrNoMatch // Force it to be treated as a binary installer
+	} else {
+		_, _, err = archiver.Identify(downloadPath, inputStream)
+	}
+
 	if err != nil {
 		if err == archiver.ErrNoMatch {
 			items = append(items, &SelectorItem{

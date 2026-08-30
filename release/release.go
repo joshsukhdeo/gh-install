@@ -479,6 +479,12 @@ func (r *GithubRelease) Install() error {
 						Msg("binary is a rpm installer")
 					binariesOutput[binary.Name] = "rpm"
 					execErr = r.installRpm(binary.DownloadPath)
+				case selector.BinaryPacmanInstaller:
+					log.Debug().
+						Str("release asset binary", binary.Name).
+						Msg("binary is a pacman installer")
+					binariesOutput[binary.Name] = "pacman"
+					execErr = r.installPacman(binary.DownloadPath)
 				case selector.BinaryPkgInstaller:
 					log.Debug().
 						Str("release asset binary", binary.Name).
@@ -574,4 +580,25 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 		pterm.Success.Println("Successfully installed FreeBSD package!")
 	}
 	return nil
+}
+
+func (r *GithubRelease) installPacman(binaryPath string) error {
+	log.Debug().
+		Str("binaryPath", binaryPath).
+		Msg("installing pacman package")
+
+	var cmd *exec.Cmd
+	if r.CliParams.AddDeps {
+		cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", binaryPath)
+	} else if r.CliParams.NoDeps {
+		cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", binaryPath)
+	} else {
+		cmd = execCommand("sudo", "pacman", "-U", binaryPath)
+	}
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
