@@ -41,5 +41,6 @@ type CLI struct {
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`
 	LogFormat           string            `default:"console" enum:"console,json" short:"f" help:"Log output format."`
 	LogQuietInteractive bool              `default:"true" negatable:"" help:"Quiet log in interactive mode" group:"Interactive Mode"`
+	Verbose             bool              `short:"V" help:"Enable verbose output (sets log level to debug)."`
 	Version             kong.VersionFlag  `help:"Show version." env:""`
 }

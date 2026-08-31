@@ -105,6 +105,9 @@ func PostBuild(k *kong.Kong) error {
 func (r *RootCLI) Run() error {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	logLevel, _ := zerolog.ParseLevel(r.LogLevel)
+	if r.Verbose {
+		logLevel = zerolog.DebugLevel
+	}
 	if r.LogQuietInteractive && r.Interactive {
 		logLevel = zerolog.Disabled
 	}
@@ -206,11 +209,10 @@ func (r *RootCLI) Run() error {
 		r.ReleaseAssetRegexps = []string{r.ReleaseAssetRegexp}
 	}
 
-	log.Info().
+	log.Debug().
 		Str("repository", r.Repository).
 		Str("release version", r.ReleaseVersion).
 		Str("release asset name", r.ReleaseAsset).
-		Strs("release asset regexps", r.ReleaseAssetRegexps).
 		Strs("release asset binary names", r.AssetBinaries).
 		Str("release asset binary name regexp", r.AssetBinariesRegexp).
 		Str("target path", r.TargetPath).

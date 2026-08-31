@@ -62,7 +62,7 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 	}
 
 	if len(selectedItems) == 0 {
-		return nil, fmt.Errorf("no %s matches for names '%s' or regexps '%v' found", s.Kind.String(), s.NamesMatcher, s.RegexpMatchers)
+		return nil, fmt.Errorf("no %s matches found for the requested criteria", s.Kind.String())
 	}
 	return selectedItems, nil
 }

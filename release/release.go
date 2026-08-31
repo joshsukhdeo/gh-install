@@ -534,7 +534,6 @@ func (r *GithubRelease) Install() error {
 			Int("release id", releases[0].Id).
 			Str("release name", releases[0].Name).
 			Str("asset name matcher", r.CliParams.ReleaseAsset).
-			Strs("asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
 			Err(err).
 			Msg("could not create release asset selector")
 		return err
@@ -545,7 +544,6 @@ func (r *GithubRelease) Install() error {
 			Str("repository", r.CliParams.Repository).
 			Int("release id", releases[0].Id).
 			Str("release asset name matcher", r.CliParams.ReleaseAsset).
-			Strs("release asset regexps matcher", r.CliParams.ReleaseAssetRegexps).
 			Err(err).
 			Msg("could not select release asset")
 		return err
