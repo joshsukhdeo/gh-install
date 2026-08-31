@@ -126,11 +126,10 @@ func AssetSelector(ghClient GithubClient, repo string,
 	page := 1
 	requestPath := fmt.Sprintf("repos/%s/releases/%d/assets", repo, releaseId)
 
-	log.Info().
+	log.Debug().
 		Str("repository", repo).
 		Int("release id", releaseId).
 		Str("asset matching name", name).
-		Strs("asset matching regexps", matchers).
 		Msg("getting release assets")
 
 	findNextPage := func(response *http.Response) (string, bool) {

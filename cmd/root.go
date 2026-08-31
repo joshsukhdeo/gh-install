@@ -213,7 +213,6 @@ func (r *RootCLI) Run() error {
 		Str("repository", r.Repository).
 		Str("release version", r.ReleaseVersion).
 		Str("release asset name", r.ReleaseAsset).
-		Strs("release asset regexps", r.ReleaseAssetRegexps).
 		Strs("release asset binary names", r.AssetBinaries).
 		Str("release asset binary name regexp", r.AssetBinariesRegexp).
 		Str("target path", r.TargetPath).
