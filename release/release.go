@@ -268,20 +268,20 @@ func extractPackageName(binaryPath string, pkgType string) string {
 
 func (r *GithubRelease) installDeb(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would queue deb for batch install: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would queue deb for batch install: %s", filepath.Base(binaryPath))
 		return nil
 	}
-	log.Info().Msgf("Queuing %s for batch installation...", binaryPath)
+	log.Info().Msgf("Queuing %s for batch installation...", filepath.Base(binaryPath))
 	r.PendingDebs = append(r.PendingDebs, binaryPath)
 	return nil
 }
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would queue rpm for batch install: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would queue rpm for batch install: %s", filepath.Base(binaryPath))
 		return nil
 	}
-	log.Info().Msgf("Queuing %s for batch installation...", binaryPath)
+	log.Info().Msgf("Queuing %s for batch installation...", filepath.Base(binaryPath))
 	r.PendingRpms = append(r.PendingRpms, binaryPath)
 	return nil
 }
@@ -774,13 +774,17 @@ func (r *GithubRelease) Install() error {
 				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
 			}
 		}
+		var baseDebs []string
+		for _, p := range r.PendingDebs {
+			baseDebs = append(baseDebs, "./"+filepath.Base(p))
+		}
 		var args []string
 		if r.CliParams.NoDeps {
-			args = append([]string{"dpkg", "-i"}, r.PendingDebs...)
+			args = append([]string{"dpkg", "-i"}, baseDebs...)
 		} else if r.CliParams.AddDeps {
-			args = append([]string{"apt-get", "install", "-y"}, r.PendingDebs...)
+			args = append([]string{"apt-get", "install", "-y"}, baseDebs...)
 		} else {
-			args = append([]string{"apt-get", "install"}, r.PendingDebs...)
+			args = append([]string{"apt-get", "install"}, baseDebs...)
 		}
 
 		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
@@ -790,6 +794,7 @@ func (r *GithubRelease) Install() error {
 		}
 
 		cmd := execCommand("sudo", args...)
+		cmd.Dir = filepath.Dir(r.PendingDebs[0])
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -808,13 +813,17 @@ func (r *GithubRelease) Install() error {
 				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
 			}
 		}
+		var baseRpms []string
+		for _, p := range r.PendingRpms {
+			baseRpms = append(baseRpms, "./"+filepath.Base(p))
+		}
 		var args []string
 		if r.CliParams.NoDeps {
-			args = append([]string{"rpm", "-i"}, r.PendingRpms...)
+			args = append([]string{"rpm", "-i"}, baseRpms...)
 		} else if r.CliParams.AddDeps {
-			args = append([]string{"dnf", "localinstall", "-y"}, r.PendingRpms...)
+			args = append([]string{"dnf", "localinstall", "-y"}, baseRpms...)
 		} else {
-			args = append([]string{"dnf", "localinstall"}, r.PendingRpms...)
+			args = append([]string{"dnf", "localinstall"}, baseRpms...)
 		}
 
 		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
@@ -824,6 +833,7 @@ func (r *GithubRelease) Install() error {
 		}
 
 		cmd := execCommand("sudo", args...)
+		cmd.Dir = filepath.Dir(r.PendingRpms[0])
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -861,8 +871,9 @@ func (r *GithubRelease) Install() error {
 }
 
 func (r *GithubRelease) installPkg(binaryPath string) error {
+	basePath := "./" + filepath.Base(binaryPath)
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install freebsd pkg: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would install freebsd pkg: %s", filepath.Base(binaryPath))
 		return nil
 	}
 	if err := r.ensureSudo(); err != nil {
@@ -870,20 +881,21 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 	}
 	var args []string
 	if r.CliParams.NoDeps {
-		args = []string{"pkg", "add", binaryPath}
+		args = []string{"pkg", "add", basePath}
 	} else if r.CliParams.AddDeps {
-		args = []string{"pkg", "install", "-y", binaryPath}
+		args = []string{"pkg", "install", "-y", basePath}
 	} else {
-		args = []string{"pkg", "install", binaryPath}
+		args = []string{"pkg", "install", basePath}
 	}
 
 	if r.CliParams.Interactive {
 		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-			return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", binaryPath)
+			return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", filepath.Base(binaryPath))
 		}
 	}
 
 	cmd := execCommand("sudo", args...)
+	cmd.Dir = filepath.Dir(binaryPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -909,7 +921,7 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 
 func (r *GithubRelease) installPacman(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install pacman pkg: %s", binaryPath)
+		log.Info().Msgf("[dry-run] Would install pacman pkg: %s", filepath.Base(binaryPath))
 		return nil
 	}
 	if err := r.ensureSudo(); err != nil {
@@ -923,13 +935,15 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 		Msg("installing pacman package")
 
 	var cmd *exec.Cmd
+	basePath := "./" + filepath.Base(binaryPath)
 	if r.CliParams.AddDeps {
-		cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", binaryPath)
+		cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", basePath)
 	} else if r.CliParams.NoDeps {
-		cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", binaryPath)
+		cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", basePath)
 	} else {
-		cmd = execCommand("sudo", "pacman", "-U", binaryPath)
+		cmd = execCommand("sudo", "pacman", "-U", basePath)
 	}
+	cmd.Dir = filepath.Dir(binaryPath)
 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
