@@ -8,9 +8,9 @@ import (
 )
 
 type Selector struct {
-	Kind           SelectorKind
-	Items          []*SelectorItem
-	NamesMatcher   []string
+	Kind             SelectorKind
+	Items            []*SelectorItem
+	NamesMatcher     []string
 	RegexpMatchers   []string
 	Single           bool
 	AllowForeignArch bool

@@ -33,12 +33,14 @@ type CLI struct {
 	Fork                bool              `help:"Fork and clone the repository into fork path (default: ~/projects) and track for updates." group:"Repository Mode"`
 	AI                  bool              `help:"Enable AI-assisted installation." group:"AI Mode"`
 	AICmd               string            `default:"agy -p \"%s\"" env:"GH_INSTALL_AI_CMD" help:"Command template for AI agent prompt execution." group:"AI Mode"`
+	AISafetyScan        bool              `help:"Use AI to scan the repository for safety concerns before installation (requires --ai)." group:"AI Mode"`
 	CompileFromSource   bool              `help:"Compile repository from source via AI-generated build script (requires --ai)." group:"AI Mode"`
 	TargetPathCreate    bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist." group:"Non-interactive Mode"`
 	Overwrite           bool              `default:"false" short:"o" help:"Overwrite target binaries." group:"Non-interactive Mode"`
 	Pin                 bool              `default:"false" help:"Pin this installation to the current version (skip during updates)." group:"State Management"`
 	DryRun              bool              `default:"false" help:"Show what would be downloaded and installed without actually doing it." group:"Non-interactive Mode"`
 	VerifyChecksum      bool              `default:"true" help:"Verify asset checksums if checksum files are available in the release." group:"Non-interactive Mode"`
+	VTApiKey            string            `env:"GH_INSTALL_VT_API_KEY" help:"VirusTotal API key for malicious binary checking." group:"Security Mode"`
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`
 	LogFormat           string            `default:"console" enum:"console,json" short:"f" help:"Log output format."`
 	LogQuietInteractive bool              `default:"true" negatable:"" help:"Quiet log in interactive mode" group:"Interactive Mode"`

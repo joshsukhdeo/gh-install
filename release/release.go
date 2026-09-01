@@ -675,14 +675,24 @@ func (r *GithubRelease) Install() error {
 			Msg("downloaded release asset")
 
 		// Verify checksum if available
+		downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
 		if checksumFilePath != "" && r.CliParams.VerifyChecksum {
-			downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
 			if err := r.verifyChecksum(downloadedAssetPath, checksumFilePath); err != nil {
 				log.Error().
 					Err(err).
 					Str("asset", asset.Name).
 					Msg("checksum verification failed")
 				return fmt.Errorf("checksum verification failed for %s: %w", asset.Name, err)
+			}
+		}
+
+		if r.CliParams.VTApiKey != "" {
+			vtHash, hashErr := calculateSHA256(downloadedAssetPath)
+			if hashErr != nil {
+				return fmt.Errorf("failed to calculate SHA-256 for VirusTotal: %w", hashErr)
+			}
+			if err := verifyHashWithVirusTotal(vtHash, r.CliParams.VTApiKey); err != nil {
+				return err
 			}
 		}
 

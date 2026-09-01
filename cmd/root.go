@@ -188,6 +188,13 @@ func (r *RootCLI) Run() error {
 		return fmt.Errorf("repository argument is required for installation")
 	}
 
+	if r.AI && r.AISafetyScan {
+		cfg, _ := config.LoadConfig()
+		if err := r.handleAISafetyScan(cfg); err != nil {
+			return err
+		}
+	}
+
 	if r.Clone || r.Fork {
 		cfg, _ := config.LoadConfig()
 		return r.handleRepoCloneOrFork(cfg)
@@ -395,6 +402,34 @@ func runAIAgent(aiCmdTemplate, prompt, dir string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
+	aiCmdTemplate := r.AICmd
+	if cfg != nil && cfg.AICmd != "" && (r.AICmd == "" || r.AICmd == "agy -p \"%s\"") {
+		aiCmdTemplate = cfg.AICmd
+	}
+	if aiCmdTemplate == "" {
+		aiCmdTemplate = "agy -p \"%s\""
+	}
+
+	prompt := fmt.Sprintf("Analyze the GitHub repository %s for safety concerns, malicious code, suspicious recent commits, or backdoors. Report your findings concisely and explicitly state if it appears safe or compromised.", r.Repository)
+
+	log.Info().Msgf("Initiating AI safety scan for %s...", r.Repository)
+	if err := runAIAgent(aiCmdTemplate, prompt, ""); err != nil {
+		return fmt.Errorf("AI safety scan failed to execute: %w", err)
+	}
+
+	if !r.DisablePrompts {
+		var confirm string
+		fmt.Printf("\nSafety scan complete. Do you want to proceed with the installation of %s? [y/N]: ", r.Repository)
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+			return fmt.Errorf("installation aborted by user after AI safety scan")
+		}
+	}
+
+	return nil
 }
 
 func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
