@@ -64,8 +64,8 @@ RetryVT:
 			return fmt.Errorf("invalid virustotal api key")
 		}
 		pterm.Warning.Println("Invalid VirusTotal API Key detected.")
-		if os.Getenv("GH_INSTALL_VT_API_KEY") != "" {
-			pterm.Warning.Println("Note: Your GH_INSTALL_VT_API_KEY environment variable is currently overriding the config. Updating the config below will NOT take effect until you unset the environment variable.")
+		if os.Getenv("VT_API_KEY") != "" {
+			pterm.Warning.Println("Note: Your VT_API_KEY environment variable is currently overriding the config. Updating the config below will NOT take effect until you unset the environment variable.")
 		}
 		
 		var confirm string

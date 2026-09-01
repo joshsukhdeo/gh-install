@@ -40,7 +40,7 @@ type CLI struct {
 	Pin                 bool              `default:"false" help:"Pin this installation to the current version (skip during updates)." group:"State Management"`
 	DryRun              bool              `default:"false" help:"Show what would be downloaded and installed without actually doing it." group:"Non-interactive Mode"`
 	VerifyChecksum      bool              `default:"true" help:"Verify asset checksums if checksum files are available in the release." group:"Non-interactive Mode"`
-	VTApiKey            string            `env:"GH_INSTALL_VT_API_KEY" help:"VirusTotal API key for malicious binary checking." group:"Security Mode"`
+	VTApiKey            string            `env:"VT_API_KEY" help:"VirusTotal API key for malicious binary checking." group:"Security Mode"`
 	SkipVtSandbox       bool              `help:"Bypass VirusTotal sandbox upload for unknown zero-day hashes." group:"Security Mode"`
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`
 	LogFormat           string            `default:"console" enum:"console,json" short:"f" help:"Log output format."`
