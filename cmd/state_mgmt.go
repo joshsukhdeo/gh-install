@@ -25,7 +25,7 @@ func ListState() error {
 	}
 
 	tableData := pterm.TableData{
-		{"Repository", "Version", "Scope", "Auto-Update", "Target Path"},
+		{"Repository", "Version", "Type", "Scope", "Auto-Update", "Target Path", "Helper Script"},
 	}
 
 	var repos []string
@@ -46,20 +46,39 @@ func ListState() error {
 		}
 
 		versionDisplay := app.Version
+		typeDisplay := strings.Join(app.Type, ",")
+		if len(typeDisplay) > 25 || typeDisplay == "" {
+			if len(app.PackageNames) > 0 {
+				typeDisplay = "package"
+			} else {
+				typeDisplay = "binary/archive"
+			}
+		}
+
 		if app.Clone {
 			versionDisplay = "git (clone)"
+			typeDisplay = "repo sync"
 		} else if app.Fork {
 			versionDisplay = "git (fork)"
+			typeDisplay = "repo sync"
 		} else if app.CompileScript != "" {
 			versionDisplay = "source (ai script)"
+			typeDisplay = "compile-from-source"
+		}
+
+		helperScript := app.CompileScript
+		if helperScript == "" {
+			helperScript = "N/A"
 		}
 
 		tableData = append(tableData, []string{
 			app.Repository,
 			versionDisplay,
+			typeDisplay,
 			scope,
 			autoUpdate,
 			app.TargetPath,
+			helperScript,
 		})
 	}
 

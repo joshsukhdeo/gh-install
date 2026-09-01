@@ -53,7 +53,6 @@ no_save_state: true
 		assert.Equal(t, "my-ai -p '%s'", cfg.AICmd)
 		assert.True(t, cfg.AddDeps)
 		assert.False(t, cfg.NoDeps)
-		assert.True(t, cfg.PromptRename)
 		assert.True(t, cfg.NoSaveState)
 	})
 
@@ -90,5 +89,38 @@ install_types: [invalid yaml
 		cfg, err := LoadConfig()
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
+	})
+
+	t.Run("SaveConfig", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "save"))
+		xdg.Reload()
+
+		cfg := &Config{
+			InstallTypes: "deb",
+			VTApiKey: "my-key",
+		}
+
+		err := SaveConfig(cfg)
+		require.NoError(t, err)
+
+		loaded, err := LoadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, "deb", loaded.InstallTypes)
+		assert.Equal(t, "my-key", loaded.VTApiKey)
+	})
+
+	t.Run("SaveConfig_MkdirError", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "saveerror"))
+		xdg.Reload()
+
+		// Create file where directory should go
+		err := os.MkdirAll(filepath.Join(tmpDir, "saveerror"), 0755)
+		require.NoError(t, err)
+		err = os.WriteFile(filepath.Join(tmpDir, "saveerror", "gh-install"), []byte("file"), 0644)
+		require.NoError(t, err)
+
+		cfg := &Config{}
+		err = SaveConfig(cfg)
+		assert.Error(t, err)
 	})
 }

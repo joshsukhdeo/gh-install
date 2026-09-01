@@ -76,7 +76,7 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 		return filepath.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
-	if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
+	if !r.CliParams.KeepSuffixes {
 		repoParts := strings.Split(r.CliParams.Repository, "/")
 		repoName := repoParts[len(repoParts)-1]
 
@@ -89,13 +89,12 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 			}
 		}
 
-		if len(binaryName) > len(proposedName)+3 { // If it has significant affixes
-			if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' is long. Do you want to strip OS/hardware affixes?", binaryName)) {
-				newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
-				if newName != "" {
-					return filepath.Join(r.CliParams.TargetPath, newName)
-				}
+		if len(binaryName) > len(proposedName) {
+			if r.CliParams.Rename == nil {
+				r.CliParams.Rename = make(map[string]string)
 			}
+			r.CliParams.Rename[strings.ToLower(binaryName)] = proposedName
+			destinationPath = filepath.Join(r.CliParams.TargetPath, proposedName)
 		}
 	}
 
@@ -164,7 +163,8 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 
 func (r *GithubRelease) installBinary(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install binary: %s", binaryPath)
+		destinationPath := r.resolveDestinationPath(binaryPath)
+		log.Info().Msgf("[dry-run] Would install binary: %s to %s", binaryPath, destinationPath)
 		return nil
 	}
 	sourceStat, err := os.Stat(binaryPath)
@@ -207,6 +207,25 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 
 	destination, err := os.Create(destinationPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			log.Info().Msg("permission denied, attempting to install with sudo")
+			if err := r.ensureSudo(); err != nil {
+				return err
+			}
+			if r.CliParams.Interactive {
+				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo install -m 755 %s %s'?", binaryPath, destinationPath)) {
+					return fmt.Errorf("permission denied and user aborted sudo installation")
+				}
+			}
+			cmd := execCommand("sudo", "install", "-m", "755", binaryPath, destinationPath)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("sudo install failed: %w", err)
+			}
+			return nil
+		}
 		return err
 	}
 
@@ -527,7 +546,7 @@ func (r *GithubRelease) Install() error {
 	r.ResolvedVersion = releases[0].Name
 
 	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].Id,
-		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive)
+		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive, r.CliParams.AllowForeignArch)
 	if err != nil {
 		log.Error().
 			Str("repository", r.CliParams.Repository).
@@ -554,6 +573,47 @@ func (r *GithubRelease) Install() error {
 		scoreJ := getScore(assets[j].Name, r.CliParams.Type)
 		return scoreI > scoreJ
 	})
+
+	// Filter r.CliParams.Type down to only the formats that actually matched our chosen assets.
+	// This ensures that when the state is saved, future updates will strictly seek this exact format.
+	var matchedTypes []string
+	for _, asset := range assets {
+		for _, t := range r.CliParams.Type {
+			originalT := t
+			tLower := strings.ToLower(strings.TrimSpace(t))
+			if tLower == "none" {
+				if !strings.Contains(filepath.Base(asset.Name), ".") {
+					matchedTypes = append(matchedTypes, originalT)
+					break
+				}
+			} else if tLower != "" {
+				if matched, _ := regexp.MatchString(`(?i)\.`+tLower+`$`, asset.Name); matched {
+					matchedTypes = append(matchedTypes, originalT)
+					break
+				}
+			}
+		}
+	}
+
+	if len(matchedTypes) > 0 {
+		seen := make(map[string]bool)
+		var finalTypes []string
+		for _, t := range matchedTypes {
+			if !seen[t] {
+				seen[t] = true
+				finalTypes = append(finalTypes, t)
+			}
+		}
+		r.CliParams.Type = finalTypes
+	}
+
+	// Generate strict regexes for the chosen assets to lock them down for future updates
+	var strictRegexes []string
+	for _, asset := range assets {
+		strictRegex := generateStrictAssetRegex(asset.Name, releases[0].Name)
+		strictRegexes = append(strictRegexes, strictRegex)
+	}
+	r.CliParams.ReleaseAssetRegexp = strings.Join(strictRegexes, " | ")
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
@@ -634,14 +694,24 @@ func (r *GithubRelease) Install() error {
 			Msg("downloaded release asset")
 
 		// Verify checksum if available
+		downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
 		if checksumFilePath != "" && r.CliParams.VerifyChecksum {
-			downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
 			if err := r.verifyChecksum(downloadedAssetPath, checksumFilePath); err != nil {
 				log.Error().
 					Err(err).
 					Str("asset", asset.Name).
 					Msg("checksum verification failed")
 				return fmt.Errorf("checksum verification failed for %s: %w", asset.Name, err)
+			}
+		}
+
+		if r.CliParams.VTApiKey != "" {
+			vtHash, hashErr := calculateSHA256(downloadedAssetPath)
+			if hashErr != nil {
+				return fmt.Errorf("failed to calculate SHA-256 for VirusTotal: %w", hashErr)
+			}
+			if err := verifyHashWithVirusTotal(vtHash, downloadedAssetPath, r.CliParams.VTApiKey, r.CliParams.Interactive && !r.CliParams.DisablePrompts, r.CliParams.SkipVtSandbox); err != nil {
+				return err
 			}
 		}
 
@@ -950,4 +1020,48 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
+}
+
+func generateStrictAssetRegex(assetName string, resolvedVersion string) string {
+	if resolvedVersion == "" {
+		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
+	}
+
+	noVStr := regexp.QuoteMeta(strings.TrimPrefix(strings.ToLower(resolvedVersion), "v"))
+
+	// We optionally consume up to 2 digits of a package revision (e.g. -1 to -99).
+	versionRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s(?:-\d{1,2})?`, noVStr))
+	matches := versionRegex.FindAllStringIndex(assetName, -1)
+
+	if len(matches) == 0 {
+		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
+	}
+
+	// Manual lookahead to prevent partial consumption of longer digit sequences (e.g. -386 architecture).
+	// If the character immediately following our match is a digit, we backtrack and strictly match the version only.
+	for i, match := range matches {
+		matchStr := assetName[match[0]:match[1]]
+		// If we actually matched a suffix (length > basic version)
+		if len(matchStr) > len(noVStr) && match[1] < len(assetName) {
+			nextChar := assetName[match[1]]
+			if nextChar >= '0' && nextChar <= '9' {
+				// Backtrack match to exclude the -\d+ suffix
+				baseRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s`, noVStr))
+				baseMatch := baseRegex.FindStringIndex(assetName[match[0]:])
+				if baseMatch != nil {
+					matches[i][1] = match[0] + baseMatch[1]
+				}
+			}
+		}
+	}
+
+	var parts []string
+	lastIdx := 0
+	for _, match := range matches {
+		parts = append(parts, regexp.QuoteMeta(assetName[lastIdx:match[0]]))
+		lastIdx = match[1]
+	}
+	parts = append(parts, regexp.QuoteMeta(assetName[lastIdx:]))
+
+	return fmt.Sprintf("^%s$", strings.Join(parts, ".*"))
 }

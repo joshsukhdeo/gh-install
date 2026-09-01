@@ -140,7 +140,7 @@ func TestAssetSelector(t *testing.T) {
 	}
 
 	t.Run("NonInteractive", func(t *testing.T) {
-		sel, err := AssetSelector(client, "owner/repo", 1, "asset-linux", []string{".*linux.*"}, false)
+		sel, err := AssetSelector(client, "owner/repo", 1, "asset-linux", []string{".*linux.*"}, false, false)
 		require.NoError(t, err)
 		assert.Equal(t, Asset, sel.GetKind())
 		s, ok := sel.(*Selector)
@@ -161,7 +161,7 @@ func TestAssetSelector(t *testing.T) {
 				Header: http.Header{},
 			},
 		}
-		sel, err := AssetSelector(clientInteractive, "owner/repo", 1, "", []string{}, true)
+		sel, err := AssetSelector(clientInteractive, "owner/repo", 1, "", []string{}, true, false)
 		require.NoError(t, err)
 		is, ok := sel.(*InteractiveSelector)
 		require.True(t, ok)

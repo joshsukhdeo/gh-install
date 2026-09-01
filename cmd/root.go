@@ -116,6 +116,13 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
+	cfg, _ := config.LoadConfig()
+	if cfg != nil {
+		if r.VTApiKey == "" {
+			r.VTApiKey = cfg.VTApiKey
+		}
+	}
+
 	if r.AddDeps && r.NoDeps {
 		r.AddDeps = false
 		r.NoDeps = false
@@ -131,9 +138,6 @@ func (r *RootCLI) Run() error {
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
 				r.NoDeps = cfg.NoDeps
-				if !r.PromptRename {
-					r.PromptRename = cfg.PromptRename
-				}
 				if !r.DisablePrompts {
 					r.DisablePrompts = cfg.DisablePrompts
 				}
@@ -145,6 +149,9 @@ func (r *RootCLI) Run() error {
 				}
 				if !r.NativeExtract {
 					r.NativeExtract = cfg.NativeExtract
+				}
+				if !r.KeepSuffixes {
+					r.KeepSuffixes = cfg.KeepSuffixes
 				}
 			}
 		}
@@ -186,6 +193,13 @@ func (r *RootCLI) Run() error {
 
 	if r.Repository == "" {
 		return fmt.Errorf("repository argument is required for installation")
+	}
+
+	if r.AI && r.AISafetyScan {
+		cfg, _ := config.LoadConfig()
+		if err := r.handleAISafetyScan(cfg); err != nil {
+			return err
+		}
 	}
 
 	if r.Clone || r.Fork {
@@ -360,22 +374,22 @@ func getCompileScriptPath(repo string) string {
 	return filepath.Join(configDir, "scripts", fmt.Sprintf("compile-%s%s", pkgName, ext))
 }
 
-func buildCompilePrompt(repo, tempDir, scriptPath, targetPath string) string {
+func buildCompilePrompt(repo, buildDir, scriptPath, targetPath string) string {
 	ext := ".sh"
 	if runtime.GOOS == "windows" {
 		ext = ".ps1"
 	}
 
-	return fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and generate an automated compilation/build script at '%s'. The script should follow all build instructions for '%s', compile the application/binaries, install or copy them to '%s', and purge any temporary build artifacts. Format the output as an executable %s script. Please test and then attempt to run the compile script and it is only done when script runs successfully.", repo, tempDir, scriptPath, repo, targetPath, ext)
+	return fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and generate an automated compilation/build script at '%s'. The script should follow all build instructions for '%s', compile the application/binaries, install or copy them to '%s', and purge any temporary build artifacts. Format the output as an executable %s script. Please test and then attempt to run the compile script and it is only done when script runs successfully.", repo, buildDir, scriptPath, repo, targetPath, ext)
 }
 
-func buildCompileFixPrompt(repo, tempDir, scriptPath, targetPath, errorOutput string, attempt int) string {
+func buildCompileFixPrompt(repo, buildDir, scriptPath, targetPath, errorOutput string, attempt int) string {
 	ext := ".sh"
 	if runtime.GOOS == "windows" {
 		ext = ".ps1"
 	}
 
-	return fmt.Sprintf("The automated compilation script at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the script at '%s' so that it successfully compiles and installs the binaries into '%s'. Format the output as an executable %s script. Please fix and then attempt to run the compile script and it is only done when script runs successfully.", scriptPath, repo, tempDir, attempt, errorOutput, scriptPath, targetPath, ext)
+	return fmt.Sprintf("The automated compilation script at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the script at '%s' so that it successfully compiles and installs the binaries into '%s'. Format the output as an executable %s script. Please fix and then attempt to run the compile script and it is only done when script runs successfully.", scriptPath, repo, buildDir, attempt, errorOutput, scriptPath, targetPath, ext)
 }
 
 func runAIAgent(aiCmdTemplate, prompt, dir string) error {
@@ -397,6 +411,34 @@ func runAIAgent(aiCmdTemplate, prompt, dir string) error {
 	return cmd.Run()
 }
 
+func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
+	aiCmdTemplate := r.AICmd
+	if cfg != nil && cfg.AICmd != "" && (r.AICmd == "" || r.AICmd == "agy -p \"%s\"") {
+		aiCmdTemplate = cfg.AICmd
+	}
+	if aiCmdTemplate == "" {
+		aiCmdTemplate = "agy -p \"%s\""
+	}
+
+	prompt := fmt.Sprintf("Analyze the GitHub repository %s for safety concerns, malicious code, suspicious recent commits, or backdoors. Report your findings concisely and explicitly state if it appears safe or compromised.", r.Repository)
+
+	log.Info().Msgf("Initiating AI safety scan for %s...", r.Repository)
+	if err := runAIAgent(aiCmdTemplate, prompt, ""); err != nil {
+		return fmt.Errorf("AI safety scan failed to execute: %w", err)
+	}
+
+	if !r.DisablePrompts {
+		var confirm string
+		fmt.Printf("\nSafety scan complete. Do you want to proceed with the installation of %s? [y/N]: ", r.Repository)
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+			return fmt.Errorf("installation aborted by user after AI safety scan")
+		}
+	}
+
+	return nil
+}
+
 func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	scriptPath := getCompileScriptPath(r.Repository)
 	targetPath := r.TargetPath
@@ -404,33 +446,40 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		targetPath = GetDefaultTargetPath()
 	}
 
-	tempDir, err := os.MkdirTemp("", "gh-compile-*")
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("failed to create temporary clone directory: %w", err)
+		return fmt.Errorf("could not determine home directory: %w", err)
 	}
-	defer func() {
-		_ = os.RemoveAll(tempDir)
-	}()
+	parts := strings.Split(r.Repository, "/")
+	repoName := parts[len(parts)-1]
+	repoDir := filepath.Join(homeDir, "builds", repoName)
+
+	if err := os.MkdirAll(filepath.Dir(repoDir), 0755); err != nil {
+		return fmt.Errorf("failed to create builds directory: %w", err)
+	}
+
+	// Ensure fresh clone
+	_ = os.RemoveAll(repoDir)
 
 	log.Info().
 		Str("repository", r.Repository).
-		Str("temp_clone_dir", tempDir).
+		Str("build_dir", repoDir).
 		Str("script_path", scriptPath).
 		Str("target_path", targetPath).
 		Msg("handling compile-from-source with AI")
 
 	if r.DryRun {
-		log.Info().Msgf("[dry-run] Would clone %s to %s, generate build script at %s, and execute compilation", r.Repository, tempDir, scriptPath)
+		log.Info().Msgf("[dry-run] Would clone %s to %s, generate build script at %s, and execute compilation", r.Repository, repoDir, scriptPath)
 		return nil
 	}
 
-	// 1. Clone repo into temp directory
-	cloneArgs := []string{"repo", "clone", r.Repository, tempDir}
+	// 1. Clone repo into builds directory
+	cloneArgs := []string{"repo", "clone", r.Repository, repoDir}
 	stdOut, stdErr, err := gh.Exec(cloneArgs...)
 	if err != nil {
-		return fmt.Errorf("failed to clone repository to temp dir: %s (%w)", stdErr.String(), err)
+		return fmt.Errorf("failed to clone repository to builds dir: %s (%w)", stdErr.String(), err)
 	}
-	log.Info().Str("output", stdOut.String()).Msg("cloned repository to temporary directory")
+	log.Info().Str("output", stdOut.String()).Msg("cloned repository to builds directory")
 
 	// 2. Ensure scripts directory exists
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
@@ -446,10 +495,10 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		aiCmdTemplate = `agy -p "%s"`
 	}
 
-	prompt := buildCompilePrompt(r.Repository, tempDir, scriptPath, targetPath)
-	log.Info().Str("ai_cmd", aiCmdTemplate).Msg("invoking AI agent to generate compile script")
-	if err := runAIAgent(aiCmdTemplate, prompt, tempDir); err != nil {
-		return fmt.Errorf("AI compile script generation failed: %w", err)
+	prompt := buildCompilePrompt(r.Repository, repoDir, scriptPath, targetPath)
+	log.Info().Msgf("Generating AI compilation script using: %s", aiCmdTemplate)
+	if err := runAIAgent(aiCmdTemplate, prompt, repoDir); err != nil {
+		return fmt.Errorf("AI agent failed to generate/test compilation script: %w", err)
 	}
 
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -470,7 +519,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		} else {
 			execScriptCmd = exec.Command("sh", scriptPath)
 		}
-		execScriptCmd.Dir = tempDir
+		execScriptCmd.Dir = repoDir
 
 		outputBytes, runErr := execScriptCmd.CombinedOutput()
 		if len(outputBytes) > 0 {
@@ -488,8 +537,8 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 
 		if attempt < maxRetries {
 			log.Info().Msgf("Prompting AI to fix compile script (retry %d of %d)...", attempt+1, maxRetries)
-			fixPrompt := buildCompileFixPrompt(r.Repository, tempDir, scriptPath, targetPath, lastOutput, attempt+1)
-			if fixErr := runAIAgent(aiCmdTemplate, fixPrompt, tempDir); fixErr != nil {
+			fixPrompt := buildCompileFixPrompt(r.Repository, repoDir, scriptPath, targetPath, lastOutput, attempt+1)
+			if fixErr := runAIAgent(aiCmdTemplate, fixPrompt, repoDir); fixErr != nil {
 				log.Warn().Err(fixErr).Msg("AI repair command execution failed")
 			}
 			_ = os.Chmod(scriptPath, 0755)

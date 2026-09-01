@@ -23,21 +23,25 @@ type CLI struct {
 	AddDeps             bool              `short:"y" help:"Automatically resolve and install dependencies without prompting." group:"Non-interactive Mode"`
 	NoDeps              bool              `short:"n" help:"Do not install dependencies (use dpkg/rpm directly)." group:"Non-interactive Mode"`
 	Rename              map[string]string `optional:"" short:"t" help:"Rename binaries installed at target path, \"<asset archive binary | asset>=<renamed binary>;...\"" group:"Non-interactive Mode"`
-	PromptRename        bool              `short:"r" help:"Prompt to strip OS/hardware affixes from long binary names." group:"Interactive Mode"`
+	KeepSuffixes        bool              `short:"k" help:"Keep OS/hardware suffixes on extracted binaries instead of automatically stripping them." group:"Non-interactive Mode"`
 	DisablePrompts      bool              `short:"D" env:"GH_INSTALL_DISABLE_PROMPTS" help:"Disable all interactive prompts." group:"Non-interactive Mode"`
 	NoSaveState         bool              `short:"S" env:"GH_INSTALL_NO_SAVE_STATE" help:"Do not save installation to state (prevents tracking for updates)." group:"Non-interactive Mode"`
 	AllowWine           bool              `env:"GH_INSTALL_ALLOW_WINE" help:"Allow installing Windows executables on Linux/macOS/FreeBSD." group:"Non-interactive Mode"`
+	AllowForeignArch    bool              `env:"GH_INSTALL_ALLOW_FOREIGN_ARCH" help:"Allow installing assets with foreign architectures (e.g., arm64 on amd64)." group:"Non-interactive Mode"`
 	NativeExtract       bool              `env:"GH_INSTALL_NATIVE_EXTRACT" help:"Use native OS utilities (tar/7z) for archive extraction instead of pure Go." group:"Non-interactive Mode"`
 	Clone               bool              `help:"Clone the repository into clone path (default: ~/src) and track for updates via git pull." group:"Repository Mode"`
 	Fork                bool              `help:"Fork and clone the repository into fork path (default: ~/projects) and track for updates." group:"Repository Mode"`
 	AI                  bool              `help:"Enable AI-assisted installation." group:"AI Mode"`
 	AICmd               string            `default:"agy -p \"%s\"" env:"GH_INSTALL_AI_CMD" help:"Command template for AI agent prompt execution." group:"AI Mode"`
+	AISafetyScan        bool              `help:"Use AI to scan the repository for safety concerns before installation (requires --ai)." group:"AI Mode"`
 	CompileFromSource   bool              `help:"Compile repository from source via AI-generated build script (requires --ai)." group:"AI Mode"`
 	TargetPathCreate    bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist." group:"Non-interactive Mode"`
 	Overwrite           bool              `default:"false" short:"o" help:"Overwrite target binaries." group:"Non-interactive Mode"`
 	Pin                 bool              `default:"false" help:"Pin this installation to the current version (skip during updates)." group:"State Management"`
 	DryRun              bool              `default:"false" help:"Show what would be downloaded and installed without actually doing it." group:"Non-interactive Mode"`
 	VerifyChecksum      bool              `default:"true" help:"Verify asset checksums if checksum files are available in the release." group:"Non-interactive Mode"`
+	VTApiKey            string            `env:"VT_API_KEY" help:"VirusTotal API key for malicious binary checking." group:"Security Mode"`
+	SkipVtSandbox       bool              `help:"Bypass VirusTotal sandbox upload for unknown zero-day hashes." group:"Security Mode"`
 	LogLevel            string            `default:"info" enum:"error,warn,info,debug" short:"l" help:"Log level."`
 	LogFormat           string            `default:"console" enum:"console,json" short:"f" help:"Log output format."`
 	LogQuietInteractive bool              `default:"true" negatable:"" help:"Quiet log in interactive mode" group:"Interactive Mode"`
