@@ -17,7 +17,6 @@ type Config struct {
 	AICmd          string `yaml:"ai_cmd"`
 	AddDeps        bool   `yaml:"add_deps"`
 	NoDeps         bool   `yaml:"no_deps"`
-	PromptRename   bool   `yaml:"prompt_rename"`
 	DisablePrompts bool   `yaml:"disable_prompts"`
 	NoSaveState    bool   `yaml:"no_save_state"`
 	AllowWine      bool   `yaml:"allow_wine"`

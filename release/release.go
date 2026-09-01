@@ -90,24 +90,11 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 		}
 
 		if len(binaryName) > len(proposedName) {
-			if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
-				if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' has OS/hardware affixes. Do you want to strip them?", binaryName)) {
-					newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
-					if newName != "" {
-						if r.CliParams.Rename == nil {
-							r.CliParams.Rename = make(map[string]string)
-						}
-						r.CliParams.Rename[strings.ToLower(binaryName)] = newName
-						return filepath.Join(r.CliParams.TargetPath, newName)
-					}
-				}
-			} else {
-				if r.CliParams.Rename == nil {
-					r.CliParams.Rename = make(map[string]string)
-				}
-				r.CliParams.Rename[strings.ToLower(binaryName)] = proposedName
-				destinationPath = filepath.Join(r.CliParams.TargetPath, proposedName)
+			if r.CliParams.Rename == nil {
+				r.CliParams.Rename = make(map[string]string)
 			}
+			r.CliParams.Rename[strings.ToLower(binaryName)] = proposedName
+			destinationPath = filepath.Join(r.CliParams.TargetPath, proposedName)
 		}
 	}
 

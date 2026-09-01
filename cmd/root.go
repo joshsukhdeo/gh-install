@@ -138,9 +138,6 @@ func (r *RootCLI) Run() error {
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
 				r.NoDeps = cfg.NoDeps
-				if !r.PromptRename {
-					r.PromptRename = cfg.PromptRename
-				}
 				if !r.DisablePrompts {
 					r.DisablePrompts = cfg.DisablePrompts
 				}

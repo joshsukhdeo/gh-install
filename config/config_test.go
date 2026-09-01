@@ -53,7 +53,6 @@ no_save_state: true
 		assert.Equal(t, "my-ai -p '%s'", cfg.AICmd)
 		assert.True(t, cfg.AddDeps)
 		assert.False(t, cfg.NoDeps)
-		assert.True(t, cfg.PromptRename)
 		assert.True(t, cfg.NoSaveState)
 	})
 }
