@@ -116,6 +116,13 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
+	cfg, _ := config.LoadConfig()
+	if cfg != nil {
+		if r.VTApiKey == "" {
+			r.VTApiKey = cfg.VTApiKey
+		}
+	}
+
 	if r.AddDeps && r.NoDeps {
 		r.AddDeps = false
 		r.NoDeps = false

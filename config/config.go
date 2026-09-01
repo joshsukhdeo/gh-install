@@ -22,6 +22,7 @@ type Config struct {
 	NoSaveState    bool   `yaml:"no_save_state"`
 	AllowWine      bool   `yaml:"allow_wine"`
 	NativeExtract  bool   `yaml:"native_extract"`
+	VTApiKey       string `yaml:"vt_api_key"`
 }
 
 func GetConfigPath() string {
@@ -45,4 +46,16 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func SaveConfig(cfg *Config) error {
+	path := GetConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }

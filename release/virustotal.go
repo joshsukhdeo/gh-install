@@ -14,12 +14,32 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/joshsukhdeo/gh-install/config"
+	"github.com/pterm/pterm"
 )
 
 var vtBaseURL = "https://www.virustotal.com/api/v3"
 var vtPollDelay = 15 * time.Second
 
+
+func doVTRequestWithRetry(client *http.Client, req *http.Request) (*http.Response, error) {
+	for {
+		resp, err := client.Do(req)
+		if err != nil {
+			return resp, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			log.Warn().Msg("VirusTotal rate limit (429) reached. Throttling for 15s...")
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		return resp, nil
+	}
+}
+
 func verifyHashWithVirusTotal(hash string, filePath string, apiKey string, interactive bool, skipSandbox bool) error {
+RetryVT:
 	if apiKey == "" {
 		return nil
 	}
@@ -33,11 +53,48 @@ func verifyHashWithVirusTotal(hash string, filePath string, apiKey string, inter
 	req.Header.Set("x-apikey", apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := doVTRequestWithRetry(client, req)
 	if err != nil {
 		return fmt.Errorf("virustotal api request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		if !interactive {
+			return fmt.Errorf("invalid virustotal api key")
+		}
+		pterm.Warning.Println("Invalid VirusTotal API Key detected.")
+		if os.Getenv("GH_INSTALL_VT_API_KEY") != "" {
+			pterm.Warning.Println("Note: Your GH_INSTALL_VT_API_KEY environment variable is currently overriding the config. Updating the config below will NOT take effect until you unset the environment variable.")
+		}
+		
+		var confirm string
+		fmt.Printf("\nDo you want to update your API key in config? (y/N): ")
+		fmt.Scanln(&confirm)
+		if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+			fmt.Printf("Enter new VirusTotal API Key: ")
+			var newKey string
+			fmt.Scanln(&newKey)
+			if newKey != "" {
+				apiKey = strings.TrimSpace(newKey)
+				// Update config
+				cfg, _ := config.LoadConfig()
+				if cfg == nil {
+					cfg = &config.Config{}
+				}
+				cfg.VTApiKey = apiKey
+				config.SaveConfig(cfg)
+				goto RetryVT
+			}
+		} else {
+			fmt.Printf("Continue installation without VirusTotal? (y/N): ")
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+				return nil
+			}
+			return fmt.Errorf("installation aborted due to invalid vt api key")
+		}
+	}
 
 	if resp.StatusCode == http.StatusNotFound {
 		if skipSandbox {
@@ -118,7 +175,7 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/files/upload_url", vtBaseURL), nil)
 		req.Header.Set("x-apikey", apiKey)
 		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(req)
+		resp, err := doVTRequestWithRetry(client, req)
 		if err != nil {
 			return err
 		}
@@ -151,7 +208,7 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 	req.Header.Set("x-apikey", apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	resp, err := doVTRequestWithRetry(client, req)
 	if err != nil {
 		return err
 	}
@@ -180,7 +237,7 @@ func pollVirusTotalAnalysis(analysisID string, apiKey string) error {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/analyses/%s", vtBaseURL, analysisID), nil)
 		req.Header.Set("x-apikey", apiKey)
 
-		resp, err := client.Do(req)
+		resp, err := doVTRequestWithRetry(client, req)
 		if err != nil {
 			return err
 		}
