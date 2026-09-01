@@ -207,6 +207,25 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 
 	destination, err := os.Create(destinationPath)
 	if err != nil {
+		if os.IsPermission(err) {
+			log.Info().Msg("permission denied, attempting to install with sudo")
+			if err := r.ensureSudo(); err != nil {
+				return err
+			}
+			if r.CliParams.Interactive {
+				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo install -m 755 %s %s'?", binaryPath, destinationPath)) {
+					return fmt.Errorf("permission denied and user aborted sudo installation")
+				}
+			}
+			cmd := execCommand("sudo", "install", "-m", "755", binaryPath, destinationPath)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("sudo install failed: %w", err)
+			}
+			return nil
+		}
 		return err
 	}
 
