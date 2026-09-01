@@ -1,7 +1,6 @@
 package release
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -102,27 +101,56 @@ func calculateSHA256(filePath string) (string, error) {
 }
 
 func uploadToVirusTotal(filePath string, apiKey string) error {
-	// ponytail: naive memory buffer upload. Fails on >32MB files.
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
-	io.Copy(part, file)
-	writer.Close()
 
-	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/files", vtBaseURL), body)
+	uploadURL := fmt.Sprintf("%s/files", vtBaseURL)
+
+	if info.Size() > 32*1024*1024 {
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/files/upload_url", vtBaseURL), nil)
+		req.Header.Set("x-apikey", apiKey)
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Data string `json:"data"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		if result.Data == "" {
+			return fmt.Errorf("failed to get upload_url for large file")
+		}
+		uploadURL = result.Data
+	}
+
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+
+	go func() {
+		defer pw.Close()
+		part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+		if err == nil {
+			io.Copy(part, file)
+		}
+		writer.Close()
+	}()
+
+	req, _ := http.NewRequest(http.MethodPost, uploadURL, pr)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("x-apikey", apiKey)
 
-	client := &http.Client{Timeout: 1 * time.Minute}
+	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
