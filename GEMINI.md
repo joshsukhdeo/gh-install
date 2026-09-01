@@ -39,3 +39,17 @@ make tidy
 2. **State & File Locking**: Always operate through `LoadState()` and `Save()`. Never bypass `state.json.lock`.
 3. **Deletions on State Removal**: `RmState` uninstalls tracked packages or removes target binary files directly from disk.
 4. **Testing Before Completion**: Run `go test -v ./...` and `make lint` on any Go codebase modifications.
+
+## Critical Asset Matching Test Scenarios
+
+These scenarios are essential for validating asset selection behavior:
+
+1. **Foreign Architecture Blacklisting**: Never install a release with a SPECIFIED foreign arch. Foreign architectures (unless explicitly specified by user via `--allow-foreign-arch`) are blacklisted matches that instantly disqualify a release from consideration after a match is recognized. Example: On amd64, reject `app_linux_arm64.tar.gz` even if it matches other criteria.
+
+2. **No Architecture = Assume Compatible**: If a package has no architecture specified in its filename, assume it is compatible with the current system architecture. Example: `app_linux.tar.gz` should be considered valid on amd64.
+
+3. **Final Fallback Pattern**: The absolute last fallback is `{item name}.{accepted file type}`. This pattern must be matched at the end after failing to match: version number, OS, (on Linux: distro), architecture, and libc (gnu/glibc vs musl). The final fallback accepts any file with the correct extension, regardless of metadata.
+
+4. **Type Priority per Platform**: Ensure appropriate type priority and OS/arch priorities for the system gh-install runs on. Linux systems prioritize deb/rpm/appimage, macOS prioritizes dmg/pkg, Windows prioritizes exe/msi. Each platform has its own arch preference order.
+
+5. **Success Message**: Ensure a green success message is printed on successful installation completion.

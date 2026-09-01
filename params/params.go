@@ -28,6 +28,7 @@ type CLI struct {
 	NoSaveState         bool              `short:"S" env:"GH_INSTALL_NO_SAVE_STATE" help:"Do not save installation to state (prevents tracking for updates)." group:"Non-interactive Mode"`
 	AllowWine           bool              `env:"GH_INSTALL_ALLOW_WINE" help:"Allow installing Windows executables on Linux/macOS/FreeBSD." group:"Non-interactive Mode"`
 	AllowForeignArch    bool              `env:"GH_INSTALL_ALLOW_FOREIGN_ARCH" help:"Allow installing assets with foreign architectures (e.g., arm64 on amd64)." group:"Non-interactive Mode"`
+	AllowRootUserInstall bool             `help:"Allow installation to user-local paths when running as root (e.g. via sudo)." group:"Non-interactive Mode"`
 	NativeExtract       bool              `env:"GH_INSTALL_NATIVE_EXTRACT" help:"Use native OS utilities (tar/7z) for archive extraction instead of pure Go." group:"Non-interactive Mode"`
 	Clone               bool              `help:"Clone the repository into clone path (default: ~/src) and track for updates via git pull." group:"Repository Mode"`
 	Fork                bool              `help:"Fork and clone the repository into fork path (default: ~/projects) and track for updates." group:"Repository Mode"`

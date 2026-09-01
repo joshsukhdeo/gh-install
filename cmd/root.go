@@ -46,6 +46,23 @@ func (r *RootCLI) Validate() error {
 		return nil
 	}
 
+	// Detect root user and handle global install path
+	if os.Getuid() == 0 {
+		if r.Global {
+			// Root + global: ensure we're using /usr/local/bin
+			if r.TargetPath == GetDefaultTargetPath() {
+				r.TargetPath = "/usr/local/bin"
+			}
+		} else if !r.AllowRootUserInstall {
+			// Root without global flag and without explicit permission
+			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --allow-root-user-install to install to user-local paths")
+			log.Error().
+				Err(err).
+				Msg("init error")
+			return err
+		}
+	}
+
 	if r.TargetPath == "" {
 		err := fmt.Errorf("could not determine default install path, use '--install-path' flag")
 		log.Error().
