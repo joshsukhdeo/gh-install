@@ -999,15 +999,15 @@ func generateStrictAssetRegex(assetName string, resolvedVersion string) string {
 	}
 
 	noVStr := regexp.QuoteMeta(strings.TrimPrefix(strings.ToLower(resolvedVersion), "v"))
-	
+
 	// We optionally consume up to 2 digits of a package revision (e.g. -1 to -99).
 	versionRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s(?:-\d{1,2})?`, noVStr))
 	matches := versionRegex.FindAllStringIndex(assetName, -1)
-	
+
 	if len(matches) == 0 {
 		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
 	}
-	
+
 	// Manual lookahead to prevent partial consumption of longer digit sequences (e.g. -386 architecture).
 	// If the character immediately following our match is a digit, we backtrack and strictly match the version only.
 	for i, match := range matches {

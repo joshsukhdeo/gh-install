@@ -102,6 +102,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		appParams.Global = app.Global
 		appParams.ReleaseAsset = app.ReleaseAsset
 		appParams.ReleaseAssetRegexp = app.ReleaseRegexp
+		appParams.ReleaseAssetRegexps = []string{app.ReleaseRegexp}
 		appParams.Rename = app.Rename
 		if len(app.Type) > 0 {
 			appParams.Type = app.Type

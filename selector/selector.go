@@ -3,6 +3,7 @@ package selector
 import (
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -28,6 +29,7 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 		}
 	} else if len(s.RegexpMatchers) > 0 {
 		muslRegex := regexp.MustCompile(`(?i)[-_]musl[-_.]`)
+		foreignArchRegex := getForeignArchRegex(runtime.GOARCH)
 		// Try regex matchers in priority order
 		for _, rx := range s.RegexpMatchers {
 			compiledRx, err := regexp.Compile(rx)
@@ -37,6 +39,12 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 			var currentMatches []*SelectorItem
 			for _, item := range s.Items {
 				if compiledRx.MatchString(item.Name) {
+					if foreignArchRegex != nil && foreignArchRegex.MatchString(item.Name) {
+						// Only apply foreign filter if the regex itself didn't explicitly ask for it
+						if !foreignArchRegex.MatchString(rx) && !strings.Contains(strings.ToLower(rx), "arm") && !strings.Contains(strings.ToLower(rx), "386") {
+							continue
+						}
+					}
 					currentMatches = append(currentMatches, item)
 				}
 			}
@@ -69,4 +77,18 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 
 func (s *Selector) GetKind() SelectorKind {
 	return s.Kind
+}
+
+func getForeignArchRegex(goarch string) *regexp.Regexp {
+	var foreign []string
+	switch goarch {
+	case "amd64":
+		foreign = []string{"arm64", "aarch64", "armhf", "armv7", "armv6", "386", "i386", "mips64", "ppc64le", "s390x", "riscv64"}
+	case "arm64":
+		foreign = []string{"amd64", "x86_64", "x64", "x86", "386", "i386", "armhf", "armv7", "armv6", "mips64", "ppc64le", "s390x", "riscv64"}
+	default:
+		return nil
+	}
+	pattern := "(?i)[-_\\.](?:" + strings.Join(foreign, "|") + ")(?:[-_\\.]|$)"
+	return regexp.MustCompile(pattern)
 }
