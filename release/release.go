@@ -575,7 +575,7 @@ func (r *GithubRelease) Install() error {
 			}
 		}
 	}
-	
+
 	if len(matchedTypes) > 0 {
 		seen := make(map[string]bool)
 		var finalTypes []string
@@ -587,6 +587,14 @@ func (r *GithubRelease) Install() error {
 		}
 		r.CliParams.Type = finalTypes
 	}
+
+	// Generate strict regexes for the chosen assets to lock them down for future updates
+	var strictRegexes []string
+	for _, asset := range assets {
+		strictRegex := generateStrictAssetRegex(asset.Name, releases[0].Name)
+		strictRegexes = append(strictRegexes, strictRegex)
+	}
+	r.CliParams.ReleaseAssetRegexp = strings.Join(strictRegexes, " | ")
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
@@ -983,4 +991,29 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
+}
+
+func generateStrictAssetRegex(assetName string, resolvedVersion string) string {
+	if resolvedVersion == "" {
+		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
+	}
+
+	noVStr := regexp.QuoteMeta(strings.TrimPrefix(strings.ToLower(resolvedVersion), "v"))
+	// Optionally consume package revisions like -1, -2 which are common in .deb/.rpm
+	versionRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s(?:-\d+)?`, noVStr))
+
+	matches := versionRegex.FindAllStringIndex(assetName, -1)
+	if len(matches) == 0 {
+		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
+	}
+
+	var parts []string
+	lastIdx := 0
+	for _, match := range matches {
+		parts = append(parts, regexp.QuoteMeta(assetName[lastIdx:match[0]]))
+		lastIdx = match[1]
+	}
+	parts = append(parts, regexp.QuoteMeta(assetName[lastIdx:]))
+
+	return fmt.Sprintf("^%s$", strings.Join(parts, ".*"))
 }
