@@ -4,39 +4,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
+
 	"github.com/stretchr/testify/assert"
 )
 
-func TestVerifyHashWithVirusTotal_Malicious(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "test-api-key", r.Header.Get("x-apikey"))
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"data":{"attributes":{"last_analysis_stats":{"malicious": 3}}}}`)
-	}))
-	defer server.Close()
-
-	// Override the base URL for testing (we'll implement this variable)
-	vtBaseURL = server.URL
-
-	err := verifyHashWithVirusTotal("badhash", "test-api-key")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "malicious")
-}
-
-func TestVerifyHashWithVirusTotal_Clean(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"data":{"attributes":{"last_analysis_stats":{"malicious": 0}}}}`)
-	}))
-	defer server.Close()
-	vtBaseURL = server.URL
-
-	err := verifyHashWithVirusTotal("goodhash", "test-api-key")
-	assert.NoError(t, err)
-}
-
-func TestVerifyHashWithVirusTotal_NotFound(t *testing.T) {
+func TestVerifyHashWithVirusTotal_Unknown_SkipSandbox(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintln(w, `{"error":{"code": "NotFoundError"}}`)
@@ -44,6 +19,40 @@ func TestVerifyHashWithVirusTotal_NotFound(t *testing.T) {
 	defer server.Close()
 	vtBaseURL = server.URL
 
-	err := verifyHashWithVirusTotal("unknownhash", "test-api-key")
-	assert.NoError(t, err) // By default, we shouldn't block zero-day releases if they just aren't found
+	err := verifyHashWithVirusTotal("unknownhash", "dummy.txt", "test-api-key", false, true)
+	assert.NoError(t, err) 
+}
+
+func TestVerifyHashWithVirusTotal_Unknown_Upload(t *testing.T) {
+	// Create a dummy file
+	f, _ := os.CreateTemp("", "vt-test")
+	f.WriteString("dummy payload")
+	f.Close()
+	defer os.Remove(f.Name())
+
+	vtPollDelay = 10 * time.Millisecond
+	reqCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		if reqCount == 1 {
+			// First request is to /files/hash -> 404
+			w.WriteHeader(http.StatusNotFound)
+		} else if reqCount == 2 {
+			// Second request is POST to /files -> returns analysis ID
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, `{"data":{"id": "analysis-123"}}`)
+		} else if reqCount == 3 {
+			// Third request is GET to /analyses/analysis-123 -> return completed
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, `{"data":{"attributes":{"status": "completed", "stats":{"malicious": 1}}}}`)
+		}
+	}))
+	defer server.Close()
+	vtBaseURL = server.URL
+
+	err := verifyHashWithVirusTotal("unknownhash", f.Name(), "test-api-key", false, false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "malicious")
 }

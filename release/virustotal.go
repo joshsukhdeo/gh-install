@@ -1,21 +1,26 @@
 package release
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 var vtBaseURL = "https://www.virustotal.com/api/v3"
+var vtPollDelay = 15 * time.Second
 
-func verifyHashWithVirusTotal(hash string, apiKey string) error {
+func verifyHashWithVirusTotal(hash string, filePath string, apiKey string, interactive bool, skipSandbox bool) error {
 	if apiKey == "" {
 		return nil
 	}
@@ -36,8 +41,22 @@ func verifyHashWithVirusTotal(hash string, apiKey string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		log.Warn().Str("hash", hash).Msg("VirusTotal has no record of this hash. Bypassing check for zero-day release.")
-		return nil
+		if skipSandbox {
+			log.Warn().Str("hash", hash).Msg("VirusTotal has no record of this hash. Bypassing sandbox (--skip-vt-sandbox).")
+			return nil
+		}
+		if interactive {
+			// ponytail: directly relying on fmt to avoid passing the GithubRelease struct just for prompts
+			var confirm string
+			fmt.Printf("\nVirusTotal has no record of %s. Upload to sandbox and wait for analysis? [y/N]: ", filepath.Base(filePath))
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
+				log.Warn().Str("hash", hash).Msg("User declined VT sandbox upload. Bypassing check.")
+				return nil
+			}
+		}
+		log.Info().Str("file", filepath.Base(filePath)).Msg("Uploading file to VirusTotal sandbox...")
+		return uploadToVirusTotal(filePath, apiKey)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -80,4 +99,85 @@ func calculateSHA256(filePath string) (string, error) {
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func uploadToVirusTotal(filePath string, apiKey string) error {
+	// ponytail: naive memory buffer upload. Fails on >32MB files.
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	io.Copy(part, file)
+	writer.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/files", vtBaseURL), body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("x-apikey", apiKey)
+
+	client := &http.Client{Timeout: 1 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("virustotal upload failed with status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+
+	log.Info().Str("analysis_id", result.Data.ID).Msg("Upload complete. Waiting for sandbox analysis...")
+	return pollVirusTotalAnalysis(result.Data.ID, apiKey)
+}
+
+func pollVirusTotalAnalysis(analysisID string, apiKey string) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	for {
+		time.Sleep(vtPollDelay) // ponytail: naive polling without backoff
+
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/analyses/%s", vtBaseURL, analysisID), nil)
+		req.Header.Set("x-apikey", apiKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+
+		var result struct {
+			Data struct {
+				Attributes struct {
+					Status string `json:"status"`
+					Stats  struct {
+						Malicious int `json:"malicious"`
+					} `json:"stats"`
+				} `json:"attributes"`
+			} `json:"data"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+
+		if result.Data.Attributes.Status == "completed" {
+			malicious := result.Data.Attributes.Stats.Malicious
+			if malicious > 0 {
+				return fmt.Errorf("virustotal sandbox blocked installation: %d engines detected file as malicious", malicious)
+			}
+			log.Info().Msg("VirusTotal sandbox analysis confirms file is clean.")
+			return nil
+		}
+		log.Info().Msg("Sandbox analysis still in progress...")
+	}
 }
