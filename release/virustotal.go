@@ -29,7 +29,7 @@ func doVTRequestWithRetry(client *http.Client, req *http.Request) (*http.Respons
 			return resp, err
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			log.Warn().Msg("VirusTotal rate limit (429) reached. Throttling for 15s...")
 			time.Sleep(15 * time.Second)
 			continue
@@ -57,7 +57,7 @@ RetryVT:
 	if err != nil {
 		return fmt.Errorf("virustotal api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		if !interactive {
@@ -70,11 +70,11 @@ RetryVT:
 		
 		var confirm string
 		fmt.Printf("\nDo you want to update your API key in config? (y/N): ")
-		fmt.Scanln(&confirm)
+		_, _ = fmt.Scanln(&confirm)
 		if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
 			fmt.Printf("Enter new VirusTotal API Key: ")
 			var newKey string
-			fmt.Scanln(&newKey)
+			_, _ = fmt.Scanln(&newKey)
 			if newKey != "" {
 				apiKey = strings.TrimSpace(newKey)
 				// Update config
@@ -83,12 +83,12 @@ RetryVT:
 					cfg = &config.Config{}
 				}
 				cfg.VTApiKey = apiKey
-				config.SaveConfig(cfg)
+				_ = config.SaveConfig(cfg)
 				goto RetryVT
 			}
 		} else {
 			fmt.Printf("Continue installation without VirusTotal? (y/N): ")
-			fmt.Scanln(&confirm)
+			_, _ = fmt.Scanln(&confirm)
 			if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
 				return nil
 			}
@@ -105,7 +105,7 @@ RetryVT:
 			// ponytail: directly relying on fmt to avoid passing the GithubRelease struct just for prompts
 			var confirm string
 			fmt.Printf("\nVirusTotal has no record of %s. Upload to sandbox and wait for analysis? [y/N]: ", filepath.Base(filePath))
-			fmt.Scanln(&confirm)
+			_, _ = fmt.Scanln(&confirm)
 			if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
 				log.Warn().Str("hash", hash).Msg("User declined VT sandbox upload. Bypassing check.")
 				return nil
@@ -147,7 +147,7 @@ func calculateSHA256(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
@@ -162,7 +162,7 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -179,7 +179,7 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var result struct {
 			Data string `json:"data"`
@@ -195,12 +195,12 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 	writer := multipart.NewWriter(pw)
 
 	go func() {
-		defer pw.Close()
+		defer func() { _ = pw.Close() }()
 		part, err := writer.CreateFormFile("file", filepath.Base(filePath))
 		if err == nil {
-			io.Copy(part, file)
+			_, _ = io.Copy(part, file)
 		}
-		writer.Close()
+		_ = writer.Close()
 	}()
 
 	req, _ := http.NewRequest(http.MethodPost, uploadURL, pr)
@@ -212,7 +212,7 @@ func uploadToVirusTotal(filePath string, apiKey string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("virustotal upload failed with status %d", resp.StatusCode)
@@ -253,7 +253,7 @@ func pollVirusTotalAnalysis(analysisID string, apiKey string) error {
 			} `json:"data"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if result.Data.Attributes.Status == "completed" {
 			malicious := result.Data.Attributes.Stats.Malicious

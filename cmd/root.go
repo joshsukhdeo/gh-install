@@ -430,7 +430,7 @@ func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
 	if !r.DisablePrompts {
 		var confirm string
 		fmt.Printf("\nSafety scan complete. Do you want to proceed with the installation of %s? [y/N]: ", r.Repository)
-		fmt.Scanln(&confirm)
+		_, _ = fmt.Scanln(&confirm)
 		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
 			return fmt.Errorf("installation aborted by user after AI safety scan")
 		}
