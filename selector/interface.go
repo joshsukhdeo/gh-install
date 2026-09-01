@@ -119,7 +119,7 @@ func ReleaseSelector(ghClient GithubClient, repo string, version string, interac
 }
 
 func AssetSelector(ghClient GithubClient, repo string,
-	releaseId int, name string, matchers []string, interactive bool) (ISelector, error) {
+	releaseId int, name string, matchers []string, interactive bool, allowForeignArch bool) (ISelector, error) {
 	var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
 
 	var items []*SelectorItem
@@ -202,9 +202,10 @@ func AssetSelector(ghClient GithubClient, repo string,
 		Kind:  Asset,
 		Items: items,
 
-		NamesMatcher:   namesMatcher,
-		RegexpMatchers: matchers,
-		Single:         true,
+		NamesMatcher:     namesMatcher,
+		RegexpMatchers:   matchers,
+		Single:           true,
+		AllowForeignArch: allowForeignArch,
 	}, nil
 }
 

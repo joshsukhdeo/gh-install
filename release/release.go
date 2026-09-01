@@ -527,7 +527,7 @@ func (r *GithubRelease) Install() error {
 	r.ResolvedVersion = releases[0].Name
 
 	assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, releases[0].Id,
-		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive)
+		r.CliParams.ReleaseAsset, r.CliParams.ReleaseAssetRegexps, r.CliParams.Interactive, r.CliParams.AllowForeignArch)
 	if err != nil {
 		log.Error().
 			Str("repository", r.CliParams.Repository).

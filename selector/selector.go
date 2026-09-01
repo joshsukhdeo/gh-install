@@ -11,8 +11,9 @@ type Selector struct {
 	Kind           SelectorKind
 	Items          []*SelectorItem
 	NamesMatcher   []string
-	RegexpMatchers []string
-	Single         bool
+	RegexpMatchers   []string
+	Single           bool
+	AllowForeignArch bool
 }
 
 func (s *Selector) Run() ([]*SelectorItem, error) {
@@ -39,7 +40,7 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 			var currentMatches []*SelectorItem
 			for _, item := range s.Items {
 				if compiledRx.MatchString(item.Name) {
-					if foreignArchRegex != nil && foreignArchRegex.MatchString(item.Name) {
+					if !s.AllowForeignArch && foreignArchRegex != nil && foreignArchRegex.MatchString(item.Name) {
 						// Only apply foreign filter if the regex itself didn't explicitly ask for it
 						if !foreignArchRegex.MatchString(rx) && !strings.Contains(strings.ToLower(rx), "arm") && !strings.Contains(strings.ToLower(rx), "386") {
 							continue
@@ -83,7 +84,7 @@ func getForeignArchRegex(goarch string) *regexp.Regexp {
 	var foreign []string
 	switch goarch {
 	case "amd64":
-		foreign = []string{"arm64", "aarch64", "armhf", "armv7", "armv6", "386", "i386", "mips64", "ppc64le", "s390x", "riscv64"}
+		foreign = []string{"arm64", "aarch64", "armhf", "armv7", "armv6", "386", "i386", "32-bit", "mips64", "ppc64le", "s390x", "riscv64"}
 	case "arm64":
 		foreign = []string{"amd64", "x86_64", "x64", "x86", "386", "i386", "armhf", "armv7", "armv6", "mips64", "ppc64le", "s390x", "riscv64"}
 	default:
