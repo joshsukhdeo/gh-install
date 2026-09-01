@@ -555,6 +555,39 @@ func (r *GithubRelease) Install() error {
 		return scoreI > scoreJ
 	})
 
+	// Filter r.CliParams.Type down to only the formats that actually matched our chosen assets.
+	// This ensures that when the state is saved, future updates will strictly seek this exact format.
+	var matchedTypes []string
+	for _, asset := range assets {
+		for _, t := range r.CliParams.Type {
+			originalT := t
+			tLower := strings.ToLower(strings.TrimSpace(t))
+			if tLower == "none" {
+				if !strings.Contains(filepath.Base(asset.Name), ".") {
+					matchedTypes = append(matchedTypes, originalT)
+					break
+				}
+			} else if tLower != "" {
+				if matched, _ := regexp.MatchString(`(?i)\.`+tLower+`$`, asset.Name); matched {
+					matchedTypes = append(matchedTypes, originalT)
+					break
+				}
+			}
+		}
+	}
+	
+	if len(matchedTypes) > 0 {
+		seen := make(map[string]bool)
+		var finalTypes []string
+		for _, t := range matchedTypes {
+			if !seen[t] {
+				seen[t] = true
+				finalTypes = append(finalTypes, t)
+			}
+		}
+		r.CliParams.Type = finalTypes
+	}
+
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {
 		log.Error().
