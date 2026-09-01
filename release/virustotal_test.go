@@ -20,7 +20,7 @@ func TestVerifyHashWithVirusTotal_Unknown_SkipSandbox(t *testing.T) {
 	vtBaseURL = server.URL
 
 	err := verifyHashWithVirusTotal("unknownhash", "dummy.txt", "test-api-key", false, true)
-	assert.NoError(t, err) 
+	assert.NoError(t, err)
 }
 
 func TestVerifyHashWithVirusTotal_Unknown_Upload(t *testing.T) {

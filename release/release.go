@@ -937,6 +937,13 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
+	// Extract just the repo name from "owner/repo"
+	repoName := r.CliParams.Repository
+	if parts := strings.Split(repoName, "/"); len(parts) == 2 {
+		repoName = parts[1]
+	}
+	fmt.Printf("\n\033[1;32mInstalled %s successfully!\033[0m\n", repoName)
+
 	return nil
 }
 

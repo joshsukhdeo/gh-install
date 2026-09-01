@@ -13,14 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"github.com/joshsukhdeo/gh-install/config"
 	"github.com/pterm/pterm"
+	"github.com/rs/zerolog/log"
 )
 
 var vtBaseURL = "https://www.virustotal.com/api/v3"
 var vtPollDelay = 15 * time.Second
-
 
 func doVTRequestWithRetry(client *http.Client, req *http.Request) (*http.Response, error) {
 	for {
@@ -67,7 +66,7 @@ RetryVT:
 		if os.Getenv("VT_API_KEY") != "" {
 			pterm.Warning.Println("Note: Your VT_API_KEY environment variable is currently overriding the config. Updating the config below will NOT take effect until you unset the environment variable.")
 		}
-		
+
 		var confirm string
 		fmt.Printf("\nDo you want to update your API key in config? (y/N): ")
 		_, _ = fmt.Scanln(&confirm)

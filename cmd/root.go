@@ -726,6 +726,8 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 
 		lowerT := strings.ToLower(t)
 		isOsFormatPkg := lowerT == "deb" || lowerT == "rpm" || lowerT == "pkg" || lowerT == "txz" || lowerT == "dmg"
+		// AppImage, Flatpak, and Snap are Linux-only universal packages — no OS token needed in filename.
+		isUniversalLinux := lowerT == "appimage" || lowerT == "flatpak" || lowerT == "snap"
 
 		for _, osRegex := range osRegexList {
 			if hwSpecific != "" {
@@ -741,6 +743,14 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		if isOsFormatPkg {
 			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
 			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+		}
+
+		// Universal Linux packages: only need arch match, no OS token required
+		if isUniversalLinux {
+			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
+			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+			// Also allow bare format matches (no arch specified)
+			matchers = append(matchers, buildFinal(`.*`, t))
 		}
 
 		// Fallback: OS only
