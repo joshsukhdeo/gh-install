@@ -124,15 +124,15 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.Global || r.UpdateAll || (r.Update && r.Global) {
-		if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
-			log.Info().Msg("sudo credentials required for global installation; please authenticate")
-			cmd := exec.Command("sudo", "-v")
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				log.Warn().Msg("sudo authentication failed or cancelled; elevated operations may fail")
-			}
+		// Always run sudo -v to refresh/establish the credential cache.
+		// sudo -n true only checks without extending the timestamp, which can
+		// expire mid-download before installBinary needs it.
+		cmd := exec.Command("sudo", "-v")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			log.Warn().Msg("sudo authentication failed or cancelled; elevated operations may fail")
 		}
 	}
 
