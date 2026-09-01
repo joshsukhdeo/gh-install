@@ -999,12 +999,31 @@ func generateStrictAssetRegex(assetName string, resolvedVersion string) string {
 	}
 
 	noVStr := regexp.QuoteMeta(strings.TrimPrefix(strings.ToLower(resolvedVersion), "v"))
-	// Optionally consume package revisions like -1, -2 which are common in .deb/.rpm
-	versionRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s(?:-\d+)?`, noVStr))
-
+	
+	// We optionally consume up to 2 digits of a package revision (e.g. -1 to -99).
+	versionRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s(?:-\d{1,2})?`, noVStr))
 	matches := versionRegex.FindAllStringIndex(assetName, -1)
+	
 	if len(matches) == 0 {
 		return fmt.Sprintf("^%s$", regexp.QuoteMeta(assetName))
+	}
+	
+	// Manual lookahead to prevent partial consumption of longer digit sequences (e.g. -386 architecture).
+	// If the character immediately following our match is a digit, we backtrack and strictly match the version only.
+	for i, match := range matches {
+		matchStr := assetName[match[0]:match[1]]
+		// If we actually matched a suffix (length > basic version)
+		if len(matchStr) > len(noVStr) && match[1] < len(assetName) {
+			nextChar := assetName[match[1]]
+			if nextChar >= '0' && nextChar <= '9' {
+				// Backtrack match to exclude the -\d+ suffix
+				baseRegex := regexp.MustCompile(fmt.Sprintf(`(?i)v?%s`, noVStr))
+				baseMatch := baseRegex.FindStringIndex(assetName[match[0]:])
+				if baseMatch != nil {
+					matches[i][1] = match[0] + baseMatch[1]
+				}
+			}
+		}
 	}
 
 	var parts []string
