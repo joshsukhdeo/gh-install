@@ -22,6 +22,7 @@ type Config struct {
 	NoSaveState    bool   `yaml:"no_save_state"`
 	AllowWine      bool   `yaml:"allow_wine"`
 	NativeExtract  bool   `yaml:"native_extract"`
+	KeepSuffixes   bool   `yaml:"keep_suffixes"`
 	VTApiKey       string `yaml:"vt_api_key"`
 }
 

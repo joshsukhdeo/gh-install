@@ -76,7 +76,7 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 		return filepath.Join(r.CliParams.TargetPath, targetBinaryName)
 	}
 
-	if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
+	if !r.CliParams.KeepSuffixes {
 		repoParts := strings.Split(r.CliParams.Repository, "/")
 		repoName := repoParts[len(repoParts)-1]
 
@@ -89,12 +89,24 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 			}
 		}
 
-		if len(binaryName) > len(proposedName)+3 { // If it has significant affixes
-			if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' is long. Do you want to strip OS/hardware affixes?", binaryName)) {
-				newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
-				if newName != "" {
-					return filepath.Join(r.CliParams.TargetPath, newName)
+		if len(binaryName) > len(proposedName) {
+			if r.CliParams.PromptRename && !r.CliParams.DisablePrompts {
+				if r.interactiveConfirm(fmt.Sprintf("Binary name '%s' has OS/hardware affixes. Do you want to strip them?", binaryName)) {
+					newName := r.interactiveInput(fmt.Sprintf("Rename '%s' to", binaryName), proposedName)
+					if newName != "" {
+						if r.CliParams.Rename == nil {
+							r.CliParams.Rename = make(map[string]string)
+						}
+						r.CliParams.Rename[strings.ToLower(binaryName)] = newName
+						return filepath.Join(r.CliParams.TargetPath, newName)
+					}
 				}
+			} else {
+				if r.CliParams.Rename == nil {
+					r.CliParams.Rename = make(map[string]string)
+				}
+				r.CliParams.Rename[strings.ToLower(binaryName)] = proposedName
+				destinationPath = filepath.Join(r.CliParams.TargetPath, proposedName)
 			}
 		}
 	}
@@ -164,7 +176,8 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 
 func (r *GithubRelease) installBinary(binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Info().Msgf("[dry-run] Would install binary: %s", binaryPath)
+		destinationPath := r.resolveDestinationPath(binaryPath)
+		log.Info().Msgf("[dry-run] Would install binary: %s to %s", binaryPath, destinationPath)
 		return nil
 	}
 	sourceStat, err := os.Stat(binaryPath)

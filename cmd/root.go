@@ -153,6 +153,9 @@ func (r *RootCLI) Run() error {
 				if !r.NativeExtract {
 					r.NativeExtract = cfg.NativeExtract
 				}
+				if !r.KeepSuffixes {
+					r.KeepSuffixes = cfg.KeepSuffixes
+				}
 			}
 		}
 	}
