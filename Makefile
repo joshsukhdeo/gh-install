@@ -9,7 +9,7 @@ OUTPUT_DIR = .
 
 all: build
 
-build:
+build: lint
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(OUTPUT_DIR)
 	$(GO_BIN) build $(GO_BUILD_FLAGS) -o $(OUTPUT_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)

@@ -524,6 +524,18 @@ func (r *GithubRelease) installMac(binaryPath string) error {
 	return fmt.Errorf("unsupported mac installer format: %s", binaryPath)
 }
 
+func (r *GithubRelease) GetLatestRelease() (*selector.SelectorItem, error) {
+	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive)
+	if err != nil {
+		return nil, err
+	}
+	releases, err := releaseSelector.Run()
+	if err != nil {
+		return nil, err
+	}
+	return releases[0], nil
+}
+
 func (r *GithubRelease) Install() error {
 	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive)
 	if err != nil {
@@ -936,6 +948,13 @@ func (r *GithubRelease) Install() error {
 			log.Warn().Err(err).Msg("could not save installed app state")
 		}
 	}
+
+	// Extract just the repo name from "owner/repo"
+	repoName := r.CliParams.Repository
+	if parts := strings.Split(repoName, "/"); len(parts) == 2 {
+		repoName = parts[1]
+	}
+	fmt.Printf("\n\033[1;32mInstalled %s successfully!\033[0m\n", repoName)
 
 	return nil
 }

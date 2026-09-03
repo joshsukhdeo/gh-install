@@ -46,6 +46,23 @@ func (r *RootCLI) Validate() error {
 		return nil
 	}
 
+	// Detect root user and handle global install path
+	if os.Getuid() == 0 {
+		if r.Global {
+			// Root + global: ensure we're using /usr/local/bin
+			if r.TargetPath == GetDefaultTargetPath() {
+				r.TargetPath = "/usr/local/bin"
+			}
+		} else if !r.AllowRootUserInstall {
+			// Root without global flag and without explicit permission
+			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --allow-root-user-install to install to user-local paths")
+			log.Error().
+				Err(err).
+				Msg("init error")
+			return err
+		}
+	}
+
 	if r.TargetPath == "" {
 		err := fmt.Errorf("could not determine default install path, use '--install-path' flag")
 		log.Error().
@@ -116,10 +133,23 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
-	cfg, _ := config.LoadConfig()
+	cfg := loadConfig()
 	if cfg != nil {
 		if r.VTApiKey == "" {
 			r.VTApiKey = cfg.VTApiKey
+		}
+	}
+
+	if r.Global || r.UpdateAll || (r.Update && r.Global) {
+		// Always run sudo -v to refresh/establish the credential cache.
+		// sudo -n true only checks without extending the timestamp, which can
+		// expire mid-download before installBinary needs it.
+		cmd := exec.Command("sudo", "-v")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			log.Warn().Msg("sudo authentication failed or cancelled; elevated operations may fail")
 		}
 	}
 
@@ -134,7 +164,6 @@ func (r *RootCLI) Run() error {
 		case "FALSE":
 			r.NoDeps = true
 		default:
-			cfg, _ := config.LoadConfig()
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
 				r.NoDeps = cfg.NoDeps
@@ -196,19 +225,22 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.AI && r.AISafetyScan {
-		cfg, _ := config.LoadConfig()
 		if err := r.handleAISafetyScan(cfg); err != nil {
 			return err
 		}
 	}
 
 	if r.Clone || r.Fork {
-		cfg, _ := config.LoadConfig()
+		if cfg == nil {
+			cfg, _ = config.LoadConfig()
+		}
 		return r.handleRepoCloneOrFork(cfg)
 	}
 
 	if r.CompileFromSource {
-		cfg, _ := config.LoadConfig()
+		if cfg == nil {
+			cfg, _ = config.LoadConfig()
+		}
 		return r.handleCompileFromSource(cfg)
 	}
 
@@ -430,7 +462,7 @@ func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
 	if !r.DisablePrompts {
 		var confirm string
 		fmt.Printf("\nSafety scan complete. Do you want to proceed with the installation of %s? [y/N]: ", r.Repository)
-		fmt.Scanln(&confirm)
+		_, _ = fmt.Scanln(&confirm)
 		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
 			return fmt.Errorf("installation aborted by user after AI safety scan")
 		}
@@ -480,6 +512,47 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		return fmt.Errorf("failed to clone repository to builds dir: %s (%w)", stdErr.String(), err)
 	}
 	log.Info().Str("output", stdOut.String()).Msg("cloned repository to builds directory")
+
+	// 0. Initial check: try existing compile script if it exists
+	if _, err := os.Stat(scriptPath); err == nil {
+		log.Info().Str("script", scriptPath).Msg("found existing compile script, attempting to run it first")
+
+		var preExecCmd *exec.Cmd
+		if runtime.GOOS == "windows" {
+			preExecCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+		} else {
+			preExecCmd = exec.Command("sh", scriptPath)
+		}
+		preExecCmd.Dir = repoDir
+
+		outputBytes, runErr := preExecCmd.CombinedOutput()
+		if len(outputBytes) > 0 {
+			_, _ = os.Stdout.Write(outputBytes)
+		}
+
+		if runErr == nil {
+			log.Info().Msgf("Existing compile script succeeded for %s", r.Repository)
+			if !r.NoSaveState {
+				st, err := state.LoadState()
+				if err == nil {
+					err = st.AddApp(&state.InstalledApp{
+						Repository:    r.Repository,
+						TargetPath:    targetPath,
+						Global:        r.Global,
+						CompileScript: scriptPath,
+						Pinned:        r.Pin,
+					})
+					if err != nil {
+						log.Warn().Err(err).Msg("could not save repository state")
+					} else {
+						log.Info().Msgf("Saved %s with compileScript to state tracking.", r.Repository)
+					}
+				}
+			}
+			return nil
+		}
+		log.Warn().Err(runErr).Msg("existing compile script failed, will regenerate with AI")
+	}
 
 	// 2. Ensure scripts directory exists
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
@@ -713,6 +786,8 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 
 		lowerT := strings.ToLower(t)
 		isOsFormatPkg := lowerT == "deb" || lowerT == "rpm" || lowerT == "pkg" || lowerT == "txz" || lowerT == "dmg"
+		// AppImage, Flatpak, and Snap are Linux-only universal packages — no OS token needed in filename.
+		isUniversalLinux := lowerT == "appimage" || lowerT == "flatpak" || lowerT == "snap"
 
 		for _, osRegex := range osRegexList {
 			if hwSpecific != "" {
@@ -728,6 +803,14 @@ func buildRegexFromTypes(types []string, allowWine bool) []string {
 		if isOsFormatPkg {
 			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
 			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+		}
+
+		// Universal Linux packages: only need arch match, no OS token required
+		if isUniversalLinux {
+			archOnlyRegex := fmt.Sprintf(`.*%s.*`, archRegex)
+			matchers = append(matchers, buildFinal(archOnlyRegex, t))
+			// Also allow bare format matches (no arch specified)
+			matchers = append(matchers, buildFinal(`.*`, t))
 		}
 
 		// Fallback: OS only
@@ -755,4 +838,9 @@ func GetEnvPrefix() string {
 	}
 
 	return strings.ToUpper(envPrefix)
+}
+
+func loadConfig() *config.Config {
+	cfg, _ := config.LoadConfig()
+	return cfg
 }
