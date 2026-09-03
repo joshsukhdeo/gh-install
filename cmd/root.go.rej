@@ -1,0 +1,48 @@
+--- cmd/root.go
++++ cmd/root.go
+@@ -505,37 +505,18 @@
+ 		return nil
+ 	}
+ 
+-	// 0. Initial check: try existing compile script if it exists
+-	if _, err := os.Stat(scriptPath); err == nil {
+-		log.Info().Str("script", scriptPath).Msg("found existing compile script, attempting to run it first")
+-		if err := runExistingCompileScript(scriptPath, repoDir, r.Repository); err == nil {
+-			log.Info().Msgf("Existing compile script succeeded for %s", r.Repository)
+-			if !r.NoSaveState {
+-				st, err := state.LoadState()
+-				if err == nil {
+-					err = st.AddApp(&state.InstalledApp{
+-						Repository:    r.Repository,
+-						TargetPath:    targetPath,
+-						Global:        r.Global,
+-						CompileScript: scriptPath,
+-						Pinned:        r.Pin,
+-					})
+-					if err != nil {
+-						log.Warn().Err(err).Msg("could not save repository state")
+-					} else {
+-						log.Info().Msgf("Saved %s with compileScript to state tracking.", r.Repository)
+-					}
+-				}
+-			}
+-			return nil
+-		}
+-		log.Warn().Err(err).Msg("existing compile script failed, will regenerate with AI")
+-	}
+-
+ 	// 1. Clone repo into builds directory
+ 	cloneArgs := []string{"repo", "clone", r.Repository, repoDir}
+ 	stdOut, stdErr, err := gh.Exec(cloneArgs...)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to clone repository to builds dir: %s (%w)", stdErr.String(), err)
+ 	}
+ 	log.Info().Str("output", stdOut.String()).Msg("cloned repository to builds directory")
++
++	// 0. Initial check: try existing compile script if it exists
++	if _, err := os.Stat(scriptPath); err == nil {
++		log.Info().Str("script", scriptPath).Msg("found existing compile script, attempting to run it first")
++		
++		var preExecCmd *exec.Cmd
++		if runtime.GOOS == "windows" {
++			preExecCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
