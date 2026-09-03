@@ -133,7 +133,7 @@ func (r *RootCLI) Run() error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
-	cfg, _ := config.LoadConfig()
+	cfg := loadConfig()
 	if cfg != nil {
 		if r.VTApiKey == "" {
 			r.VTApiKey = cfg.VTApiKey
@@ -164,7 +164,6 @@ func (r *RootCLI) Run() error {
 		case "FALSE":
 			r.NoDeps = true
 		default:
-			cfg, _ := config.LoadConfig()
 			if cfg != nil {
 				r.AddDeps = cfg.AddDeps
 				r.NoDeps = cfg.NoDeps
@@ -226,19 +225,22 @@ func (r *RootCLI) Run() error {
 	}
 
 	if r.AI && r.AISafetyScan {
-		cfg, _ := config.LoadConfig()
 		if err := r.handleAISafetyScan(cfg); err != nil {
 			return err
 		}
 	}
 
 	if r.Clone || r.Fork {
-		cfg, _ := config.LoadConfig()
+		if cfg == nil {
+			cfg, _ = config.LoadConfig()
+		}
 		return r.handleRepoCloneOrFork(cfg)
 	}
 
 	if r.CompileFromSource {
-		cfg, _ := config.LoadConfig()
+		if cfg == nil {
+			cfg, _ = config.LoadConfig()
+		}
 		return r.handleCompileFromSource(cfg)
 	}
 
@@ -795,4 +797,9 @@ func GetEnvPrefix() string {
 	}
 
 	return strings.ToUpper(envPrefix)
+}
+
+func loadConfig() *config.Config {
+	cfg, _ := config.LoadConfig()
+	return cfg
 }
