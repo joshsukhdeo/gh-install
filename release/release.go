@@ -524,6 +524,18 @@ func (r *GithubRelease) installMac(binaryPath string) error {
 	return fmt.Errorf("unsupported mac installer format: %s", binaryPath)
 }
 
+func (r *GithubRelease) GetLatestRelease() (*selector.SelectorItem, error) {
+	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive)
+	if err != nil {
+		return nil, err
+	}
+	releases, err := releaseSelector.Run()
+	if err != nil {
+		return nil, err
+	}
+	return releases[0], nil
+}
+
 func (r *GithubRelease) Install() error {
 	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive)
 	if err != nil {

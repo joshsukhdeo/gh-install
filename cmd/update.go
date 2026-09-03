@@ -114,8 +114,37 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		// Reset version to latest to ensure we get the latest
 		appParams.ReleaseVersion = "latest"
 
+		// Check if there's a new version before updating
 		installRelease := release.MakeGithubRelease(&appParams, ghClient)
-		err := installRelease.Install()
+		latestRelease, err := installRelease.GetLatestRelease()
+		if err != nil {
+			log.Error().Err(err).Msgf("Failed to check for updates for %s", app.Repository)
+			continue
+		}
+
+		// Compare versions - skip if same version is already installed
+		// Normalize by stripping leading 'v' to handle version strings like "v1.2.3" vs "1.2.3"
+		normalizedLatest := strings.TrimPrefix(latestRelease.Name, "v")
+		normalizedStored := strings.TrimPrefix(app.Version, "v")
+
+		if normalizedLatest == normalizedStored {
+			log.Info().Msgf("Skipping %s (already at latest version %s)", app.Repository, app.Version)
+			continue
+		}
+
+		log.Info().Msgf("Updating %s from %s to %s", app.Repository, app.Version, latestRelease.Name)
+
+		// Always overwrite during updates since we confirmed there's a new version
+		appParams.Overwrite = true
+
+		// Use the new release version as the asset regex matcher instead of
+		// the stored restrictive regex, so future assets are matched correctly.
+		// The stored regex was generated for the previous release and may not
+		// match assets from the new release.
+		appParams.ReleaseAssetRegexps = []string{latestRelease.Name}
+
+		installRelease = release.MakeGithubRelease(&appParams, ghClient)
+		err = installRelease.Install()
 		if err != nil {
 			log.Error().Err(err).Msgf("Failed to update %s", app.Repository)
 		} else {
