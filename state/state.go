@@ -30,9 +30,16 @@ type InstalledApp struct {
 	CompileScript       string            `json:"compile_script,omitempty"`
 }
 
+type StateManager interface {
+	Save() error
+	AddApp(app *InstalledApp) error
+}
+
 type State struct {
 	Apps map[string]*InstalledApp `json:"apps"`
 }
+
+var _ StateManager = (*State)(nil)
 
 func GetStatePath() string {
 	return filepath.Join(xdg.DataHome, "gh-install", "state.json")

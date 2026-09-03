@@ -516,7 +516,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	// 0. Initial check: try existing compile script if it exists
 	if _, err := os.Stat(scriptPath); err == nil {
 		log.Info().Str("script", scriptPath).Msg("found existing compile script, attempting to run it first")
-		
+
 		var preExecCmd *exec.Cmd
 		if runtime.GOOS == "windows" {
 			preExecCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
