@@ -1,0 +1,47 @@
+--- config/config.go
++++ config/config.go
+@@ -10,19 +10,31 @@
+ )
+ 
+ type Config struct {
+-	InstallTypes   string `yaml:"install_types"`
+-	InstallPath    string `yaml:"install_path"`
+-	GlobalPath     string `yaml:"global_path"`
+-	ClonePath      string `yaml:"clone_path"`
+-	ForkPath       string `yaml:"fork_path"`
+-	AICmd          string `yaml:"ai_cmd"`
+-	AddDeps        bool   `yaml:"add_deps"`
+-	NoDeps         bool   `yaml:"no_deps"`
+-	DisablePrompts bool   `yaml:"disable_prompts"`
+-	NoSaveState    bool   `yaml:"no_save_state"`
+-	AllowWine      bool   `yaml:"allow_wine"`
+-	NativeExtract  bool   `yaml:"native_extract"`
+-	KeepSuffixes   bool   `yaml:"keep_suffixes"`
+-	VTApiKey       string `yaml:"vt_api_key"`
++	Paths PathsConfig `yaml:",inline"`
++	AI    AIConfig    `yaml:",inline"`
++	Core  CoreConfig  `yaml:",inline"`
++}
++
++type PathsConfig struct {
++	InstallPath string `yaml:"install_path"`
++	GlobalPath  string `yaml:"global_path"`
++	ClonePath   string `yaml:"clone_path"`
++	ForkPath    string `yaml:"fork_path"`
++}
++
++type AIConfig struct {
++	AICmd string `yaml:"ai_cmd"`
++}
++
++type CoreConfig struct {
++	InstallTypes   string `yaml:"install_types"`
++	AddDeps        bool   `yaml:"add_deps"`
++	NoDeps         bool   `yaml:"no_deps"`
++	DisablePrompts bool   `yaml:"disable_prompts"`
++	NoSaveState    bool   `yaml:"no_save_state"`
++	AllowWine      bool   `yaml:"allow_wine"`
++	NativeExtract  bool   `yaml:"native_extract"`
++	KeepSuffixes   bool   `yaml:"keep_suffixes"`
++	VTApiKey       string `yaml:"vt_api_key"`
+ }

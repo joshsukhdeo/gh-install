@@ -136,7 +136,7 @@ func (r *RootCLI) Run() error {
 	cfg := loadConfig()
 	if cfg != nil {
 		if r.VTApiKey == "" {
-			r.VTApiKey = cfg.VTApiKey
+			r.VTApiKey = cfg.Core.VTApiKey
 		}
 	}
 
@@ -165,22 +165,22 @@ func (r *RootCLI) Run() error {
 			r.NoDeps = true
 		default:
 			if cfg != nil {
-				r.AddDeps = cfg.AddDeps
-				r.NoDeps = cfg.NoDeps
+				r.AddDeps = cfg.Core.AddDeps
+				r.NoDeps = cfg.Core.NoDeps
 				if !r.DisablePrompts {
-					r.DisablePrompts = cfg.DisablePrompts
+					r.DisablePrompts = cfg.Core.DisablePrompts
 				}
 				if !r.NoSaveState {
-					r.NoSaveState = cfg.NoSaveState
+					r.NoSaveState = cfg.Core.NoSaveState
 				}
 				if !r.AllowWine {
-					r.AllowWine = cfg.AllowWine
+					r.AllowWine = cfg.Core.AllowWine
 				}
 				if !r.NativeExtract {
-					r.NativeExtract = cfg.NativeExtract
+					r.NativeExtract = cfg.Core.NativeExtract
 				}
 				if !r.KeepSuffixes {
-					r.KeepSuffixes = cfg.KeepSuffixes
+					r.KeepSuffixes = cfg.Core.KeepSuffixes
 				}
 			}
 		}
@@ -329,8 +329,8 @@ func (r *RootCLI) handleRepoCloneOrFork(cfg *config.Config) error {
 	var cloneBase string
 	var forkBase string
 	if cfg != nil {
-		cloneBase = cfg.ClonePath
-		forkBase = cfg.ForkPath
+		cloneBase = cfg.Paths.ClonePath
+		forkBase = cfg.Paths.ForkPath
 	}
 
 	targetDir := resolveRepoPath(r.Repository, r.Clone, r.Fork, cloneBase, forkBase)
@@ -445,8 +445,8 @@ func runAIAgent(aiCmdTemplate, prompt, dir string) error {
 
 func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
 	aiCmdTemplate := r.AICmd
-	if cfg != nil && cfg.AICmd != "" && (r.AICmd == "" || r.AICmd == "agy -p \"%s\"") {
-		aiCmdTemplate = cfg.AICmd
+	if cfg != nil && cfg.AI.AICmd != "" && (r.AICmd == "" || r.AICmd == "agy -p \"%s\"") {
+		aiCmdTemplate = cfg.AI.AICmd
 	}
 	if aiCmdTemplate == "" {
 		aiCmdTemplate = "agy -p \"%s\""
@@ -561,8 +561,8 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 
 	// 3. Resolve AI command template
 	aiCmdTemplate := r.AICmd
-	if cfg != nil && cfg.AICmd != "" && (r.AICmd == "" || r.AICmd == `agy -p "%s"`) {
-		aiCmdTemplate = cfg.AICmd
+	if cfg != nil && cfg.AI.AICmd != "" && (r.AICmd == "" || r.AICmd == `agy -p "%s"`) {
+		aiCmdTemplate = cfg.AI.AICmd
 	}
 	if aiCmdTemplate == "" {
 		aiCmdTemplate = `agy -p "%s"`

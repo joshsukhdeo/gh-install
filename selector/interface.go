@@ -118,18 +118,33 @@ func ReleaseSelector(ghClient GithubClient, repo string, version string, interac
 	}, nil
 }
 
-func AssetSelector(ghClient GithubClient, repo string,
-	releaseId int, name string, matchers []string, interactive bool, allowForeignArch bool) (ISelector, error) {
+type AssetMatchCriteria struct {
+	ReleaseId        int
+	Name             string
+	Regexps          []string
+	Interactive      bool
+	AllowForeignArch bool
+}
+
+type BinaryMatchCriteria struct {
+	DownloadPath  string
+	Names         []string
+	Matcher       string
+	Interactive   bool
+	NativeExtract bool
+}
+
+func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriteria) (ISelector, error) {
 	var linkRE = regexp.MustCompile(`<([^>]+)>;\s*rel="([^"]+)"`)
 
 	var items []*SelectorItem
 	page := 1
-	requestPath := fmt.Sprintf("repos/%s/releases/%d/assets", repo, releaseId)
+	requestPath := fmt.Sprintf("repos/%s/releases/%d/assets", repo, criteria.ReleaseId)
 
 	log.Debug().
 		Str("repository", repo).
-		Int("release id", releaseId).
-		Str("asset matching name", name).
+		Int("release id", criteria.ReleaseId).
+		Str("asset matching name", criteria.Name).
 		Msg("getting release assets")
 
 	findNextPage := func(response *http.Response) (string, bool) {
@@ -162,7 +177,7 @@ func AssetSelector(ghClient GithubClient, repo string,
 			items = append(items, &SelectorItem{Name: val.Name, Id: index})
 			log.Debug().
 				Str("repository", repo).
-				Int("release id", releaseId).
+				Int("release id", criteria.ReleaseId).
 				Str("asset name", val.Name).
 				Int("asset index (id)", index).
 				Msg("got release asset")
@@ -172,18 +187,18 @@ func AssetSelector(ghClient GithubClient, repo string,
 		if requestPath, hasNextPage = findNextPage(response); !hasNextPage {
 			log.Debug().
 				Str("repository", repo).
-				Int("release id", releaseId).
+				Int("release id", criteria.ReleaseId).
 				Msg("end of asset list")
 			break
 		}
 		log.Debug().
 			Str("repository", repo).
-			Int("release id", releaseId).
+			Int("release id", criteria.ReleaseId).
 			Msg("getting next page of release assets")
 		page++
 	}
 
-	if interactive {
+	if criteria.Interactive {
 		return &InteractiveSelector{
 			Kind:  Asset,
 			Items: items,
@@ -194,8 +209,8 @@ func AssetSelector(ghClient GithubClient, repo string,
 	}
 
 	var namesMatcher []string
-	if name != "" {
-		namesMatcher = []string{name}
+	if criteria.Name != "" {
+		namesMatcher = []string{criteria.Name}
 	}
 
 	return &Selector{
@@ -203,54 +218,54 @@ func AssetSelector(ghClient GithubClient, repo string,
 		Items: items,
 
 		NamesMatcher:     namesMatcher,
-		RegexpMatchers:   matchers,
+		RegexpMatchers:   criteria.Regexps,
 		Single:           true,
-		AllowForeignArch: allowForeignArch,
+		AllowForeignArch: criteria.AllowForeignArch,
 	}, nil
 }
 
-func BinarySelector(downloadPath string, names []string, matcher string, interactive bool, nativeExtract bool) (ISelector, error) {
+func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 	log.Info().
-		Str("asset download path", downloadPath).
-		Strs("asset matching binary names", names).
-		Str("asset matching binary regexp", matcher).
+		Str("asset download path", criteria.DownloadPath).
+		Strs("asset matching binary names", criteria.Names).
+		Str("asset matching binary regexp", criteria.Matcher).
 		Msg("getting release asset binaries")
 
-	inputStream, err := os.Open(downloadPath)
+	inputStream, err := os.Open(criteria.DownloadPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var items []*SelectorItem
-	lowerPath := strings.ToLower(downloadPath)
+	lowerPath := strings.ToLower(criteria.DownloadPath)
 	isNativePkg := strings.HasSuffix(lowerPath, ".pkg.tar.zst") || strings.HasSuffix(lowerPath, ".pkg.tar.xz") || strings.HasSuffix(lowerPath, ".deb") || strings.HasSuffix(lowerPath, ".rpm") || strings.HasSuffix(lowerPath, ".msi") || strings.HasSuffix(lowerPath, ".dmg") || strings.HasSuffix(lowerPath, ".pkg")
 	isTarball := strings.HasSuffix(lowerPath, ".tar.gz") || strings.HasSuffix(lowerPath, ".tgz")
 	isZip := strings.HasSuffix(lowerPath, ".zip")
 
 	if isNativePkg {
 		err = archiver.ErrNoMatch
-	} else if nativeExtract && (isTarball || isZip) {
+	} else if criteria.NativeExtract && (isTarball || isZip) {
 		log.Info().Msg("delegating archive extraction to native OS utilities for maximum performance")
 		extractDir, _ := os.MkdirTemp("", "gh-ext-")
 		extracted := false
 		if isZip {
-			if err := exec.Command("unzip", "-q", downloadPath, "-d", extractDir).Run(); err == nil {
+			if err := exec.Command("unzip", "-q", criteria.DownloadPath, "-d", extractDir).Run(); err == nil {
 				extracted = true
-			} else if err := exec.Command("7z", "x", downloadPath, "-o"+extractDir, "-y").Run(); err == nil {
+			} else if err := exec.Command("7z", "x", criteria.DownloadPath, "-o"+extractDir, "-y").Run(); err == nil {
 				extracted = true
-			} else if err := exec.Command("tar", "-xf", downloadPath, "-C", extractDir).Run(); err == nil {
+			} else if err := exec.Command("tar", "-xf", criteria.DownloadPath, "-C", extractDir).Run(); err == nil {
 				extracted = true
 			}
 		} else {
-			if err := exec.Command("tar", "-xzf", downloadPath, "-C", extractDir).Run(); err == nil {
+			if err := exec.Command("tar", "-xzf", criteria.DownloadPath, "-C", extractDir).Run(); err == nil {
 				extracted = true
 			} else {
 				if runtime.GOOS == "windows" {
-					if err := exec.Command("cmd", "/c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", downloadPath, extractDir)).Run(); err == nil {
+					if err := exec.Command("cmd", "/c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", criteria.DownloadPath, extractDir)).Run(); err == nil {
 						extracted = true
 					}
 				} else {
-					if err := exec.Command("sh", "-c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", downloadPath, extractDir)).Run(); err == nil {
+					if err := exec.Command("sh", "-c", fmt.Sprintf("7z x %s -so | 7z x -si -ttar -o%s -y", criteria.DownloadPath, extractDir)).Run(); err == nil {
 						extracted = true
 					}
 				}
@@ -269,7 +284,7 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 				}
 				return nil
 			})
-			if interactive {
+			if criteria.Interactive {
 				return &InteractiveSelector{
 					Kind:   Binary,
 					Items:  items,
@@ -280,27 +295,27 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 			return &Selector{
 				Kind:           Binary,
 				Items:          items,
-				NamesMatcher:   names,
-				RegexpMatchers: []string{matcher},
+				NamesMatcher:   criteria.Names,
+				RegexpMatchers: []string{criteria.Matcher},
 				Single:         false,
 			}, nil
 		}
 		log.Warn().Msg("native extraction failed, falling back to pure Go archiver")
-		_, _, err = archiver.Identify(downloadPath, inputStream)
+		_, _, err = archiver.Identify(criteria.DownloadPath, inputStream)
 	} else {
-		_, _, err = archiver.Identify(downloadPath, inputStream)
+		_, _, err = archiver.Identify(criteria.DownloadPath, inputStream)
 	}
 
 	if err != nil {
 		if err == archiver.ErrNoMatch {
 			items = append(items, &SelectorItem{
-				Name:         filepath.Base(downloadPath),
+				Name:         filepath.Base(criteria.DownloadPath),
 				Compressed:   false,
-				BinaryType:   BinaryTypeFromPath(downloadPath),
-				DownloadPath: downloadPath,
+				BinaryType:   BinaryTypeFromPath(criteria.DownloadPath),
+				DownloadPath: criteria.DownloadPath,
 			})
 
-			if interactive {
+			if criteria.Interactive {
 				return &InteractiveSelector{
 					Kind:   Binary,
 					Items:  items,
@@ -312,15 +327,15 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 			return &Selector{
 				Kind:           Binary,
 				Items:          items,
-				NamesMatcher:   names,
-				RegexpMatchers: []string{regexp.QuoteMeta(filepath.Base(downloadPath))},
+				NamesMatcher:   criteria.Names,
+				RegexpMatchers: []string{regexp.QuoteMeta(filepath.Base(criteria.DownloadPath))},
 				Single:         true,
 			}, nil
 		}
 		return nil, err
 	}
 
-	fileSystem, err := archiver.FileSystem(context.TODO(), downloadPath)
+	fileSystem, err := archiver.FileSystem(context.TODO(), criteria.DownloadPath)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +359,7 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 		return nil, err
 	}
 
-	if interactive {
+	if criteria.Interactive {
 		return &InteractiveSelector{
 			Kind:   Binary,
 			Items:  items,
@@ -356,8 +371,8 @@ func BinarySelector(downloadPath string, names []string, matcher string, interac
 	return &Selector{
 		Kind:           Binary,
 		Items:          items,
-		NamesMatcher:   names,
-		RegexpMatchers: []string{matcher},
+		NamesMatcher:   criteria.Names,
+		RegexpMatchers: []string{criteria.Matcher},
 		Single:         false,
 	}, nil
 }

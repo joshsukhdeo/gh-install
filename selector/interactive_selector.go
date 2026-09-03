@@ -1,6 +1,8 @@
 package selector
 
 import (
+	"fmt"
+
 	"atomicgo.dev/keyboard/keys"
 	"github.com/pterm/pterm"
 )
@@ -44,7 +46,10 @@ func (s *InteractiveSelector) showPrompt() ([]string, error) {
 func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 	selectedNames, err := s.showPrompt()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("interactive prompt failed: %w", err)
+	}
+	if len(selectedNames) == 0 {
+		return nil, fmt.Errorf("no items were selected")
 	}
 
 	var selectedItems []*SelectorItem
@@ -55,6 +60,10 @@ func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 				break
 			}
 		}
+	}
+
+	if len(selectedItems) == 0 {
+		return nil, fmt.Errorf("could not match selected items with internal list")
 	}
 
 	return selectedItems, nil

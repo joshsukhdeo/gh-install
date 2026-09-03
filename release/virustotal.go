@@ -81,7 +81,7 @@ RetryVT:
 				if cfg == nil {
 					cfg = &config.Config{}
 				}
-				cfg.VTApiKey = apiKey
+				cfg.Core.VTApiKey = apiKey
 				_ = config.SaveConfig(cfg)
 				goto RetryVT
 			}
