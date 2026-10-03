@@ -1,0 +1,3 @@
+# Check that gh-pt runs and prints help
+exec gh-pt --help
+stdout 'Install binaries for a Github repository release'

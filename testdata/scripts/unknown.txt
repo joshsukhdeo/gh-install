@@ -1,0 +1,4 @@
+
+
+! exec gh-pt blarg
+stderr 'unknown command or invalid repository format'

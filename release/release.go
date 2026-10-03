@@ -178,13 +178,13 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 	if r.CliParams == nil {
 		return ""
 	}
-	
+
 	mode := r.CliParams.IncludeSidecars
 	if mode == "" {
 		// Default to xdg_data_home for backward compatibility
 		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", r.CliParams.Repository)
 	}
-	
+
 	// Parse the mode
 	switch {
 	case mode == "same_dest":
@@ -1449,11 +1449,18 @@ func (r *GithubRelease) Install() error {
 			inState = true
 			prevVersion = app.Version
 			if app.TargetPath != "" {
-				// Assume already installed if target path exists and it's in state.
-				// We do a fast stat on the directory or binary if we know it.
-				// For simplicity, checking if the path exists:
-				if _, err := os.Stat(app.TargetPath); err == nil {
-					alreadyInstalled = true
+				alreadyInstalled = true
+				if len(app.InstalledBinaries) > 0 {
+					for _, name := range app.InstalledBinaries {
+						if _, err := os.Stat(filepath.Join(app.TargetPath, name)); err != nil {
+							alreadyInstalled = false
+							break
+						}
+					}
+				} else {
+					if fi, err := os.Stat(app.TargetPath); err != nil || !fi.IsDir() {
+						alreadyInstalled = false
+					}
 				}
 			}
 		}
@@ -1547,6 +1554,42 @@ func (r *GithubRelease) Install() error {
 		strictRegexes = append(strictRegexes, strictRegex)
 	}
 	r.CliParams.ReleaseAssetRegexp = strings.Join(strictRegexes, " | ")
+
+	// Early check if the expected destination already exists to fail fast
+	if len(assets) > 0 {
+		isSystem := false
+		for _, asset := range assets {
+			bt := selector.BinaryTypeFromPath(asset.Name)
+			if bt == selector.BinaryDebInstaller || bt == selector.BinaryRpmInstaller || bt == selector.BinaryPacmanInstaller || bt == selector.BinaryPkgInstaller || bt == selector.BinaryMacInstaller || bt == selector.BinaryWindowsInstaller {
+				isSystem = true
+				break
+			}
+		}
+
+		if !isSystem {
+			expectedCleanName := filepath.Base(r.CliParams.Repository)
+			if !strings.Contains(assets[0].Name, "tar") && !strings.HasSuffix(assets[0].Name, ".zip") && !strings.HasSuffix(assets[0].Name, ".7z") {
+				expectedCleanName = GenerateCleanName(assets[0].Name, r.CliParams.Repository, releases[0].Name)
+			}
+			if len(r.CliParams.Rename) > 0 {
+				if val, ok := r.CliParams.Rename[expectedCleanName]; ok {
+					expectedCleanName = val
+				}
+			}
+			expectedDestPath := filepath.Join(r.CliParams.TargetPath, expectedCleanName)
+
+			if fi, err := os.Stat(expectedDestPath); err == nil && !fi.IsDir() {
+				if r.CliParams.Interactive {
+					if !r.interactiveConfirm(fmt.Sprintf("'%s' already exists. Overwrite?", expectedDestPath)) {
+						return fmt.Errorf("%s already exists and user did not want to overwrite", expectedDestPath)
+					}
+					r.CliParams.Overwrite = true
+				} else if !r.CliParams.Overwrite {
+					return fmt.Errorf("%s already exists and -f/--force is not set", expectedDestPath)
+				}
+			}
+		}
+	}
 
 	downloadDir, err := os.MkdirTemp("", "*")
 	if err != nil {

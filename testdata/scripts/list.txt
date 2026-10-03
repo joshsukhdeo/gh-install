@@ -1,0 +1,43 @@
+env XDG_DATA_HOME=$WORK/data
+
+# 1. Empty state
+exec gh-pt ls
+stdout 'No applications are currently managed by gh-pt'
+
+# 2. Add fake state
+mkdir -p $WORK/data/gh-pt
+cp state.json $WORK/data/gh-pt/state.json
+
+# 3. List short format
+exec gh-pt ls
+stdout 'test/app'
+stdout 'v1.0.0'
+stdout '/usr/local/bin'
+
+# 4. List long format
+exec gh-pt ll
+stdout 'test/app'
+stdout 'binary/archive'
+stdout 'v1.0.0'
+
+# 5. List with filter
+exec gh-pt ls test
+stdout 'test/app'
+
+# 6. List with non-matching filter
+exec gh-pt ls notfound
+! stdout 'test/app'
+
+-- state.json --
+{
+  "version": 2,
+  "apps": {
+    "test/app": {
+      "repository": "test/app",
+      "version": "v1.0.0",
+      "target_path": "/usr/local/bin",
+      "global": false,
+      "disabled": false
+    }
+  }
+}

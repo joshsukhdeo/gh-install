@@ -1,0 +1,6 @@
+id: no-panic
+message: Avoid using panic in production code. Return an error instead.
+severity: warning
+language: go
+rule:
+  pattern: panic($MSG)

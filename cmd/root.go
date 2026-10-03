@@ -200,18 +200,7 @@ func (r *RootCLI) RunInstall() error {
 		r.Prerelease = false
 	}
 
-	if r.Global || r.UpdateAll || (r.Update && r.Global) {
-		// Always run sudo -v to refresh/establish the credential cache.
-		// sudo -n true only checks without extending the timestamp, which can
-		// expire mid-download before installBinary needs it.
-		cmd := exec.Command("sudo", "-v")
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Warn("sudo authentication failed or cancelled; elevated operations may fail")
-		}
-	}
+
 
 	if r.ResolveDeps && r.NoDeps {
 		r.ResolveDeps = false
@@ -259,6 +248,24 @@ func (r *RootCLI) RunInstall() error {
 			}
 		default:
 			r.TargetPath = "/usr/local/bin"
+		}
+	}
+
+	if !r.Global && os.Getuid() != 0 {
+		var localTypes []string
+		for _, t := range r.Type {
+			switch t {
+			case "deb", "rpm", "pacman", "pkg", "mac", "msi":
+				// These formats implicitly trigger global installation routines
+				// (e.g. sudo apt install, sudo dnf install, etc).
+				continue
+			default:
+				localTypes = append(localTypes, t)
+			}
+		}
+		// Only apply the filter if it leaves us with at least one valid type to search for.
+		if len(localTypes) > 0 {
+			r.Type = localTypes
 		}
 	}
 
@@ -325,6 +332,10 @@ func (r *RootCLI) RunInstall() error {
 
 	if r.Repository == "" {
 		return fmt.Errorf("repository argument is required for installation")
+	}
+
+	if !strings.Contains(r.Repository, "/") && !strings.HasPrefix(r.Repository, "http") {
+		return fmt.Errorf("unknown command or invalid repository format: '%s' (expected owner/repo)", r.Repository)
 	}
 
 	if r.AI && r.AISafetyScan {
@@ -447,24 +458,6 @@ func resolveRepoPath(repo string, isClone, isFork bool, clonePath, forkPath stri
 	}
 
 	return ""
-}
-
-// resolveProgressBarMode determines the progress bar mode from CLI, env, config, or auto-detect.
-// Precedence: CLI flag > env var > config > auto-detect (TTY→pacman, non-TTY→none).
-func resolveProgressBarMode(cliFlag, envVar, configVal string, isTTY bool) params.ProgressBarMode {
-	if cliFlag != "" {
-		return params.ProgressBarMode(cliFlag)
-	}
-	if envVar != "" {
-		return params.ProgressBarMode(envVar)
-	}
-	if configVal != "" {
-		return params.ProgressBarMode(configVal)
-	}
-	if isTTY {
-		return params.ProgressBarPacman
-	}
-	return params.ProgressBarNone
 }
 
 func buildCloneOrForkArgs(repo string, isFork bool, targetDir string, maxDepth int) []string {
@@ -879,8 +872,8 @@ func (r *RootCLI) moveDistWithSidecarDetection(srcDir, dstDir string) ([]string,
 				}
 				if !ok || app == nil {
 					app = &state.InstalledApp{
-						Repository:        r.Repository,
-						TargetPath:        dstDir,
+						Repository: r.Repository,
+						TargetPath: dstDir,
 					}
 					st.Apps[r.Repository] = app
 				}

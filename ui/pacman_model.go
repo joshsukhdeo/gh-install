@@ -37,9 +37,6 @@ type Model struct {
 
 	// Physics
 	spring harmonica.Spring
-	pos    float64
-	vel    float64
-	target float64
 
 	// Terminal
 	width  int
@@ -214,11 +211,11 @@ func (m *Model) renderHeaderAnimation() string {
 
 	for i, elem := range elements {
 		if i > 0 {
-			sb.WriteString(fmt.Sprintf(" %s %s %s ", dot, dot, dot))
+			fmt.Fprintf(&sb, " %s %s %s ", dot, dot, dot)
 		}
 
 		if i < m.headerEaten {
-			sb.WriteString(fmt.Sprintf("%s %s", elem.icon, elem.text))
+			fmt.Fprintf(&sb, "%s %s", elem.icon, elem.text)
 		} else if i == m.headerEaten {
 			eaten := m.dotsEaten
 			if eaten > 3 {
@@ -230,11 +227,11 @@ func (m *Model) renderHeaderAnimation() string {
 			for j := 0; j < rem; j++ {
 				sb.WriteString(dot)
 			}
-			sb.WriteString(fmt.Sprintf(" %s %s", elem.icon, elem.text))
+			fmt.Fprintf(&sb, " %s %s", elem.icon, elem.text)
 			break
 		} else {
-			sb.WriteString(fmt.Sprintf("%s %s %s ", dot, dot, dot))
-			sb.WriteString(fmt.Sprintf("%s %s", elem.icon, elem.text))
+			fmt.Fprintf(&sb, "%s %s %s ", dot, dot, dot)
+			fmt.Fprintf(&sb, "%s %s", elem.icon, elem.text)
 		}
 	}
 
@@ -327,7 +324,7 @@ func (m *Model) renderAssets() string {
 			}
 			sb.WriteString(" ")
 		} else {
-			sb.WriteString(fmt.Sprintf("%s%s%s ", dot, dot, dot))
+			fmt.Fprintf(&sb, "%s%s%s ", dot, dot, dot)
 		}
 
 		sb.WriteString(assetPart)

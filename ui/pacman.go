@@ -125,15 +125,15 @@ type PacmanModel struct {
 // NewPacmanModel creates a new pacman animation model.
 func NewPacmanModel(repo string) *PacmanModel {
 	return &PacmanModel{
-		Repo:            repo,
-		Version:         "?",
-		Archive:         "?",
-		Target:          "?",
-		Assets:          []AssetInfo{},
-		TrackWidth:      28,
-		Spring:          harmonica.NewSpring(harmonica.FPS(60), 5.0, 1.0),
-		Width:           80,
-		Height:          24,
+		Repo:       repo,
+		Version:    "?",
+		Archive:    "?",
+		Target:     "?",
+		Assets:     []AssetInfo{},
+		TrackWidth: 28,
+		Spring:     harmonica.NewSpring(harmonica.FPS(60), 5.0, 1.0),
+		Width:      80,
+		Height:     24,
 		pacmanStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("226")).
 			Bold(true),

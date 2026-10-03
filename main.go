@@ -17,12 +17,16 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	// Preprocess args to add defaults for show flags without values
 	preprocessShowArgs()
 
 	if _, err := exec.LookPath("gh"); err != nil {
 		fmt.Fprintln(os.Stderr, "Error: GitHub CLI ('gh') is not installed or not in PATH. It is required for gh-pt. Please install it from https://cli.github.com/")
-		os.Exit(1)
+		return 1
 	}
 
 	if len(os.Args) == 1 {
@@ -76,7 +80,7 @@ func main() {
 	if cli.Test {
 		importJsonBytes, _ := json.MarshalIndent(cli, "", "  ")
 		fmt.Println(string(importJsonBytes))
-		os.Exit(0)
+		return 0
 	}
 
 	err = cmd.RunCommand(ctx.Command(), &cli)
@@ -86,8 +90,9 @@ func main() {
 		} else {
 			fmt.Fprintf(os.Stderr, "\033[31mError: %v\033[0m\n", err)
 		}
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // preprocessShowArgs adds default values to show flags when used without values.

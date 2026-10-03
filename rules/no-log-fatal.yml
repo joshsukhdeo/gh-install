@@ -1,0 +1,6 @@
+id: no-log-fatal
+message: Avoid using log.Fatal. Return an error instead, or use pterm.Fatal.Println in main.go
+severity: warning
+language: go
+rule:
+  pattern: log.Fatal($$$ARGS)

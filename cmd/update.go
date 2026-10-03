@@ -421,6 +421,9 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			appParams.Sidecars = app.Sidecars
 			appParams.SidecarSymlinkTo = app.SidecarSymlinkTo
 			appParams.IncludeSidecars = app.IncludeSidecars
+			if app.SymlinkDir != "" || appParams.IncludeSidecars != "" {
+				appParams.Symlink = true
+			}
 			appParams.EnvInject = app.EnvInject
 			appParams.FallbackReleases = app.FallbackReleases
 			appParams.ReleaseVersion = "latest"

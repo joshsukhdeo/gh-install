@@ -12,9 +12,9 @@ import (
 	"strings"
 
 	"github.com/adrg/xdg"
+	"github.com/charmbracelet/glamour"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/joshsukhdeo/gh-pt/state"
-	"github.com/charmbracelet/glamour"
 	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
 	"golang.org/x/term"
@@ -69,7 +69,9 @@ var downloadRawFile = func(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to download from %s: HTTP %d", url, resp.StatusCode)
 	}
@@ -199,7 +201,7 @@ func (r *RootCLI) handleShowWithClient(client ghRestClient) error {
 	}
 	if app == nil {
 		app = &state.InstalledApp{
-			Repository:        repo,
+			Repository: repo,
 		}
 		st.Apps[repo] = app
 	}

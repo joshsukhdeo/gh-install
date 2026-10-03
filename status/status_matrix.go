@@ -81,10 +81,18 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 				}
 			}
 		} else {
-			if s.InState {
-				return "⚠️ABORTION ~ ZEROGRADE REINSTALL subverted⚠️ => To avoid these abortions going forward, pass the -f or --force param to allow over-writing", fmt.Errorf("warning: Zerograde reinstall subverted")
+			if s.AlreadyInstalled {
+				if s.InState {
+					return "⚠️ABORTION ~ ZEROGRADE REINSTALL subverted⚠️ => To avoid these abortions going forward, pass the -f or --force param to allow over-writing", fmt.Errorf("warning: Zerograde reinstall subverted")
+				} else {
+					return "⚠️ABORTION ~ ADOPT + ZEROGRADE REINSTALL subverted⚠️ => To avoid these abortions going forward, pass the -f or --force param to allow over-writing", fmt.Errorf("warning: Adopt + Zerograde reinstall subverted")
+				}
 			} else {
-				return "⚠️ABORTION ~ ADOPT + ZEROGRADE REINSTALL subverted⚠️ => To avoid these abortions going forward, pass the -f or --force param to allow over-writing", fmt.Errorf("warning: Adopt + Zerograde reinstall subverted")
+				if s.InState {
+					return "RESTORING MISSING FILES", nil
+				} else {
+					return "ADOPTING & RESTORING", nil
+				}
 			}
 		}
 	} else if comp > 0 { // UPGRADE

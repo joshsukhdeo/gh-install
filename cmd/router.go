@@ -33,6 +33,7 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		}
 		return RemoveApp(cli.Rm.Target, cli.Rm.Purge)
 	case "upgrade", "upgrade <repository>":
+		r.CommonInstallFlags = cli.Upgrade.CommonInstallFlags
 		r.Repository = cli.Upgrade.Repository
 		if !cli.Upgrade.User && !cli.Upgrade.Global {
 			r.UpdateAll = true

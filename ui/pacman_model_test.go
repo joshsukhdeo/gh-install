@@ -201,7 +201,7 @@ func TestModel_KeyboardQuit(t *testing.T) {
 
 	// Test 'esc' key
 	model, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m = model.(*Model)
+	_ = model.(*Model)
 
 	if cmd == nil {
 		t.Error("expected quit command for 'esc' key")

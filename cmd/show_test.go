@@ -414,7 +414,7 @@ func TestCliParams_ShowStruct(t *testing.T) {
 	assert.Equal(t, "v1.0.0", cli.Show.Version)
 	assert.True(t, cli.Show.DiscoverSidecars)
 
-	var cmd params.ShowCmd = cli.Show
+	cmd := cli.Show
 	assert.Equal(t, "owner/repo", cmd.Repository)
 }
 
@@ -871,8 +871,8 @@ func TestShowInfo_StableFlag_OverridesConfigPrerelease(t *testing.T) {
 
 	r := &RootCLI{
 		ExecContext: params.ExecContext{
-			Repository: "owner/repo",
-			ShowAssets: 50,
+			Repository:         "owner/repo",
+			ShowAssets:         50,
 			CommonInstallFlags: params.CommonInstallFlags{Stable: true},
 		},
 	}
@@ -901,8 +901,8 @@ func TestShowInfo_PrereleaseFlag_AssetsFromLatestPrerelease(t *testing.T) {
 
 	r := &RootCLI{
 		ExecContext: params.ExecContext{
-			Repository: "owner/repo",
-			ShowAssets: 50,
+			Repository:         "owner/repo",
+			ShowAssets:         50,
 			CommonInstallFlags: params.CommonInstallFlags{Prerelease: true},
 		},
 	}
