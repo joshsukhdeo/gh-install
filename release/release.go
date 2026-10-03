@@ -995,6 +995,10 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 					return fmt.Errorf("permission denied and user aborted sudo installation")
 				}
 			}
+			if r.UI != nil {
+				r.UI.Pause()
+				defer r.UI.Resume()
+			}
 			cmd := execCommand("sudo", "install", "-m", "755", binaryPath, destinationPath)
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
@@ -1124,6 +1128,20 @@ func getScore(name string, types []string) int {
 	}
 
 	return score
+}
+
+func cleanAssetType(assetName string) string {
+	lower := strings.ToLower(assetName)
+	for _, compound := range []string{".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tar.lzma", ".pkg.tar.zst", ".pkg.tar.xz"} {
+		if strings.HasSuffix(lower, compound) {
+			return strings.TrimPrefix(compound, ".")
+		}
+	}
+	ext := strings.TrimPrefix(filepath.Ext(lower), ".")
+	if ext != "" {
+		return ext
+	}
+	return "binary"
 }
 
 // findChecksumFile looks for a checksum file in the release assets.
@@ -1466,13 +1484,35 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
+	sort.Slice(assets, func(i, j int) bool {
+		scoreI := getScore(assets[i].Name, r.CliParams.Type)
+		scoreJ := getScore(assets[j].Name, r.CliParams.Type)
+		return scoreI > scoreJ
+	})
+
+	// Determine the exact clean types of the chosen assets to save in state and use in status output.
+	// This ensures that when the state is saved, future updates will strictly seek this exact format
+	// and state never stores raw regex search patterns.
+	var exactTypes []string
+	seenTypes := make(map[string]bool)
+	for _, asset := range assets {
+		ct := cleanAssetType(asset.Name)
+		if !seenTypes[ct] {
+			seenTypes[ct] = true
+			exactTypes = append(exactTypes, ct)
+		}
+	}
+	if len(exactTypes) > 0 {
+		r.CliParams.Type = exactTypes
+	}
+
 	installState := status.InstallState{
 		InState:           inState,
 		AlreadyInstalled:  alreadyInstalled,
 		PrevVersion:       prevVersion,
 		NewVersion:        releases[0].Name,
 		AppName:           r.CliParams.Repository,
-		Type:              strings.Join(r.CliParams.Type, ","),
+		Type:              cleanAssetType(assets[0].Name),
 		Repo:              r.CliParams.Repository,
 		AssetName:         assets[0].Name,
 		Force:             r.CliParams.Overwrite,
@@ -1505,46 +1545,6 @@ func (r *GithubRelease) Install() error {
 			}
 		}
 		pUI.Update(2, "", assets[0].Name, "", "", ghostType)
-	}
-	// -----------------------------
-
-	sort.Slice(assets, func(i, j int) bool {
-		scoreI := getScore(assets[i].Name, r.CliParams.Type)
-		scoreJ := getScore(assets[j].Name, r.CliParams.Type)
-		return scoreI > scoreJ
-	})
-
-	// Filter r.CliParams.Type down to only the formats that actually matched our chosen assets.
-	// This ensures that when the state is saved, future updates will strictly seek this exact format.
-	var matchedTypes []string
-	for _, asset := range assets {
-		for _, t := range r.CliParams.Type {
-			originalT := t
-			tLower := strings.ToLower(strings.TrimSpace(t))
-			if tLower == "none" {
-				if !strings.Contains(filepath.Base(asset.Name), ".") {
-					matchedTypes = append(matchedTypes, originalT)
-					break
-				}
-			} else if tLower != "" {
-				if matched, _ := regexp.MatchString(`(?i)\.`+tLower+`$`, asset.Name); matched {
-					matchedTypes = append(matchedTypes, originalT)
-					break
-				}
-			}
-		}
-	}
-
-	if len(matchedTypes) > 0 {
-		seen := make(map[string]bool)
-		var finalTypes []string
-		for _, t := range matchedTypes {
-			if !seen[t] {
-				seen[t] = true
-				finalTypes = append(finalTypes, t)
-			}
-		}
-		r.CliParams.Type = finalTypes
 	}
 
 	// Generate strict regexes for the chosen assets to lock them down for future updates
@@ -1965,6 +1965,17 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
+	// Finish and stop progress UI before invoking package managers or interactive installers,
+	// so the terminal is completely released and clean for package manager prompts and output.
+	if len(r.PendingDebs) > 0 || len(r.PendingRpms) > 0 {
+		if pUI != nil {
+			pUI.Update(5, "", "", "", "", "")
+			pUI.WaitForAnimation()
+			pUI.Stop()
+			pUI = nil
+		}
+	}
+
 	if len(r.PendingDebs) > 0 {
 		if err := r.ensureSudo(); err != nil {
 			return err
@@ -1981,7 +1992,7 @@ func (r *GithubRelease) Install() error {
 		var args []string
 		if r.CliParams.NoDeps {
 			args = append([]string{"dpkg", "-i"}, baseDebs...)
-		} else if r.CliParams.ResolveDeps {
+		} else if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
 			args = append([]string{"apt-get", "install", "-y"}, baseDebs...)
 		} else {
 			args = append([]string{"apt-get", "install"}, baseDebs...)
@@ -2020,7 +2031,7 @@ func (r *GithubRelease) Install() error {
 		var args []string
 		if r.CliParams.NoDeps {
 			args = append([]string{"rpm", "-i"}, baseRpms...)
-		} else if r.CliParams.ResolveDeps {
+		} else if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
 			args = append([]string{"dnf", "localinstall", "-y"}, baseRpms...)
 		} else {
 			args = append([]string{"dnf", "localinstall"}, baseRpms...)
@@ -2120,10 +2131,15 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 	var args []string
 	if r.CliParams.NoDeps {
 		args = []string{"pkg", "add", basePath}
-	} else if r.CliParams.ResolveDeps {
+	} else if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
 		args = []string{"pkg", "install", "-y", basePath}
 	} else {
 		args = []string{"pkg", "install", basePath}
+	}
+
+	if r.UI != nil {
+		r.UI.Pause()
+		defer r.UI.Resume()
 	}
 
 	if r.CliParams.Interactive {
@@ -2167,7 +2183,7 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 
 	var cmd *exec.Cmd
 	basePath := "./" + filepath.Base(binaryPath)
-	if r.CliParams.ResolveDeps {
+	if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
 		cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", basePath)
 	} else if r.CliParams.NoDeps {
 		cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", basePath)
@@ -2175,6 +2191,11 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 		cmd = execCommand("sudo", "pacman", "-U", basePath)
 	}
 	cmd.Dir = filepath.Dir(binaryPath)
+
+	if r.UI != nil {
+		r.UI.Pause()
+		defer r.UI.Resume()
+	}
 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

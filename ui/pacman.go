@@ -177,11 +177,16 @@ func (m *PacmanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case PacmanPauseMsg:
+		wasPaused := m.Paused
 		m.Paused = msg.Paused
+		if wasPaused && !m.Paused {
+			return m, pacmanTickCmd()
+		}
+		return m, nil
 
 	case PacmanTickMsg:
 		if m.Paused {
-			return m, pacmanTickCmd()
+			return m, nil
 		}
 
 		m.Frame++
@@ -303,6 +308,10 @@ func stageToProgress(stage int, currentAsset int, totalAssets int) float64 {
 
 // View implements tea.Model.
 func (m *PacmanModel) View() tea.View {
+	if m.Paused {
+		return tea.NewView("")
+	}
+
 	var sb strings.Builder
 
 	// Header line
@@ -574,6 +583,7 @@ func (p *PacmanUI) Start() {
 		p.model,
 		tea.WithOutput(p.output),
 		tea.WithoutSignalHandler(),
+		tea.WithInput(nil),
 	)
 	p.mu.Unlock()
 
@@ -617,6 +627,15 @@ func (p *PacmanUI) Stop() {
 
 	if prog != nil {
 		prog.Quit()
+		select {
+		case <-p.animationDone:
+		case <-time.After(1 * time.Second):
+		}
+		if p.output != nil {
+			_, _ = fmt.Fprintln(p.output)
+		} else {
+			fmt.Println()
+		}
 	}
 	p.signalAnimationDone()
 }

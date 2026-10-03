@@ -996,3 +996,34 @@ func TestInstallArchivedBinary_StaticDependencyResolution(t *testing.T) {
 	assert.Contains(t, mockMgr.InstallCalls[0], "zlib1g")
 	assert.Contains(t, gr.InstalledPackageNames, "zlib1g")
 }
+
+func TestCleanAssetType(t *testing.T) {
+	assert.Equal(t, "deb", cleanAssetType("OBS-Studio-33.0.0-beta6-Ubuntu-26.04-x86_64.deb"))
+	assert.Equal(t, "rpm", cleanAssetType("my-app-1.0.0.rpm"))
+	assert.Equal(t, "tar.gz", cleanAssetType("app_v1.0_linux_amd64.tar.gz"))
+	assert.Equal(t, "tar.xz", cleanAssetType("app_v1.0_linux_amd64.tar.xz"))
+	assert.Equal(t, "tar.zst", cleanAssetType("app_v1.0_linux_amd64.tar.zst"))
+	assert.Equal(t, "zip", cleanAssetType("app_windows.zip"))
+	assert.Equal(t, "appimage", cleanAssetType("App-x86_64.AppImage"))
+	assert.Equal(t, "binary", cleanAssetType("just_a_binary"))
+}
+
+func TestExactTypes_NoRegexInState(t *testing.T) {
+	assets := []*selector.SelectorItem{
+		{Name: "OBS-Studio-33.0.0-beta6-Ubuntu-26.04-x86_64.deb"},
+	}
+	var exactTypes []string
+	seenTypes := make(map[string]bool)
+	for _, asset := range assets {
+		ct := cleanAssetType(asset.Name)
+		if !seenTypes[ct] {
+			seenTypes[ct] = true
+			exactTypes = append(exactTypes, ct)
+		}
+	}
+	assert.Equal(t, []string{"deb"}, exactTypes)
+	assert.NotContains(t, exactTypes[0], "snap")
+	assert.NotContains(t, exactTypes[0], "tar")
+	assert.NotContains(t, exactTypes[0], "[")
+	assert.NotContains(t, exactTypes[0], "(")
+}

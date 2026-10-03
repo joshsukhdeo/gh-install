@@ -56,22 +56,22 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 
 	anyDowngradeFlag := s.AllowDowngrade || s.SelfInflictedDebt || s.LeRetrogrouch || s.RetrogradeStopgap || s.Barbarous
 
-	baseStr := fmt.Sprintf("%s->%s %s [%s] from %s [ %s", s.PrevVersion, s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
+	baseStr := fmt.Sprintf("%s -> %s %s [%s] from %s [ %s ]", s.PrevVersion, s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
 	if s.PrevVersion == "" {
-		baseStr = fmt.Sprintf("->%s %s [%s] from %s [ %s", s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
+		baseStr = fmt.Sprintf("-> %s %s [%s] from %s [ %s ]", s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
 	}
 
 	if !s.AlreadyInstalled && !s.InState {
-		return fmt.Sprintf("INSTALLED (%s )", baseStr), nil
+		return fmt.Sprintf("INSTALLED ( %s )", baseStr), nil
 	}
 
 	if comp == 0 { // ZEROGRADE
 		if s.Force {
 			if s.AlreadyInstalled {
 				if s.InState {
-					return fmt.Sprintf("REINSTALLED ~~> 🟰ZEROGRADE🟰 (%s )", baseStr), nil
+					return fmt.Sprintf("REINSTALLED ~~> 🟰ZEROGRADE🟰 ( %s )", baseStr), nil
 				} else {
-					return fmt.Sprintf("ADOPTED + REINSTALLED ~~> 🟰ZEROGRADE🟰 (%s )", baseStr), nil
+					return fmt.Sprintf("ADOPTED + REINSTALLED ~~> 🟰ZEROGRADE🟰 ( %s )", baseStr), nil
 				}
 			} else {
 				if s.InState {
@@ -97,9 +97,9 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 		}
 	} else if comp > 0 { // UPGRADE
 		if s.InState {
-			return fmt.Sprintf("REINSTALLED ~~> ✨UPGRADED✨ (%s )", baseStr), nil
+			return fmt.Sprintf("REINSTALLED ~~> ✨UPGRADED✨ ( %s )", baseStr), nil
 		} else {
-			return fmt.Sprintf("ADOPTED + REINSTALLED ~~> ✨UPGRADED✨ (%s )", baseStr), nil
+			return fmt.Sprintf("ADOPTED + REINSTALLED ~~> ✨UPGRADED✨ ( %s )", baseStr), nil
 		}
 
 	} else { // DOWNGRADE
@@ -118,9 +118,9 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 				}
 			} else {
 				if s.InState {
-					return fmt.Sprintf("⚠️REINSTALLED ~~> 💣DOWNGRADED💥⚠️ (%s->%s)", s.PrevVersion, s.NewVersion), nil
+					return fmt.Sprintf("⚠️REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s -> %s )", s.PrevVersion, s.NewVersion), nil
 				} else {
-					return fmt.Sprintf("⚠️ADOPTED + REINSTALLED ~~> 💣DOWNGRADED💥⚠️ (%s->%s)", s.PrevVersion, s.NewVersion), nil
+					return fmt.Sprintf("⚠️ADOPTED + REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s -> %s )", s.PrevVersion, s.NewVersion), nil
 				}
 			}
 		}
