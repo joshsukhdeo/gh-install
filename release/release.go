@@ -220,7 +220,19 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 	}
 }
 
+func isLicenseFileName(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return strings.HasPrefix(base, "license") ||
+		strings.HasPrefix(base, "licence") ||
+		strings.HasPrefix(base, "copying") ||
+		strings.Contains(base, "license") ||
+		strings.Contains(base, "licence")
+}
+
 func isSuspectedRemoteSidecar(name string) bool {
+	if isLicenseFileName(name) {
+		return false
+	}
 	lower := strings.ToLower(name)
 
 	// Filter out source code bundles
@@ -287,10 +299,8 @@ func isSuspectedLocalSidecar(relPath string, fileName string) bool {
 	lowerName := strings.ToLower(fileName)
 
 	// Filter out standard bloat: README*, LICENSE*, .md, doc/, src/
-	if strings.HasPrefix(lowerName, "readme") ||
-		strings.HasPrefix(lowerName, "license") ||
-		strings.HasPrefix(lowerName, "licence") ||
-		strings.HasPrefix(lowerName, "copying") {
+	if isLicenseFileName(fileName) || isLicenseFileName(relPath) ||
+		strings.HasPrefix(lowerName, "readme") {
 		return false
 	}
 
@@ -364,6 +374,9 @@ func (r *GithubRelease) handleSuspectedSidecars(suspected []string, extractDir s
 	}
 
 	for _, item := range selected {
+		if isLicenseFileName(item) {
+			continue
+		}
 		// Check if local file in extractDir
 		if extractDir != "" {
 			src := filepath.Join(extractDir, item)
@@ -437,7 +450,13 @@ func (r *GithubRelease) extractExplicitSidecars(extractDir string, fsObj fs.FS) 
 			if err != nil || info.IsDir() {
 				return nil
 			}
+			if isLicenseFileName(path) || isLicenseFileName(info.Name()) {
+				return nil
+			}
 			rel, _ := filepath.Rel(extractDir, path)
+			if isLicenseFileName(rel) {
+				return nil
+			}
 			if regex.MatchString(rel) {
 				matched = append(matched, rel)
 			}
@@ -449,6 +468,9 @@ func (r *GithubRelease) extractExplicitSidecars(extractDir string, fsObj fs.FS) 
 	} else if fsObj != nil {
 		err := fs.WalkDir(fsObj, ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
+				return nil
+			}
+			if isLicenseFileName(path) || isLicenseFileName(d.Name()) {
 				return nil
 			}
 			if regex.MatchString(path) {
@@ -1840,6 +1862,9 @@ func (r *GithubRelease) Install() error {
 				}
 
 				for _, item := range suspectedSidecars {
+					if isLicenseFileName(item) {
+						continue
+					}
 					// Deploy the sidecar
 					if extractDir != "" {
 						src := filepath.Join(extractDir, item)
@@ -2123,6 +2148,14 @@ func (r *GithubRelease) Install() error {
 		pUI.Update(5, "", "", "", "", "")
 		time.Sleep(500 * time.Millisecond) // Let the animation finish eating dots
 	}
+
+	var filteredSidecars []string
+	for _, sc := range r.InstalledSidecars {
+		if !isLicenseFileName(sc) {
+			filteredSidecars = append(filteredSidecars, sc)
+		}
+	}
+	r.InstalledSidecars = filteredSidecars
 
 	if !r.CliParams.NoSaveState && !r.CliParams.DryRun {
 		st, err := state.LoadState()

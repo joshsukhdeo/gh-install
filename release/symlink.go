@@ -249,6 +249,9 @@ func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
 		}
 
 		// Check if this file matches the sidecar regex
+		if isLicenseFileName(path) || isLicenseFileName(d.Name()) || isLicenseFileName(relPath) {
+			return nil
+		}
 		if regex.MatchString(relPath) || regex.MatchString(d.Name()) {
 			// This is a sidecar, symlink it to the destination
 			destPath := filepath.Join(sidecarDest, d.Name())
@@ -318,6 +321,9 @@ func (r *GithubRelease) symlinkLocalMap(symlinkDir string) error {
 
 		// Symlink each item directly in the directory
 		for _, entry := range entries {
+			if isLicenseFileName(entry.Name()) {
+				continue
+			}
 			srcPath := filepath.Join(srcDir, entry.Name())
 			destPath := filepath.Join(targetDir, entry.Name())
 
@@ -387,9 +393,9 @@ func (r *GithubRelease) getDefaultSidecarRegex(destPath string) string {
 		return `\.so.*|\.dll|\.dylib|\.exe$`
 	case strings.Contains(destPath, ".local/share") || strings.Contains(destPath, "xdg"):
 		// For XDG data home, match libraries, headers, configs, docs
-		return `\.so.*|\.h$|\.hpp$|\.c$|\.cpp$|\.txt$|README.*|LICENSE.*|\.md$|\.json$|\.yaml$|\.yml$|\.toml$|\.conf$`
+		return `\.so.*|\.h$|\.hpp$|\.c$|\.cpp$|\.txt$|README.*|\.md$|\.json$|\.yaml$|\.yml$|\.toml$|\.conf$`
 	default:
 		// Default pattern for custom paths
-		return `\.so.*|\.h$|\.dll|\.dylib|\.txt$|README.*|LICENSE.*`
+		return `\.so.*|\.h$|\.dll|\.dylib|\.txt$|README.*`
 	}
 }

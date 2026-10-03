@@ -3,6 +3,7 @@ package release
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/joshsukhdeo/gh-pt/params"
@@ -205,4 +206,60 @@ func TestSidecars_ConditionalRouting(t *testing.T) {
 		assert.False(t, prompter.MultiselectCalled)
 		assert.Empty(t, selected)
 	})
+}
+
+func TestSidecars_AlwaysExcludeLicense(t *testing.T) {
+	// 1. isLicenseFileName helper assertions
+	assert.True(t, isLicenseFileName("LICENSE"))
+	assert.True(t, isLicenseFileName("license"))
+	assert.True(t, isLicenseFileName("LICENSE.txt"))
+	assert.True(t, isLicenseFileName("LICENSE.md"))
+	assert.True(t, isLicenseFileName("LICENSE-MIT"))
+	assert.True(t, isLicenseFileName("LICENSE-APACHE"))
+	assert.True(t, isLicenseFileName("UNLICENSE"))
+	assert.True(t, isLicenseFileName("COPYING"))
+	assert.True(t, isLicenseFileName("/some/dir/LICENSE"))
+	assert.True(t, isLicenseFileName("LICENCE"))
+	assert.False(t, isLicenseFileName("mediamtx.yml"))
+	assert.False(t, isLicenseFileName("config.json"))
+	assert.False(t, isLicenseFileName("libplugin.so"))
+
+	// 2. Default sidecar regexes must NOT match LICENSE
+	gr := &GithubRelease{}
+	defaultRegex := gr.getDefaultSidecarRegex("/usr/local/bin")
+	assert.NotContains(t, defaultRegex, "LICENSE")
+	xdgRegex := gr.getDefaultSidecarRegex("/home/user/.local/share")
+	assert.NotContains(t, xdgRegex, "LICENSE")
+	customRegex := gr.getDefaultSidecarRegex("/opt/custom")
+	assert.NotContains(t, customRegex, "LICENSE")
+
+	// 3. extractExplicitSidecars with wildcard regex must exclude LICENSE
+	tmpDir := t.TempDir()
+	extractDir := filepath.Join(tmpDir, "extract")
+	targetDir := filepath.Join(tmpDir, "target")
+	require.NoError(t, os.MkdirAll(extractDir, 0755))
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "LICENSE"), []byte("license"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "LICENSE.txt"), []byte("license"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "plugin.so"), []byte("code"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "config.yml"), []byte("key: val"), 0644))
+
+	gr = &GithubRelease{
+		CliParams: &params.ExecContext{
+			CommonInstallFlags: params.CommonInstallFlags{
+				TargetPath: targetDir,
+				Sidecars:   ".*", // Wildcard matching everything
+			},
+			Repository: "owner/repo",
+		},
+	}
+
+	err := gr.extractExplicitSidecars(extractDir, nil)
+	require.NoError(t, err)
+
+	for _, sc := range gr.InstalledSidecars {
+		assert.NotContains(t, strings.ToLower(filepath.Base(sc)), "license", "LICENSE must never be in InstalledSidecars")
+	}
+	assert.Len(t, gr.InstalledSidecars, 2, "Only plugin.so and config.yml should be installed")
 }
