@@ -8,22 +8,27 @@ import (
 )
 
 type InstallState struct {
-	InState          bool
-	AlreadyInstalled bool
-	PrevVersion      string
-	NewVersion       string
-	AppName          string
-	Type             string
-	Repo             string
-	AssetName        string
-	Force            bool
-	AllowDowngrade   bool
+	InState           bool
+	AlreadyInstalled  bool
+	PrevVersion       string
+	NewVersion        string
+	AppName           string
+	Type              string
+	Repo              string
+	AssetName         string
+	Force             bool
+	AllowDowngrade    bool
 	// New downgrade flags
 	LeRetrogrouch     bool
 	RetrogradeStopgap bool
 	Barbarous         bool
 	SelfInflictedDebt bool
 	IsUpgradeCmd      bool
+
+	ExtractedAssets []string
+	ArchiveType     string
+	ArchiveName     string
+	Sidecars        []string
 }
 
 // CompareVersions returns 1 if new > prev, -1 if new < prev, 0 if new == prev
@@ -56,12 +61,40 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 
 	anyDowngradeFlag := s.AllowDowngrade || s.SelfInflictedDebt || s.LeRetrogrouch || s.RetrogradeStopgap || s.Barbarous
 
-	baseStr := fmt.Sprintf("%s -> %s %s [%s] from %s [ %s ]", s.PrevVersion, s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
-	if s.PrevVersion == "" {
-		baseStr = fmt.Sprintf("-> %s %s [%s] from %s [ %s ]", s.NewVersion, s.AppName, s.Type, s.Repo, s.AssetName)
+	var versionSegment string
+	if s.PrevVersion != "" {
+		versionSegment = fmt.Sprintf("%s -> %s", s.PrevVersion, s.NewVersion)
+	} else {
+		versionSegment = fmt.Sprintf("-> %s", s.NewVersion)
 	}
 
-	if !s.AlreadyInstalled && !s.InState {
+	var typeStr string
+	if s.ArchiveType != "" {
+		typeStr = fmt.Sprintf("%s/%s", s.ArchiveType, s.Type)
+	} else {
+		typeStr = s.Type
+	}
+
+	assetsStr := s.AppName
+	if len(s.ExtractedAssets) > 0 {
+		assetsStr = strings.Join(s.ExtractedAssets, ", ")
+	} else if s.AssetName != "" {
+		assetsStr = s.AssetName
+	}
+
+	var archiveStr string
+	if s.ArchiveName != "" {
+		archiveStr = fmt.Sprintf(" | %s", s.ArchiveName)
+	}
+
+	var sidecarStr string
+	if len(s.Sidecars) > 0 {
+		sidecarStr = fmt.Sprintf(" [sidecars: %s]", strings.Join(s.Sidecars, ", "))
+	}
+
+	baseStr := fmt.Sprintf("%s | %s [%s] from %s%s%s", versionSegment, assetsStr, typeStr, s.Repo, archiveStr, sidecarStr)
+
+	if !s.InState {
 		return fmt.Sprintf("INSTALLED ( %s )", baseStr), nil
 	}
 
@@ -118,9 +151,9 @@ func GenerateStatusMessage(s InstallState) (string, error) {
 				}
 			} else {
 				if s.InState {
-					return fmt.Sprintf("⚠️REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s -> %s )", s.PrevVersion, s.NewVersion), nil
+					return fmt.Sprintf("⚠️REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s )", baseStr), nil
 				} else {
-					return fmt.Sprintf("⚠️ADOPTED + REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s -> %s )", s.PrevVersion, s.NewVersion), nil
+					return fmt.Sprintf("⚠️ADOPTED + REINSTALLED ~~> 💣DOWNGRADED💥⚠️ ( %s )", baseStr), nil
 				}
 			}
 		}

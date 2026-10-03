@@ -259,6 +259,8 @@ func (m *PacmanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PacmanCompleteMsg:
 		m.Completed = true
 		m.ProgressTarget = 1.0
+		m.ProgressCurrent = 1.0
+		m.ProgressVel = 0
 		if msg.Message != "" {
 			m.StatusMsg = msg.Message
 		}

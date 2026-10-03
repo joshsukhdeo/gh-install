@@ -2,6 +2,7 @@ package release
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -1144,6 +1145,40 @@ func cleanAssetType(assetName string) string {
 	return "binary"
 }
 
+var semverExtractRegex = regexp.MustCompile(`(?i)\bv?([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[a-zA-Z0-9.+_-]+)?)\b`)
+
+func extractVersionFromString(s string) string {
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		matches := semverExtractRegex.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			ver := matches[1]
+			if strings.HasPrefix(strings.ToLower(matches[0]), "v") && !strings.HasPrefix(ver, "v") {
+				ver = "v" + ver
+			}
+			return ver
+		}
+	}
+	return ""
+}
+
+func probeBinaryVersion(binaryPath string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	for _, flag := range []string{"--version", "-version", "-v", "version"} {
+		cmd := exec.CommandContext(ctx, binaryPath, flag)
+		out, err := cmd.CombinedOutput()
+		if err == nil && len(out) > 0 {
+			ver := extractVersionFromString(string(out))
+			if ver != "" {
+				return ver
+			}
+		}
+	}
+	return ""
+}
+
 // findChecksumFile looks for a checksum file in the release assets.
 // Returns the asset name if found, empty string otherwise.
 func (r *GithubRelease) findChecksumFile(assets []*selector.SelectorItem) string {
@@ -1475,11 +1510,33 @@ func (r *GithubRelease) Install() error {
 							break
 						}
 					}
+					if prevVersion == "" && alreadyInstalled {
+						prevVersion = probeBinaryVersion(filepath.Join(app.TargetPath, app.InstalledBinaries[0]))
+					}
 				} else {
 					if fi, err := os.Stat(app.TargetPath); err != nil || !fi.IsDir() {
 						alreadyInstalled = false
 					}
 				}
+			}
+		}
+	}
+
+	if !inState && r.CliParams != nil && r.CliParams.TargetPath != "" {
+		expectedCleanName := filepath.Base(r.CliParams.Repository)
+		if len(assets) > 0 && !strings.Contains(assets[0].Name, "tar") && !strings.HasSuffix(assets[0].Name, ".zip") && !strings.HasSuffix(assets[0].Name, ".7z") {
+			expectedCleanName = GenerateCleanName(assets[0].Name, r.CliParams.Repository, releases[0].Name)
+		}
+		if len(r.CliParams.Rename) > 0 {
+			if val, ok := r.CliParams.Rename[expectedCleanName]; ok {
+				expectedCleanName = val
+			}
+		}
+		expectedDestPath := filepath.Join(r.CliParams.TargetPath, expectedCleanName)
+		if fi, err := os.Stat(expectedDestPath); err == nil && !fi.IsDir() {
+			alreadyInstalled = true
+			if prevVersion == "" {
+				prevVersion = probeBinaryVersion(expectedDestPath)
 			}
 		}
 	}
@@ -1844,6 +1901,14 @@ func (r *GithubRelease) Install() error {
 
 		if r.CliParams.Symlink {
 			if len(regularBinaries) > 0 {
+				if regularBinaries[0].Compressed || cleanAssetType(asset.Name) != "binary" {
+					r.ContainingArchive = asset.Name
+				}
+				for _, binary := range regularBinaries {
+					r.InstalledAssetFullNames = append(r.InstalledAssetFullNames, asset.Name)
+					cleanName := GenerateCleanName(binary.Name, r.CliParams.Repository, releases[0].Name)
+					r.InstalledAssetCleanNames = append(r.InstalledAssetCleanNames, cleanName)
+				}
 				symlinkDir, err := r.executeSymlinkInstall(regularBinaries, filepath.Join(downloadDir, asset.Name))
 				if err != nil {
 					return err
@@ -1955,7 +2020,7 @@ func (r *GithubRelease) Install() error {
 			r.InstalledAssetFullNames = append(r.InstalledAssetFullNames, asset.Name)
 			cleanName := GenerateCleanName(binary.Name, r.CliParams.Repository, releases[0].Name)
 			r.InstalledAssetCleanNames = append(r.InstalledAssetCleanNames, cleanName)
-			if binary.Compressed {
+			if binary.Compressed || cleanAssetType(asset.Name) != "binary" {
 				r.ContainingArchive = asset.Name
 			}
 		}
@@ -2091,6 +2156,45 @@ func (r *GithubRelease) Install() error {
 		} else {
 			log.Warn("could not save installed app state", "error", err)
 		}
+	}
+
+	// Update final install state with actually installed assets, sidecars, and archive details
+	finalState := installState
+	if len(r.InstalledBinaries) > 0 {
+		finalState.ExtractedAssets = r.InstalledBinaries
+	} else if len(r.InstalledPackageNames) > 0 {
+		finalState.ExtractedAssets = r.InstalledPackageNames
+	} else if len(r.InstalledAssetCleanNames) > 0 {
+		finalState.ExtractedAssets = r.InstalledAssetCleanNames
+	}
+
+	if r.ContainingArchive != "" {
+		finalState.ArchiveName = r.ContainingArchive
+		finalState.ArchiveType = cleanAssetType(r.ContainingArchive)
+		if len(r.InstalledPackageNames) > 0 {
+			finalState.Type = cleanAssetType(r.InstalledPackageNames[0])
+		} else {
+			finalState.Type = "binary"
+		}
+	}
+
+	if len(r.InstalledSidecars) > 0 {
+		var sidecarNames []string
+		for _, sc := range r.InstalledSidecars {
+			sidecarNames = append(sidecarNames, filepath.Base(sc))
+		}
+		finalState.Sidecars = sidecarNames
+	}
+
+	if finalState.PrevVersion == "" && len(r.InstalledBinaries) > 0 && r.CliParams != nil && r.CliParams.TargetPath != "" {
+		dest := filepath.Join(r.CliParams.TargetPath, r.InstalledBinaries[0])
+		if _, err := os.Stat(dest); err == nil {
+			finalState.PrevVersion = probeBinaryVersion(dest)
+		}
+	}
+
+	if finalMsg, err := status.GenerateStatusMessage(finalState); err == nil {
+		r.StatusMessage = finalMsg
 	}
 
 	// Wait for pacman animation to complete before showing final message

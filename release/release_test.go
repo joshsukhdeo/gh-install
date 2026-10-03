@@ -1027,3 +1027,13 @@ func TestExactTypes_NoRegexInState(t *testing.T) {
 	assert.NotContains(t, exactTypes[0], "[")
 	assert.NotContains(t, exactTypes[0], "(")
 }
+
+func TestExtractVersionFromString(t *testing.T) {
+	assert.Equal(t, "v1.21.1", extractVersionFromString("v1.21.1\n"))
+	assert.Equal(t, "v1.21.1", extractVersionFromString("mediamtx v1.21.1\n"))
+	assert.Equal(t, "0.15.1", extractVersionFromString("typst 0.15.1 (some commit)"))
+	assert.Equal(t, "33.0.0-beta6", extractVersionFromString("OBS Studio - 33.0.0-beta6 (linux)"))
+	if _, err := os.Stat("/usr/local/bin/mediamtx"); err == nil {
+		assert.Equal(t, "v1.21.1", probeBinaryVersion("/usr/local/bin/mediamtx"))
+	}
+}
