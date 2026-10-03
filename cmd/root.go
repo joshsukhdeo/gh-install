@@ -200,8 +200,6 @@ func (r *RootCLI) RunInstall() error {
 		r.Prerelease = false
 	}
 
-
-
 	if r.ResolveDeps && r.NoDeps {
 		r.ResolveDeps = false
 		r.NoDeps = false
@@ -250,8 +248,6 @@ func (r *RootCLI) RunInstall() error {
 			r.TargetPath = "/usr/local/bin"
 		}
 	}
-
-
 
 	ghClient, err := api.DefaultRESTClient()
 	if err != nil {

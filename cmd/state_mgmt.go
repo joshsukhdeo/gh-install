@@ -40,6 +40,31 @@ func truncatePath(s string, maxLen int) string {
 	return "..." + s[len(s)-maxLen+3:]
 }
 
+// wrapCell splits s into lines of at most width runes, preferring to break
+// after a natural separator (space, comma, slash, dash, underscore, dot).
+func wrapCell(s string, width int) string {
+	rs := []rune(s)
+	if width <= 0 || len(rs) <= width {
+		return s
+	}
+	var lines []string
+	for len(rs) > width {
+		cut := width
+		for i := width; i > width/2; i-- {
+			if strings.ContainsRune(" ,/-_.", rs[i-1]) {
+				cut = i
+				break
+			}
+		}
+		lines = append(lines, strings.TrimRight(string(rs[:cut]), " "))
+		rs = []rune(strings.TrimLeft(string(rs[cut:]), " "))
+	}
+	if len(rs) > 0 {
+		lines = append(lines, string(rs))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func ListState(rList ...*RootCLI) error {
 	var r *RootCLI
 	if len(rList) > 0 && rList[0] != nil {
@@ -59,20 +84,14 @@ func ListState(rList ...*RootCLI) error {
 	}
 
 	filterVal := r.Ls
-	isLongFormat := false
 	if r.Ll != "" && r.Ll != "false" {
-		isLongFormat = true
 		filterVal = r.Ll
 	}
 
 	var headers []string
-	if isLongFormat {
-		headers = []string{"Repository", "Type", "Version", "InstallName", "Location", "Pinned", "Checksum", "VirusTotal", "CompressedExtractionTarget", "KeepSuffixes", "Wine", "AllowForeignArch", "ExtractorPrecedence", "RenameBinaryTo", "CompileScriptLocation", "InstallDate", "LastUpdated", "LastChecked"}
+	if r.Full {
+		headers = []string{"Repository", "Version", "Type", "Scope", "Auto-Update", "Target Path", "Binaries", "Asset", "Symlink", "Extractor", "Script", "Sidecars", "Last VT Scan"}
 	} else {
-		headers = []string{"Repository", "Type", "Version", "InstallAssetNames", "Location", "Pinned", "Checksums", "VirusTotal", "CompressedExtractionTarget", "KeepSuffixes", "Wine", "AllowForeignArch", "ExtractorPrecedence", "RenameBinaryTo", "CompileScriptLocation", "InstallDate", "LastUpdated", "LastChecked"}
-	}
-
-	if !r.Full {
 		headers = []string{"Repository", "Version", "Type", "Scope", "Auto-Update", "Target Path", "Helper Script"}
 	}
 
@@ -89,23 +108,16 @@ func ListState(rList ...*RootCLI) error {
 
 		// Apply filters
 		if filterVal != "" && filterVal != "true" && filterVal != "false" && filterVal != "*" {
-			// very naive filter, could be regex, but strings.Contains is a good start
 			if !strings.Contains(repo, filterVal) && !strings.Contains(strings.Join(app.AssetBinaries, " "), filterVal) {
 				continue
 			}
 		}
-
 		if r.Global && !app.Global {
 			continue
 		}
-		// TODO: Implement proper wine filtering when state tracks per-app wine settings
-		// Currently InstalledApp doesn't track Wine settings, so we skip filtering.
-		// if r.AllowForeignArch { ... } // Stub for future allow-foreign-arch filter
-
 		if r.Pin != "" && !app.Pinned {
 			continue
 		}
-
 		if r.Prerelease && !app.IsPrerelease {
 			continue
 		}
@@ -131,23 +143,13 @@ func ListState(rList ...*RootCLI) error {
 				typeDisplay = "binary/archive"
 			}
 		}
-
 		if app.Clone {
-			versionDisplay = "git (clone)"
-			typeDisplay = "repo sync"
+			versionDisplay, typeDisplay = "git (clone)", "repo sync"
 		} else if app.Fork {
-			versionDisplay = "git (fork)"
-			typeDisplay = "repo sync"
+			versionDisplay, typeDisplay = "git (fork)", "repo sync"
 		} else if app.CompileScript != "" {
-			versionDisplay = "source (ai script)"
-			typeDisplay = "compile-from-source"
+			versionDisplay, typeDisplay = "source (ai script)", "compile-from-source"
 		}
-
-		helperScript := app.CompileScript
-		if helperScript == "" {
-			helperScript = "N/A"
-		}
-		helperScript = truncatePath(helperScript, 50)
 
 		isInstalled := false
 		if app.TargetPath != "" {
@@ -155,66 +157,88 @@ func ListState(rList ...*RootCLI) error {
 				isInstalled = true
 			}
 		}
-		indicator := GetStateIndicator(isInstalled, app.Pinned, app.IsPrerelease, false, false, false)
 		displayRepo := repo
-		if indicator != "" {
+		if indicator := GetStateIndicator(isInstalled, app.Pinned, app.IsPrerelease, false, false, false); indicator != "" {
 			displayRepo = indicator + " " + repo
 		}
 
 		if !r.Full {
+			helperScript := app.CompileScript
+			if helperScript == "" {
+				helperScript = "N/A"
+			}
 			tableData = append(tableData, []string{
-				displayRepo,
-				versionDisplay,
-				typeDisplay,
-				scope,
-				autoUpdate,
-				app.TargetPath,
-				helperScript,
+				displayRepo, versionDisplay, typeDisplay, scope, autoUpdate, app.TargetPath, truncatePath(helperScript, 50),
 			})
-		} else {
-			// Build the expanded fields
-			pinned := "false"
-			if app.Pinned {
-				pinned = "true"
-			}
-			wineStr := "N/A" // Placeholder for extended fields not actually in state right now
-			foreignStr := "N/A"
-
-			if isLongFormat {
-				// 1 entry per asset name
-				if len(app.AssetBinaries) > 0 {
-					for _, asset := range app.AssetBinaries {
-						tableData = append(tableData, []string{
-							displayRepo, typeDisplay, versionDisplay, asset, app.TargetPath, pinned, "MIXED", "Safe", "N/A", "false", wineStr, foreignStr, "N/A", "N/A", helperScript, "N/A", "N/A", "N/A",
-						})
-					}
-				} else {
-					tableData = append(tableData, []string{
-						displayRepo, typeDisplay, versionDisplay, app.ReleaseAsset, app.TargetPath, pinned, "MIXED", "Safe", "N/A", "false", wineStr, foreignStr, "N/A", "N/A", helperScript, "N/A", "N/A", "N/A",
-					})
-				}
-			} else {
-				// ls (short) - 1 entry per repo/type
-				assetNames := strings.Join(app.AssetBinaries, ", ")
-				if assetNames == "" {
-					assetNames = app.ReleaseAsset
-					if assetNames == "" {
-						assetNames = "N/A"
-					}
-				}
-				tableData = append(tableData, []string{
-					displayRepo, typeDisplay, versionDisplay, assetNames, app.TargetPath, pinned, "MIXED", "Safe", "N/A", "false", wineStr, foreignStr, "N/A", "N/A", helperScript, "N/A", "N/A", "N/A",
-				})
-			}
+			continue
 		}
+
+		binaries := app.InstalledBinaries
+		if len(binaries) == 0 {
+			binaries = app.PackageNames
+		}
+		if len(binaries) == 0 {
+			binaries = app.AssetBinaries
+		}
+		asset := app.ReleaseAsset
+		if asset == "" {
+			asset = strings.Join(app.InstalledAssetsFullNames, ", ")
+		}
+		tableData = append(tableData, []string{
+			displayRepo,
+			versionDisplay,
+			typeDisplay,
+			scope,
+			autoUpdate,
+			wrapCell(app.TargetPath, 40),
+			wrapCell(strings.Join(binaries, ", "), 40),
+			wrapCell(asset, 40),
+			wrapCell(app.SymlinkDir, 40),
+			app.Extractor,
+			wrapCell(app.CompileScript, 40),
+			wrapCell(strings.Join(app.InstalledSidecars, ", "), 40),
+			app.LastVTScan,
+		})
 	}
 
+	if r.Full {
+		tableData = dropEmptyColumns(tableData)
+	}
 	tableData = fixEmojiPadding(tableData)
 
 	if err := pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(tableData).Render(); err != nil {
 		log.Warn("failed to render table", "error", err)
 	}
 	return nil
+}
+
+// dropEmptyColumns removes columns whose cells are empty in every data row,
+// and renders remaining empty cells as "-".
+func dropEmptyColumns(data pterm.TableData) pterm.TableData {
+	if len(data) < 2 {
+		return data
+	}
+	keep := make([]bool, len(data[0]))
+	for _, row := range data[1:] {
+		for j, cell := range row {
+			if cell != "" {
+				keep[j] = true
+			}
+		}
+	}
+	out := make(pterm.TableData, len(data))
+	for i, row := range data {
+		for j, cell := range row {
+			if !keep[j] {
+				continue
+			}
+			if i > 0 && cell == "" {
+				cell = "-"
+			}
+			out[i] = append(out[i], cell)
+		}
+	}
+	return out
 }
 
 func findTargetApps(st *state.State, target string) []string {
