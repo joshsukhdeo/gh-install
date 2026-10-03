@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestExtractorDisplay(t *testing.T) {
+	cases := map[string]string{
+		"ouch,native,internal": "ouch,7z/tar/zip,go",
+		"native,internal":      "7z/tar/zip,go",
+		"internal":             "go",
+		"":                     "",
+	}
+	for in, want := range cases {
+		if got := extractorDisplay(in); got != want {
+			t.Errorf("extractorDisplay(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestWrapCell(t *testing.T) {
 	if got := wrapCell("short", 40); got != "short" {
 		t.Fatalf("short string changed: %q", got)

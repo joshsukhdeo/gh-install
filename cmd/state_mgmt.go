@@ -30,14 +30,23 @@ func fixEmojiPadding(data pterm.TableData) pterm.TableData {
 	return data
 }
 
-func truncatePath(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// extractorDisplay renders the stored extractor precedence using the names of
+// the tools actually invoked: "native" shells out to tar/unzip/7z and
+// "internal" is the Go archiver library.
+func extractorDisplay(s string) string {
+	if s == "" {
+		return ""
 	}
-	if maxLen <= 3 {
-		return s[:maxLen]
+	parts := strings.Split(s, ",")
+	for i, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "native":
+			parts[i] = "7z/tar/zip"
+		case "internal":
+			parts[i] = "go"
+		}
 	}
-	return "..." + s[len(s)-maxLen+3:]
+	return strings.Join(parts, ",")
 }
 
 // wrapCell splits s into lines of at most width runes, preferring to break
@@ -168,7 +177,7 @@ func ListState(rList ...*RootCLI) error {
 				helperScript = "N/A"
 			}
 			tableData = append(tableData, []string{
-				displayRepo, versionDisplay, typeDisplay, scope, autoUpdate, app.TargetPath, truncatePath(helperScript, 50),
+				displayRepo, versionDisplay, typeDisplay, scope, autoUpdate, app.TargetPath, helperScript,
 			})
 			continue
 		}
@@ -190,13 +199,13 @@ func ListState(rList ...*RootCLI) error {
 			typeDisplay,
 			scope,
 			autoUpdate,
-			wrapCell(app.TargetPath, 40),
-			wrapCell(strings.Join(binaries, ", "), 40),
-			wrapCell(asset, 40),
-			wrapCell(app.SymlinkDir, 40),
-			app.Extractor,
-			wrapCell(app.CompileScript, 40),
-			wrapCell(strings.Join(app.InstalledSidecars, ", "), 40),
+			app.TargetPath,
+			strings.Join(binaries, ", "),
+			asset,
+			app.SymlinkDir,
+			extractorDisplay(app.Extractor),
+			app.CompileScript,
+			strings.Join(app.InstalledSidecars, ", "),
 			app.LastVTScan,
 		})
 	}
@@ -204,12 +213,7 @@ func ListState(rList ...*RootCLI) error {
 	if r.Full {
 		tableData = dropEmptyColumns(tableData)
 	}
-	tableData = fixEmojiPadding(tableData)
-
-	if err := pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(tableData).Render(); err != nil {
-		log.Warn("failed to render table", "error", err)
-	}
-	return nil
+	return renderState(tableData, r.ListFormat)
 }
 
 // dropEmptyColumns removes columns whose cells are empty in every data row,

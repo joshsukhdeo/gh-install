@@ -23,9 +23,9 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		r.Repository = cli.Install.Repository
 		return r.RunInstall()
 	case "ls", "ls <filter>":
-		return ListState(&RootCLI{ExecContext: params.ExecContext{Ls: cli.Ls.Filter, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ls.Global}}})
+		return ListState(&RootCLI{ExecContext: params.ExecContext{Ls: cli.Ls.Filter, ListFormat: cli.Ls.Format, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ls.Global}}})
 	case "ll", "ll <filter>":
-		return ListState(&RootCLI{ExecContext: params.ExecContext{Ll: cli.Ll.Filter, Full: true, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ll.Global}}})
+		return ListState(&RootCLI{ExecContext: params.ExecContext{Ll: cli.Ll.Filter, Full: true, ListFormat: cli.Ll.Format, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ll.Global}}})
 	case "rm", "rm <target>":
 
 		if cli.Rm.StateOnly {

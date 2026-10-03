@@ -183,11 +183,13 @@ type UpgradeCmd struct {
 type StateLsCmd struct {
 	Filter string `arg:"" optional:"" help:"Optional filter."`
 	Global bool   `short:"g" help:"Show global installs only."`
+	Format string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
 }
 
 type StateLlCmd struct {
 	Filter string `arg:"" optional:"" help:"Optional filter."`
 	Global bool   `short:"g" help:"Show global installs only."`
+	Format string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
 }
 
 type ConfigCmd struct {
@@ -343,6 +345,7 @@ type ExecContext struct {
 	Ls                  string
 	Ll                  string
 	Full                bool
+	ListFormat          string
 	EditSavedState      bool
 	RmSavedState        string
 	Rm                  string

@@ -28,6 +28,33 @@ stdout 'test/app'
 exec gh-pt ls notfound
 ! stdout 'test/app'
 
+# 7. Explicit formats
+exec gh-pt ll --format table
+stdout '┌'
+exec gh-pt ll -o list
+! stdout '┌'
+stdout 'test/app'
+stdout 'Version'
+stdout 'v1.0.0'
+
+# 8. auto: wide terminal -> table, narrow terminal -> list
+env COLUMNS=300
+exec gh-pt ll
+stdout '┌'
+env COLUMNS=40
+exec gh-pt ll
+! stdout '┌'
+stdout 'test/app'
+
+# 9. Invalid format is rejected
+! exec gh-pt ll --format bogus
+stderr 'format'
+
+# 10. tui without a terminal falls back instead of hanging
+env COLUMNS=300
+exec gh-pt ll --format tui
+stdout 'test/app'
+
 -- state.json --
 {
   "version": 2,
