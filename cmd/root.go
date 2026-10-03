@@ -251,23 +251,7 @@ func (r *RootCLI) RunInstall() error {
 		}
 	}
 
-	if !r.Global && os.Getuid() != 0 {
-		var localTypes []string
-		for _, t := range r.Type {
-			switch t {
-			case "deb", "rpm", "pacman", "pkg", "mac", "msi":
-				// These formats implicitly trigger global installation routines
-				// (e.g. sudo apt install, sudo dnf install, etc).
-				continue
-			default:
-				localTypes = append(localTypes, t)
-			}
-		}
-		// Only apply the filter if it leaves us with at least one valid type to search for.
-		if len(localTypes) > 0 {
-			r.Type = localTypes
-		}
-	}
+
 
 	ghClient, err := api.DefaultRESTClient()
 	if err != nil {
