@@ -107,18 +107,55 @@ type StateManager interface {
 	AddApp(app *InstalledApp) error
 }
 
+type InstallPkg struct {
+	Manager   string `json:"manager,omitempty"`
+	PackageID string `json:"PackageId,omitempty"`
+}
+
+func (p *InstallPkg) UnmarshalJSON(data []byte) error {
+	type Alias InstallPkg
+	aux := &struct {
+		AltPackageID string `json:"packageId,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(p),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if p.PackageID == "" && aux.AltPackageID != "" {
+		p.PackageID = aux.AltPackageID
+	}
+	return nil
+}
+
+type InstallStep struct {
+	Pkg   *InstallPkg `json:"pkg,omitempty"`
+	Files []string    `json:"files,omitempty"`
+}
+
+type InstallMapEntry struct {
+	Deps      *InstallStep `json:"deps,omitempty"`
+	Installed *InstallStep `json:"installed,omitempty"`
+}
+
 type State struct {
-	Version        int                      `json:"version,omitempty"`
-	Apps           map[string]*InstalledApp `json:"apps"`
-	Repos          map[string]*InstalledApp `json:"repos,omitempty"`
-	SystemPackages []string                 `json:"system_packages,omitempty"`
-	Hooks          map[string]string        `json:"hooks,omitempty"`
+	Version        int                         `json:"version,omitempty"`
+	Apps           map[string]*InstalledApp    `json:"apps"`
+	Repos          map[string]*InstalledApp    `json:"repos,omitempty"`
+	SystemPackages []string                    `json:"system_packages,omitempty"`
+	Hooks          map[string]string           `json:"hooks,omitempty"`
+	InstallMap     map[string]*InstallMapEntry `json:"install-map,omitempty"`
 }
 
 var _ StateManager = (*State)(nil)
 
 func GetStatePath() string {
 	return filepath.Join(xdg.DataHome, "gh-pt", "state.json")
+}
+
+func GetSourceDir() string {
+	return filepath.Join(xdg.DataHome, "gh-pt", "source")
 }
 
 func (s *State) migrateV1toV2() error {
@@ -137,6 +174,9 @@ func (s *State) migrateV1toV2() error {
 	}
 	if s.SystemPackages == nil {
 		s.SystemPackages = []string{}
+	}
+	if s.InstallMap == nil {
+		s.InstallMap = make(map[string]*InstallMapEntry)
 	}
 
 	sysPkgSet := make(map[string]bool)
@@ -202,6 +242,7 @@ func LoadState() (*State, error) {
 				Repos:          make(map[string]*InstalledApp),
 				Hooks:          make(map[string]string),
 				SystemPackages: []string{},
+				InstallMap:     make(map[string]*InstallMapEntry),
 			}, nil
 		}
 		return nil, err
@@ -223,6 +264,9 @@ func LoadState() (*State, error) {
 	}
 	if s.SystemPackages == nil {
 		s.SystemPackages = []string{}
+	}
+	if s.InstallMap == nil {
+		s.InstallMap = make(map[string]*InstallMapEntry)
 	}
 
 	if s.Version < 2 {
@@ -265,4 +309,19 @@ func (s *State) AddApp(app *InstalledApp) error {
 	}
 	s.Apps[app.Repository] = app
 	return s.Save()
+}
+
+func (s *State) SetInstallMap(repo string, entry *InstallMapEntry) error {
+	if s.InstallMap == nil {
+		s.InstallMap = make(map[string]*InstallMapEntry)
+	}
+	s.InstallMap[repo] = entry
+	return s.Save()
+}
+
+func (s *State) GetInstallMap(repo string) *InstallMapEntry {
+	if s.InstallMap == nil {
+		return nil
+	}
+	return s.InstallMap[repo]
 }

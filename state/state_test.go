@@ -349,4 +349,65 @@ func TestStateManagement(t *testing.T) {
 		// SidecarTargetPath removed
 		assert.Equal(t, []string{"/tmp/sidecars/owner/sidecar-app/plugin.so"}, loaded.InstalledSidecars)
 	})
+
+	t.Run("InstallMap_SerializationAndRetrieval", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "installmap"))
+		xdg.Reload()
+
+		st, err := LoadState()
+		require.NoError(t, err)
+
+		entry := &InstallMapEntry{
+			Deps: &InstallStep{
+				Pkg: &InstallPkg{
+					Manager:   "apt",
+					PackageID: "libssl-dev, cmake",
+				},
+				Files: []string{
+					"/home/user/.local/.ghpt/share/dep1",
+					"/home/user/.local/share/dep1",
+				},
+			},
+			Installed: &InstallStep{
+				Pkg: &InstallPkg{
+					Manager:   "dpkg",
+					PackageID: "my-app",
+				},
+				Files: []string{
+					"/home/user/.local/.ghpt/bin/my-app",
+					"/home/user/.local/bin/my-app",
+				},
+			},
+		}
+
+		err = st.SetInstallMap("owner/repo", entry)
+		require.NoError(t, err)
+
+		// Check raw json file to verify "install-map" key and subkeys
+		rawBytes, err := os.ReadFile(GetStatePath())
+		require.NoError(t, err)
+		assert.Contains(t, string(rawBytes), `"install-map"`)
+		assert.Contains(t, string(rawBytes), `"owner/repo"`)
+		assert.Contains(t, string(rawBytes), `"deps"`)
+		assert.Contains(t, string(rawBytes), `"installed"`)
+		assert.Contains(t, string(rawBytes), `"manager"`)
+		assert.Contains(t, string(rawBytes), `"PackageId"`)
+		assert.Contains(t, string(rawBytes), `"files"`)
+
+		// Load state and verify GetInstallMap
+		st2, err := LoadState()
+		require.NoError(t, err)
+
+		retrieved := st2.GetInstallMap("owner/repo")
+		require.NotNil(t, retrieved)
+		require.NotNil(t, retrieved.Deps)
+		assert.Equal(t, "apt", retrieved.Deps.Pkg.Manager)
+		assert.Equal(t, "libssl-dev, cmake", retrieved.Deps.Pkg.PackageID)
+		assert.Len(t, retrieved.Deps.Files, 2)
+
+		require.NotNil(t, retrieved.Installed)
+		assert.Equal(t, "dpkg", retrieved.Installed.Pkg.Manager)
+		assert.Equal(t, "my-app", retrieved.Installed.Pkg.PackageID)
+		assert.Len(t, retrieved.Installed.Files, 2)
+	})
 }

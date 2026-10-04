@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/resolver"
 	"github.com/joshsukhdeo/gh-pt/selector"
+	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1036,4 +1039,79 @@ func TestExtractVersionFromString(t *testing.T) {
 	if _, err := os.Stat("/usr/local/bin/mediamtx"); err == nil {
 		assert.Equal(t, "v1.21.1", probeBinaryVersion("/usr/local/bin/mediamtx"))
 	}
+}
+
+func TestInstallMapLoggedOnInstall(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+
+	targetDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+	gr := &GithubRelease{
+		CliParams: &params.ExecContext{
+			Repository: "myowner/myrepo",
+			CommonInstallFlags: params.CommonInstallFlags{
+				TargetPath: targetDir,
+			},
+		},
+		InstalledBinaries: []string{"my-bin"},
+		InstalledFiles:    []string{filepath.Join(targetDir, "my-bin")},
+		InstalledSidecars: []string{filepath.Join(targetDir, "config.yaml")},
+		DepsPkgManager:    "apt",
+		DepsPackageIDs:    []string{"libssl-dev"},
+	}
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	// Save to state like release.Install does
+	var depsStep *state.InstallStep
+	if gr.DepsPkgManager != "" || len(gr.DepsPackageIDs) > 0 {
+		depsStep = &state.InstallStep{
+			Pkg: &state.InstallPkg{
+				Manager:   gr.DepsPkgManager,
+				PackageID: strings.Join(gr.DepsPackageIDs, ", "),
+			},
+		}
+	}
+
+	var allInstalledFiles []string
+	seen := make(map[string]bool)
+	for _, f := range gr.InstalledFiles {
+		if !seen[f] {
+			seen[f] = true
+			allInstalledFiles = append(allInstalledFiles, f)
+		}
+	}
+	for _, sc := range gr.InstalledSidecars {
+		if !seen[sc] {
+			seen[sc] = true
+			allInstalledFiles = append(allInstalledFiles, sc)
+		}
+	}
+
+	installedStep := &state.InstallStep{
+		Files: allInstalledFiles,
+	}
+
+	entry := &state.InstallMapEntry{
+		Deps:      depsStep,
+		Installed: installedStep,
+	}
+	err = st.SetInstallMap(gr.CliParams.Repository, entry)
+	require.NoError(t, err)
+
+	// Re-load and verify
+	st2, err := state.LoadState()
+	require.NoError(t, err)
+	logged := st2.GetInstallMap("myowner/myrepo")
+	require.NotNil(t, logged)
+	require.NotNil(t, logged.Deps)
+	assert.Equal(t, "apt", logged.Deps.Pkg.Manager)
+	assert.Equal(t, "libssl-dev", logged.Deps.Pkg.PackageID)
+	require.NotNil(t, logged.Installed)
+	assert.Contains(t, logged.Installed.Files, filepath.Join(targetDir, "my-bin"))
+	assert.Contains(t, logged.Installed.Files, filepath.Join(targetDir, "config.yaml"))
 }

@@ -8,16 +8,16 @@ import (
 )
 
 type InstallState struct {
-	InState           bool
-	AlreadyInstalled  bool
-	PrevVersion       string
-	NewVersion        string
-	AppName           string
-	Type              string
-	Repo              string
-	AssetName         string
-	Force             bool
-	AllowDowngrade    bool
+	InState          bool
+	AlreadyInstalled bool
+	PrevVersion      string
+	NewVersion       string
+	AppName          string
+	Type             string
+	Repo             string
+	AssetName        string
+	Force            bool
+	AllowDowngrade   bool
 	// New downgrade flags
 	LeRetrogrouch     bool
 	RetrogradeStopgap bool

@@ -302,3 +302,85 @@ make
 	assert.True(t, errors.Is(err, ai.ErrMalformedDirective),
 		"JSON inside ghpt-manifest block should fail as unknown directive, got: %v", err)
 }
+
+func TestParseAIOutput_ValidJSONManifest(t *testing.T) {
+	raw := `Here is the requested manifest and compile script:
+
+` + "```json" + `
+{
+  "dependencies": [
+    {
+      "name": "cmake",
+      "manager": "apt",
+      "version": ">=3.20",
+      "requirement": "min"
+    },
+    {
+      "name": "ninja-build",
+      "manager": "apt",
+      "requirement": "suggested"
+    },
+    {
+      "name": "clang",
+      "resolver": "apt",
+      "version": "14",
+      "requirement": "exact"
+    },
+    {
+      "name": "gcc",
+      "manager": "apt",
+      "version": "<13",
+      "requirement": "max"
+    }
+  ]
+}
+` + "```" + `
+
+` + "```bash" + `
+#!/usr/bin/env bash
+set -euo pipefail
+exec > >(tee -a compile.log) 2>&1
+
+### SKIP INSTALLING DEPENDENCIES as that step occurs prior by gh-pt using the manifest.json
+cmake -B build -G Ninja
+cmake --build build
+` + "```" + `
+`
+
+	payload, err := ai.ParseAIOutput(raw)
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+	require.Len(t, payload.Dependencies, 4)
+
+	assert.Equal(t, "cmake", payload.Dependencies[0].Name)
+	assert.Equal(t, "apt", payload.Dependencies[0].Manager)
+	assert.Equal(t, "apt", payload.Dependencies[0].GetResolver())
+	assert.Equal(t, ">=3.20", payload.Dependencies[0].Version)
+	assert.Equal(t, "min", payload.Dependencies[0].Requirement)
+
+	assert.Equal(t, "ninja-build", payload.Dependencies[1].Name)
+	assert.Equal(t, "suggested", payload.Dependencies[1].Requirement)
+
+	assert.Equal(t, "clang", payload.Dependencies[2].Name)
+	assert.Equal(t, "14", payload.Dependencies[2].Version)
+	assert.Equal(t, "exact", payload.Dependencies[2].Requirement)
+
+	assert.Equal(t, "gcc", payload.Dependencies[3].Name)
+	assert.Equal(t, "<13", payload.Dependencies[3].Version)
+	assert.Equal(t, "max", payload.Dependencies[3].Requirement)
+
+	assert.Contains(t, payload.Script, "exec > >(tee -a compile.log) 2>&1")
+	assert.Contains(t, payload.Script, "### SKIP INSTALLING DEPENDENCIES")
+	assert.NotEmpty(t, payload.ManifestJSON)
+}
+
+func TestTemplates(t *testing.T) {
+	assert.NotEmpty(t, ai.ManifestJSONTemplate)
+	assert.Contains(t, ai.ManifestJSONTemplate, "dependencies")
+	assert.Contains(t, ai.ManifestJSONTemplate, "requirement")
+
+	assert.NotEmpty(t, ai.CompileScriptTemplate)
+	assert.Contains(t, ai.CompileScriptTemplate, "exec > >(tee -a compile.log) 2>&1")
+	assert.Contains(t, ai.CompileScriptTemplate, "### SKIP INSTALLING DEPENDENCIES as that step occurs prior by gh-pt using the manifest.json")
+	assert.Contains(t, ai.CompileScriptTemplate, "install-dir")
+}

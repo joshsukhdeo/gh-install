@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -543,6 +544,91 @@ func getCompileScriptPath(repo string) string {
 	return filepath.Join(configDir, "scripts", fmt.Sprintf("compile-%s%s", pkgName, ext))
 }
 
+func getSourcePaths(repo string) (manifestPath, compilePath string) {
+	parts := strings.Split(repo, "/")
+	var ownerID, repoID string
+	if len(parts) >= 2 {
+		ownerID = parts[0]
+		repoID = parts[1]
+	} else if len(parts) == 1 {
+		ownerID = "unknown"
+		repoID = parts[0]
+	}
+	ownerClean := strings.ToLower(ownerID)
+	repoClean := strings.ToLower(repoID)
+
+	sourceDir := state.GetSourceDir()
+	manifestPath = filepath.Join(sourceDir, fmt.Sprintf("manifest-%s-%s.json", ownerClean, repoClean))
+	compilePath = filepath.Join(sourceDir, fmt.Sprintf("compile-%s-%s.sh", ownerClean, repoClean))
+	return manifestPath, compilePath
+}
+
+func snapshotDirFiles(dir string) (map[string]os.FileInfo, error) {
+	files := make(map[string]os.FileInfo)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return files, nil
+	}
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			files[path] = info
+		}
+		return nil
+	})
+	return files, err
+}
+
+func diffDirFiles(dir string, before map[string]os.FileInfo) ([]string, error) {
+	var newFiles []string
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return newFiles, nil
+	}
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			prev, existed := before[path]
+			if !existed || prev.ModTime().Before(info.ModTime()) || prev.Size() != info.Size() {
+				newFiles = append(newFiles, path)
+			}
+		}
+		return nil
+	})
+	return newFiles, err
+}
+
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	if info, err := os.Stat(src); err == nil {
+		_ = os.Chmod(dst, info.Mode())
+	}
+	return os.Remove(src)
+}
+
+func (r *RootCLI) processNewFilesAndSymlinks(newFiles []string) []string {
+	var recorded []string
+	for _, stagedPath := range newFiles {
+		activePath := strings.Replace(stagedPath, ".ghpt/", "", 1)
+		if err := os.MkdirAll(filepath.Dir(activePath), 0755); err != nil {
+			log.Warn("failed to create directory for symlink", "dir", filepath.Dir(activePath), "error", err)
+		}
+		_ = os.Remove(activePath)
+		if err := os.Symlink(stagedPath, activePath); err != nil {
+			log.Warn("failed to create symlink", "staged", stagedPath, "active", activePath, "error", err)
+		}
+		recorded = append(recorded, stagedPath, activePath)
+	}
+	return recorded
+}
+
 func buildCompilePrompt(repo, buildDir, scriptPath, targetPath, symlinkDir string) string {
 	ext := ".sh"
 	if runtime.GOOS == "windows" {
@@ -556,7 +642,7 @@ func buildCompilePrompt(repo, buildDir, scriptPath, targetPath, symlinkDir strin
 		basePrompt = fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and generate an automated compilation/build script at '%s'. The script should follow all build instructions for '%s', compile the application/binaries, install or copy them to '%s', and purge any temporary build artifacts. Format the output as an executable %s script. Please test and then attempt to run the compile script and it is only done when script runs successfully.", repo, buildDir, scriptPath, repo, targetPath, ext)
 	}
 
-	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow this template:\n%s\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestTemplate)
+	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow these templates:\n\nMANIFEST TEMPLATE (output as ```json code block):\n%s\n(Optional version requirement can be min, max, exact, or suggested)\n\nCOMPILE SCRIPT TEMPLATE (output as ```bash code block):\n%s\nTreat \"install-dir\" (.ghpt/install-dir) the same as /usr/local or $HOME/.local and place binaries into the same structure (install-dir/bin, install-dir/libs, install-dir/share, install-dir/state).\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestJSONTemplate, ai.CompileScriptTemplate)
 
 	return basePrompt + instruction
 }
@@ -574,7 +660,7 @@ func buildCompileFixPrompt(repo, buildDir, scriptPath, targetPath, symlinkDir, e
 		basePrompt = fmt.Sprintf("The automated compilation script at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the script at '%s' so that it successfully compiles and installs the binaries into '%s'. Format the output as an executable %s script. Please fix and then attempt to run the compile script and it is only done when script runs successfully.", scriptPath, repo, buildDir, attempt, errorOutput, scriptPath, targetPath, ext)
 	}
 
-	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow this template:\n%s\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestTemplate)
+	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow these templates:\n\nMANIFEST TEMPLATE (output as ```json code block):\n%s\n(Optional version requirement can be min, max, exact, or suggested)\n\nCOMPILE SCRIPT TEMPLATE (output as ```bash code block):\n%s\nTreat \"install-dir\" (.ghpt/install-dir) the same as /usr/local or $HOME/.local and place binaries into the same structure (install-dir/bin, install-dir/libs, install-dir/share, install-dir/state).\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestJSONTemplate, ai.CompileScriptTemplate)
 
 	return basePrompt + instruction
 }
@@ -893,17 +979,17 @@ func MoveDistBinaries(srcDir, dstDir string) error {
 	return err
 }
 
-func (r *RootCLI) resolveCompileDependencies(dependencies []ai.Dependency, repoDir string, cfg *config.Config) error {
+func (r *RootCLI) resolveCompileDependencies(dependencies []ai.Dependency, repoDir string, cfg *config.Config) (*state.InstallPkg, error) {
 	r.ensureCliParams()
 
 	if len(dependencies) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	skipDeps := r.NoDeps || (r.CliParams != nil && r.CliParams.NoDeps) || (cfg != nil && cfg.Core.NoDeps)
 	if skipDeps {
 		log.Info("skipping dependency installation due to no-deps flag")
-		return nil
+		return nil, nil
 	}
 
 	// 4a. Call heuristics.DetectEcosystem(repoPath) on the cloned repo to detect the primary ecosystem
@@ -930,25 +1016,29 @@ func (r *RootCLI) resolveCompileDependencies(dependencies []ai.Dependency, repoD
 
 	if promptDeps {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return fmt.Errorf("--prompt-deps requires an interactive terminal (isatty is false)")
+			return nil, fmt.Errorf("--prompt-deps requires an interactive terminal (isatty is false)")
 		}
 
 		fmt.Println("\nDiscovered build dependencies:")
 		for _, dep := range dependencies {
-			fmt.Printf("  - %s (resolver: %s)\n", dep.Name, dep.Resolver)
+			fmt.Printf("  - %s (resolver: %s)\n", dep.Name, dep.GetResolver())
 		}
 		confirmed, err := pterm.DefaultInteractiveConfirm.WithDefaultValue(true).Show("Do you want to install these dependencies?")
 		if err != nil || !confirmed {
-			return fmt.Errorf("dependency installation aborted by user")
+			return nil, fmt.Errorf("dependency installation aborted by user")
 		}
 	}
 
-	// 4c. Iterate over payload.Dependencies and resolve each one using resolver.GetManager(dep.Resolver) -> mgr.Install([]string{dep.Name})
+	var lastManager string
+	var installedPackages []string
+
+	// 4c. Iterate over payload.Dependencies and resolve each one using resolver.GetManager(dep.GetResolver()) -> mgr.Install([]string{dep.Name})
 	for _, dep := range dependencies {
 		var mgr resolver.PackageManager
 		var mgrErr error
-		if dep.Resolver != "" {
-			mgr, mgrErr = resolver.GetManager(dep.Resolver)
+		resolverName := dep.GetResolver()
+		if resolverName != "" {
+			mgr, mgrErr = resolver.GetManager(resolverName)
 		}
 		if mgr == nil || mgrErr != nil {
 			for _, name := range priorityChain {
@@ -963,16 +1053,26 @@ func (r *RootCLI) resolveCompileDependencies(dependencies []ai.Dependency, repoD
 			mgr, _ = resolver.GetNativeManager()
 		}
 		if mgr == nil {
-			return fmt.Errorf("could not find suitable package manager to install dependency '%s'", dep.Name)
+			return nil, fmt.Errorf("could not find suitable package manager to install dependency '%s'", dep.Name)
 		}
 
 		log.Info("installing dependency", "dependency", dep.Name, "resolver", mgr.Name())
 		if err := mgr.Install([]string{dep.Name}); err != nil {
-			return fmt.Errorf("failed to install dependency '%s' with resolver '%s': %w", dep.Name, mgr.Name(), err)
+			return nil, fmt.Errorf("failed to install dependency '%s' with resolver '%s': %w", dep.Name, mgr.Name(), err)
+		}
+		lastManager = mgr.Name()
+		installedPackages = append(installedPackages, dep.Name)
+	}
+
+	var pkgInfo *state.InstallPkg
+	if len(installedPackages) > 0 {
+		pkgInfo = &state.InstallPkg{
+			Manager:   lastManager,
+			PackageID: strings.Join(installedPackages, ", "),
 		}
 	}
 
-	return nil
+	return pkgInfo, nil
 }
 
 func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
@@ -1018,7 +1118,8 @@ func forceRemoveAll(path string) error {
 
 func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	r.ensureCliParams()
-	scriptPath := getCompileScriptPath(r.Repository)
+	manifestPath, compilePath := getSourcePaths(r.Repository)
+	scriptPath := compilePath
 	targetPath := r.TargetPath
 	if targetPath == "" {
 		targetPath = GetDefaultTargetPath()
@@ -1063,6 +1164,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		"repository", r.Repository,
 		"build_dir", repoDir,
 		"script_path", scriptPath,
+		"manifest_path", manifestPath,
 		"target_path", targetPath,
 		"symlink_dir", symlinkDir,
 	)
@@ -1087,92 +1189,41 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	}
 	log.Info("cloned repository to builds directory", "output", stdOut.String())
 
-	// 0. Initial check: try existing compile script if it exists
+	// 2. Setup .ghpt directory and symlinks
+	ghptDir := filepath.Join(repoDir, ".ghpt")
+	if err := os.MkdirAll(ghptDir, 0755); err != nil {
+		return fmt.Errorf("failed to create .ghpt directory in repo: %w", err)
+	}
+
+	var installDirTarget string
+	if r.Global {
+		installDirTarget = "/usr/local/.ghpt"
+	} else {
+		installDirTarget = filepath.Join(homeDir, ".local", ".ghpt")
+	}
+	_ = os.MkdirAll(installDirTarget, 0755)
+
+	installDirSymlink := filepath.Join(ghptDir, "install-dir")
+	_ = os.Remove(installDirSymlink)
+	if err := os.Symlink(installDirTarget, installDirSymlink); err != nil {
+		log.Warn("could not create install-dir symlink", "target", installDirTarget, "link", installDirSymlink, "error", err)
+	}
+
+	manifestSymlink := filepath.Join(ghptDir, "manifest.json")
+	_ = os.Remove(manifestSymlink)
+	if err := os.Symlink(manifestPath, manifestSymlink); err != nil {
+		log.Warn("could not create manifest.json symlink", "target", manifestPath, "link", manifestSymlink, "error", err)
+	}
+
+	compileSymlink := filepath.Join(ghptDir, "compile.sh")
+	_ = os.Remove(compileSymlink)
+	if err := os.Symlink(compilePath, compileSymlink); err != nil {
+		log.Warn("could not create compile.sh symlink", "target", compilePath, "link", compileSymlink, "error", err)
+	}
+
 	if r.Overwrite {
 		_ = os.Remove(scriptPath)
-	}
-	if _, err := os.Stat(scriptPath); err == nil {
-		log.Info("found existing compile script, attempting to run it first", "script", scriptPath)
-
-		var preExecCmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			preExecCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
-		} else {
-			if _, err := exec.LookPath("bash"); err == nil {
-				preExecCmd = exec.Command("bash", scriptPath)
-			} else {
-				preExecCmd = exec.Command("sh", scriptPath)
-			}
-		}
-		preExecCmd.Dir = repoDir
-
-		outputBytes, runErr := preExecCmd.CombinedOutput()
-		if len(outputBytes) > 0 {
-			_, _ = os.Stdout.Write(outputBytes)
-		}
-
-		if runErr == nil {
-			log.Info(fmt.Sprintf("Existing compile script succeeded for %s", r.Repository))
-			// Check for .ghpt/dist/ handoff
-			distDir := filepath.Join(repoDir, ".ghpt", "dist")
-			var installedSidecars []string
-			if info, err := os.Stat(distDir); err == nil && info.IsDir() {
-				installDest := targetPath
-				if symlinkDir != "" {
-					installDest = symlinkDir
-				}
-				sidecars, err := r.moveDistWithSidecarDetection(distDir, installDest)
-				if err != nil {
-					return fmt.Errorf("failed to move binaries from .ghpt/dist to install path: %w", err)
-				}
-				installedSidecars = sidecars
-			}
-			if symlinkDir != "" {
-				if err := createSymlinks(symlinkDir, r.TargetPath); err != nil {
-					return fmt.Errorf("failed to create symlinks: %w", err)
-				}
-			}
-			if !r.NoSaveState {
-				st, err := state.LoadState()
-				if err == nil {
-					sidecarList := r.InstalledSidecars
-					if len(sidecarList) == 0 && len(installedSidecars) > 0 {
-						sidecarList = installedSidecars
-					}
-					err = st.AddApp(&state.InstalledApp{
-						Repository:        r.Repository,
-						TargetPath:        targetPath,
-						Global:            r.Global,
-						CompileScript:     scriptPath,
-						Pinned:            r.PinInstall,
-						MaxDepth:          r.MaxDepth,
-						Sidecars:          r.CliParams.Sidecars,
-						InstalledSidecars: sidecarList,
-					})
-					if err != nil {
-						log.Warn("could not save repository state", "error", err)
-					} else {
-						log.Info(fmt.Sprintf("Saved %s with compileScript to state tracking.", r.Repository))
-					}
-				}
-			}
-			return nil
-		}
-		log.Warn("existing compile script failed, will regenerate with AI", "error", runErr)
-	}
-
-	// Get the commit hash we cloned
-	commitHash := "unknown"
-	revParseCmd := exec.Command("git", "rev-parse", "HEAD")
-	revParseCmd.Dir = repoDir
-	if out, err := revParseCmd.Output(); err == nil {
-		commitHash = strings.TrimSpace(string(out))
-	}
-	log.Info("compile-from-source using commit", "commit", commitHash)
-
-	// 2. Ensure scripts directory exists
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
-		return fmt.Errorf("failed to create scripts directory: %w", err)
+		_ = os.Remove(manifestPath)
 	}
 
 	// 3. Resolve AI command template
@@ -1184,41 +1235,91 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		aiCmdTemplate = `agy -p "%s"`
 	}
 
-	prompt := buildCompilePrompt(r.Repository, repoDir, scriptPath, targetPath, symlinkDir)
-	log.Info(fmt.Sprintf("Generating AI compilation script using: %s", aiCmdTemplate))
-	aiResp, err := runAIAgentWithOutput(aiCmdTemplate, prompt, repoDir)
-	if err != nil {
-		return fmt.Errorf("AI agent failed to generate/test compilation script: %w", err)
-	}
-
-	payload, parseErr := ai.ParseAIOutput(aiResp)
-	if parseErr != nil {
-		if scriptContent, readErr := os.ReadFile(scriptPath); readErr == nil && len(scriptContent) > 0 {
-			payload, parseErr = ai.ParseAIOutput(string(scriptContent))
+	var payload *ai.CompilePayload
+	if _, err := os.Stat(scriptPath); err == nil {
+		log.Info("found existing compile script, attempting to use it", "script", scriptPath)
+		if scriptBytes, readErr := os.ReadFile(scriptPath); readErr == nil {
+			var deps []ai.Dependency
+			if manifestBytes, mErr := os.ReadFile(manifestPath); mErr == nil {
+				var m ai.Manifest
+				if jErr := json.Unmarshal(manifestBytes, &m); jErr == nil {
+					deps = m.Dependencies
+				}
+			}
+			payload = &ai.CompilePayload{
+				Dependencies: deps,
+				Script:       string(scriptBytes),
+			}
 		}
 	}
-	if parseErr != nil {
-		return fmt.Errorf("failed to parse AI output: %w", parseErr)
+
+	if payload == nil {
+		// Ensure scripts directory exists
+		if err := os.MkdirAll(filepath.Dir(scriptPath), 0755); err != nil {
+			return fmt.Errorf("failed to create scripts directory: %w", err)
+		}
+
+		prompt := buildCompilePrompt(r.Repository, repoDir, scriptPath, targetPath, symlinkDir)
+		log.Info(fmt.Sprintf("Generating AI compilation script using: %s", aiCmdTemplate))
+		aiResp, err := runAIAgentWithOutput(aiCmdTemplate, prompt, repoDir)
+		if err != nil {
+			return fmt.Errorf("AI agent failed to generate/test compilation script: %w", err)
+		}
+
+		p, parseErr := ai.ParseAIOutput(aiResp)
+		if parseErr != nil {
+			if scriptContent, readErr := os.ReadFile(scriptPath); readErr == nil && len(scriptContent) > 0 {
+				p, parseErr = ai.ParseAIOutput(string(scriptContent))
+			}
+		}
+		if parseErr != nil {
+			return fmt.Errorf("failed to parse AI output: %w", parseErr)
+		}
+		payload = p
+
+		manifestContent := payload.ManifestJSON
+		if manifestContent == "" {
+			manifestContent = ai.ManifestJSONTemplate
+		}
+		_ = os.WriteFile(manifestPath, []byte(manifestContent), 0644)
+
+		if err := os.WriteFile(scriptPath, []byte(payload.Script), 0755); err != nil {
+			return fmt.Errorf("failed to write compilation script '%s': %w", scriptPath, err)
+		}
+		_ = os.Chmod(scriptPath, 0755)
 	}
 
-	// 4. Resolve dependencies before running compilation script
-	if err := r.resolveCompileDependencies(payload.Dependencies, repoDir, cfg); err != nil {
-		return fmt.Errorf("dependency resolution failed: %w", err)
+	// 4. Resolve dependencies and watch install-dir
+	beforeDepsSnapshot, _ := snapshotDirFiles(installDirTarget)
+	depsPkg, depsErr := r.resolveCompileDependencies(payload.Dependencies, repoDir, cfg)
+	if depsErr != nil {
+		return fmt.Errorf("dependency resolution failed: %w", depsErr)
+	}
+	newDepsFiles, _ := diffDirFiles(installDirTarget, beforeDepsSnapshot)
+	depsRecorded := r.processNewFilesAndSymlinks(newDepsFiles)
+
+	if !r.NoSaveState {
+		if st, err := state.LoadState(); err == nil {
+			entry := st.GetInstallMap(r.Repository)
+			if entry == nil {
+				entry = &state.InstallMapEntry{}
+			}
+			entry.Deps = &state.InstallStep{
+				Pkg:   depsPkg,
+				Files: depsRecorded,
+			}
+			_ = st.SetInstallMap(r.Repository, entry)
+		}
 	}
 
-	// Write payload.Script into scriptPath
-	if err := os.WriteFile(scriptPath, []byte(payload.Script), 0755); err != nil {
-		return fmt.Errorf("failed to write compilation script '%s': %w", scriptPath, err)
-	}
-	_ = os.Chmod(scriptPath, 0755)
-
-	// 5. Run the generated compile script with up to 2 retry fix loops
+	// 5. Run the generated compile script and watch install-dir
+	beforeCompileSnapshot, _ := snapshotDirFiles(installDirTarget)
 	maxRetries := 2
 	var lastErr error
 	var lastOutput string
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		log.Info("executing generated compile script", "script", scriptPath, "attempt", attempt+1)
+		log.Info("executing compile script", "script", scriptPath, "attempt", attempt+1)
 		var execScriptCmd *exec.Cmd
 		if runtime.GOOS == "windows" {
 			execScriptCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
@@ -1260,7 +1361,10 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			}
 			if fixPayload != nil {
 				if len(fixPayload.Dependencies) > 0 {
-					_ = r.resolveCompileDependencies(fixPayload.Dependencies, repoDir, cfg)
+					_, _ = r.resolveCompileDependencies(fixPayload.Dependencies, repoDir, cfg)
+				}
+				if fixPayload.ManifestJSON != "" {
+					_ = os.WriteFile(manifestPath, []byte(fixPayload.ManifestJSON), 0644)
 				}
 				_ = os.WriteFile(scriptPath, []byte(fixPayload.Script), 0755)
 			}
@@ -1272,7 +1376,10 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		return fmt.Errorf("compile script execution failed after %d retries: %w (output: %s)", maxRetries, lastErr, lastOutput)
 	}
 
-	// 6. Handle .ghpt/dist/ handoff: if the script produces binaries in .ghpt/dist/, move them to the install path
+	newCompileFiles, _ := diffDirFiles(installDirTarget, beforeCompileSnapshot)
+	compileRecorded := r.processNewFilesAndSymlinks(newCompileFiles)
+
+	// Check for legacy .ghpt/dist/ handoff
 	distDir := filepath.Join(repoDir, ".ghpt", "dist")
 	var installedSidecars []string
 	if info, err := os.Stat(distDir); err == nil && info.IsDir() {
@@ -1288,27 +1395,31 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		installedSidecars = sidecars
 	}
 
-	log.Info(fmt.Sprintf("Successfully compiled and installed %s from source!", r.Repository))
-
-	// Create symlinks if symlinkDir is set
 	if symlinkDir != "" {
 		if err := createSymlinks(symlinkDir, r.TargetPath); err != nil {
 			return fmt.Errorf("failed to create symlinks: %w", err)
 		}
 	}
 
-	indicator := GetStateIndicator(true, r.PinInstall, false, false, false, r.DisableIcons)
-	displayRepo := r.Repository
-	if indicator != "" {
-		displayRepo = indicator + " " + r.Repository
+	commitHash := "unknown"
+	revParseCmd := exec.Command("git", "rev-parse", "HEAD")
+	revParseCmd.Dir = repoDir
+	if out, err := revParseCmd.Output(); err == nil {
+		commitHash = strings.TrimSpace(string(out))
 	}
-	log.Info(fmt.Sprintf("Successfully compiled and installed %s from source!", displayRepo))
-	pterm.Success.Printf("Successfully compiled and installed %s from source!\n", displayRepo)
 
-	// 5. Save compileScript to state
 	if !r.NoSaveState {
 		st, err := state.LoadState()
 		if err == nil {
+			entry := st.GetInstallMap(r.Repository)
+			if entry == nil {
+				entry = &state.InstallMapEntry{}
+			}
+			entry.Installed = &state.InstallStep{
+				Files: compileRecorded,
+			}
+			_ = st.SetInstallMap(r.Repository, entry)
+
 			var existingHooks map[string]string
 			if existing, ok := st.Apps[r.Repository]; ok && existing != nil && len(existing.Hooks) > 0 {
 				existingHooks = existing.Hooks
@@ -1317,7 +1428,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			if len(sidecarList) == 0 && len(installedSidecars) > 0 {
 				sidecarList = installedSidecars
 			}
-			err = st.AddApp(&state.InstalledApp{
+			_ = st.AddApp(&state.InstalledApp{
 				Repository:        r.Repository,
 				TargetPath:        targetPath,
 				Global:            r.Global,
@@ -1330,13 +1441,49 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 				InstalledSidecars: sidecarList,
 				Hooks:             existingHooks,
 			})
-			if err != nil {
-				log.Warn("could not save repository state", "error", err)
-			} else {
-				log.Info(fmt.Sprintf("Saved %s with compileScript to state tracking.", r.Repository))
+		}
+	}
+
+	// 6. AI Verification Prompt
+	verifyPrompt := fmt.Sprintf("Please test that the compilation and installation for repository '%s' (cloned at '%s') were successful. Verify that all files in '%s' ('install-dir') and its subfolders are supposed to be there, and test running the installed binary/binaries to confirm they function correctly. Respond confirming verification.", r.Repository, repoDir, filepath.Join(ghptDir, "install-dir"))
+	log.Info("Prompting AI to test and verify compilation and installed files...")
+	_, verifyErr := runAIAgentWithOutput(aiCmdTemplate, verifyPrompt, repoDir)
+	if verifyErr != nil {
+		log.Warn("AI verification returned warning or non-zero exit", "error", verifyErr)
+	}
+
+	indicator := GetStateIndicator(true, r.PinInstall, false, false, false, r.DisableIcons)
+	displayRepo := r.Repository
+	if indicator != "" {
+		displayRepo = indicator + " " + r.Repository
+	}
+
+	// 7. Upon confirmation:
+	// If --symlink was passed: output success message and exit.
+	// If there was no --symlink: each file logged in state.json is moved to overwrite its symlink, then output success and exit.
+	if !r.Symlink {
+		if st, err := state.LoadState(); err == nil {
+			if entry := st.GetInstallMap(r.Repository); entry != nil && entry.Installed != nil {
+				for _, filePath := range entry.Installed.Files {
+					if strings.Contains(filePath, ".ghpt/") {
+						stagedPath := filePath
+						activePath := strings.Replace(stagedPath, ".ghpt/", "", 1)
+						if _, err := os.Lstat(activePath); err == nil {
+							_ = os.Remove(activePath)
+						}
+						if err := os.MkdirAll(filepath.Dir(activePath), 0755); err == nil {
+							if err := moveFile(stagedPath, activePath); err != nil {
+								log.Warn("failed to move staged file over symlink", "staged", stagedPath, "active", activePath, "error", err)
+							}
+						}
+					}
+				}
 			}
 		}
 	}
+
+	log.Info(fmt.Sprintf("Successfully compiled and installed %s from source!", displayRepo))
+	pterm.Success.Printf("Successfully compiled and installed %s from source!\n", displayRepo)
 
 	return r.runPostInstallHook(r.Repository)
 }

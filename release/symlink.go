@@ -180,6 +180,8 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 		if err := os.Symlink(srcPath, destPath); err != nil {
 			return "", err
 		}
+		r.InstalledFiles = append(r.InstalledFiles, srcPath)
+		r.InstalledSymlinks = append(r.InstalledSymlinks, destPath)
 
 		if r.UI != nil {
 			r.UI.Update(6, r.ResolvedVersion, filepath.Base(assetPath), binary.Name, destPath, "")

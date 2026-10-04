@@ -12,6 +12,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildRegexFromTypes_PrioritizationAndMusl(t *testing.T) {
@@ -175,4 +176,64 @@ func TestInstalledApp_MaxDepthSerialization(t *testing.T) {
 	err = json.Unmarshal(data, &loaded)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, loaded.MaxDepth)
+}
+
+func TestGetSourcePaths(t *testing.T) {
+	manifest, compile := getSourcePaths("obsproject/obs-studio")
+	assert.True(t, strings.HasSuffix(manifest, "manifest-obsproject-obs-studio.json"))
+	assert.True(t, strings.HasSuffix(compile, "compile-obsproject-obs-studio.sh"))
+	assert.Contains(t, manifest, filepath.Join("gh-pt", "source"))
+	assert.Contains(t, compile, filepath.Join("gh-pt", "source"))
+}
+
+func TestInstallDirWatcherAndSymlinking(t *testing.T) {
+	tmpDir := t.TempDir()
+	stagedDir := filepath.Join(tmpDir, ".ghpt")
+	// simulate .ghpt staging structure:
+	// stagedPath: <tmpDir>/.ghpt/bin/myapp
+	// activePath: <tmpDir>/bin/myapp
+
+	require.NoError(t, os.MkdirAll(filepath.Join(stagedDir, "bin"), 0755))
+	before, err := snapshotDirFiles(stagedDir)
+	require.NoError(t, err)
+	assert.Empty(t, before)
+
+	// Create a new file in staged dir
+	stagedFile := filepath.Join(stagedDir, "bin", "myapp")
+	require.NoError(t, os.WriteFile(stagedFile, []byte("#!/bin/sh\necho ok"), 0755))
+
+	// Diff reveals new file
+	newFiles, err := diffDirFiles(stagedDir, before)
+	require.NoError(t, err)
+	require.Len(t, newFiles, 1)
+	assert.Equal(t, stagedFile, newFiles[0])
+
+	// Process symlinks
+	r := &RootCLI{}
+	recorded := r.processNewFilesAndSymlinks(newFiles)
+	require.Len(t, recorded, 2)
+	assert.Equal(t, stagedFile, recorded[0])
+
+	expectedActive := strings.Replace(stagedFile, ".ghpt/", "", 1)
+	assert.Equal(t, expectedActive, recorded[1])
+	assert.FileExists(t, expectedActive)
+
+	// Verify it is a symlink pointing to stagedFile
+	fi, err := os.Lstat(expectedActive)
+	require.NoError(t, err)
+	assert.True(t, fi.Mode()&os.ModeSymlink != 0)
+	target, err := os.Readlink(expectedActive)
+	require.NoError(t, err)
+	assert.Equal(t, stagedFile, target)
+
+	// Test moving when no --symlink
+	// Staged file should overwrite symlink
+	_ = os.Remove(expectedActive)
+	err = moveFile(stagedFile, expectedActive)
+	require.NoError(t, err)
+	assert.FileExists(t, expectedActive)
+	fiAfter, err := os.Lstat(expectedActive)
+	require.NoError(t, err)
+	assert.False(t, fiAfter.Mode()&os.ModeSymlink != 0, "should now be regular file, not symlink")
+	assert.NoFileExists(t, stagedFile)
 }

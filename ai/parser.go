@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -50,23 +51,69 @@ var (
 	ErrMalformedJSON = ErrMalformedDirective
 )
 
+// ManifestJSONTemplate is the schema/example template for manifest.json
+const ManifestJSONTemplate = `{
+  "dependencies": [
+    {
+      "name": "<package-name>",
+      "manager": "<apt|dnf|pacman|brew|apk|zypper|vcpkg|cargo>",
+      "version": "<optional: e.g. >=1.0>",
+      "requirement": "<optional: min|max|exact|suggested>"
+    }
+  ]
+}`
+
+// CompileScriptTemplate is the starting template for compile.sh
+const CompileScriptTemplate = `#!/usr/bin/env bash
+set -euo pipefail
+exec > >(tee -a compile.log) 2>&1
+
+### SKIP INSTALLING DEPENDENCIES as that step occurs prior by gh-pt using the manifest.json
+#
+# NOTE: A symlink named "install-dir" is located in .ghpt (i.e. .ghpt/install-dir).
+# Treat "install-dir" the same as "/usr/local/" or "$HOME/.local" and place binaries
+# into the same structure:
+#   install-dir/bin
+#   install-dir/libs
+#   install-dir/share
+#   install-dir/state
+# Do NOT install files directly into /usr/local or ~/.local outside of install-dir!
+`
+
 // Dependency represents a package dependency and the resolver required to install it.
 type Dependency struct {
-	Name     string `json:"name"`
-	Resolver string `json:"resolver"`
+	Name        string `json:"name"`
+	Resolver    string `json:"resolver,omitempty"`
+	Manager     string `json:"manager,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Requirement string `json:"requirement,omitempty"`
+}
+
+func (d *Dependency) GetResolver() string {
+	if d.Manager != "" {
+		return d.Manager
+	}
+	return d.Resolver
+}
+
+type Manifest struct {
+	Dependencies []Dependency `json:"dependencies"`
+	Toolchain    string       `json:"toolchain,omitempty"`
 }
 
 // CompilePayload represents the parsed 2-stage AI output containing dependencies,
 // toolchain, and the compilation script.
 type CompilePayload struct {
 	Dependencies []Dependency `json:"dependencies"`
-	Toolchain    string       `json:"toolchain"`
+	Toolchain    string       `json:"toolchain,omitempty"`
 	Script       string       `json:"script"`
+	ManifestJSON string       `json:"manifest_json,omitempty"`
 }
 
 var (
-	manifestBlockRegex = regexp.MustCompile("(?is)```ghpt-manifest\\b[^\\r\\n]*\\r?\\n?(.*?)```")
-	bashBlockRegex     = regexp.MustCompile("(?is)```(?:bash|sh)\\b[^\\r\\n]*\\r?\\n?(.*?)```")
+	manifestJSONBlockRegex = regexp.MustCompile("(?is)```json\\b[^\\r\\n]*\\r?\\n?([^{\\n]*\\{.*?\"dependencies\".*?\\})\\s*```")
+	manifestBlockRegex     = regexp.MustCompile("(?is)```ghpt-manifest\\b[^\\r\\n]*\\r?\\n?(.*?)```")
+	bashBlockRegex         = regexp.MustCompile("(?is)```(?:bash|sh)\\b[^\\r\\n]*\\r?\\n?(.*?)```")
 )
 
 // parseDirectiveBlock deterministically constructs a CompilePayload from
@@ -95,7 +142,7 @@ func parseDirectiveBlock(block string) ([]Dependency, string, error) {
 			if len(fields) < 3 {
 				return nil, "", fmt.Errorf("%w: dep requires <name> <resolver>: %q", ErrMalformedDirective, line)
 			}
-			deps = append(deps, Dependency{Name: fields[1], Resolver: fields[2]})
+			deps = append(deps, Dependency{Name: fields[1], Resolver: fields[2], Manager: fields[2]})
 		default:
 			return nil, "", fmt.Errorf("%w: unknown directive %q: %q", ErrMalformedDirective, directive, line)
 		}
@@ -108,28 +155,87 @@ func parseDirectiveBlock(block string) ([]Dependency, string, error) {
 	return deps, toolchain, nil
 }
 
-// ParseAIOutput extracts the dependency manifest (ghpt-manifest directives) and
-// compilation script (Bash/sh) from AI-generated response text. The AI outputs
-// simple directives — this function deterministically constructs the payload.
+// ParseAIOutput extracts the dependency manifest (JSON or ghpt-manifest directives) and
+// compilation script (Bash/sh) from AI-generated response text.
 func ParseAIOutput(raw string) (*CompilePayload, error) {
+	var deps []Dependency
+	var toolchain string
+	var manifestJSON string
+	manifestFound := false
+
+	// 1. Try ghpt-manifest directives first if present
 	manifestMatch := manifestBlockRegex.FindStringSubmatch(raw)
-	if len(manifestMatch) < 2 {
+	if len(manifestMatch) >= 2 {
+		manifestStr := strings.TrimSpace(manifestMatch[1])
+		if manifestStr == "" {
+			return nil, fmt.Errorf("%w: empty manifest block", ErrMalformedDirective)
+		}
+		var err error
+		deps, toolchain, err = parseDirectiveBlock(manifestStr)
+		if err != nil {
+			return nil, err
+		}
+		manifestFound = true
+		m := Manifest{Dependencies: deps, Toolchain: toolchain}
+		formatted, _ := json.MarshalIndent(m, "", "  ")
+		manifestJSON = string(formatted)
+	}
+
+	// 2. If no ghpt-manifest block, try JSON code block
+	if !manifestFound {
+		jsonMatch := manifestJSONBlockRegex.FindStringSubmatch(raw)
+		if len(jsonMatch) >= 2 {
+			jsonStr := strings.TrimSpace(jsonMatch[1])
+			var m Manifest
+			if err := json.Unmarshal([]byte(jsonStr), &m); err == nil {
+				for i := range m.Dependencies {
+					if m.Dependencies[i].Resolver == "" && m.Dependencies[i].Manager != "" {
+						m.Dependencies[i].Resolver = m.Dependencies[i].Manager
+					}
+					if m.Dependencies[i].Manager == "" && m.Dependencies[i].Resolver != "" {
+						m.Dependencies[i].Manager = m.Dependencies[i].Resolver
+					}
+				}
+				deps = m.Dependencies
+				toolchain = m.Toolchain
+				formatted, _ := json.MarshalIndent(m, "", "  ")
+				manifestJSON = string(formatted)
+				manifestFound = true
+			}
+		}
+	}
+
+	// 3. Fallback: check if raw itself is valid JSON manifest
+	if !manifestFound {
+		var m Manifest
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "{") && strings.Contains(trimmed, `"dependencies"`) {
+			if err := json.Unmarshal([]byte(trimmed), &m); err == nil && len(m.Dependencies) > 0 {
+				for i := range m.Dependencies {
+					if m.Dependencies[i].Resolver == "" && m.Dependencies[i].Manager != "" {
+						m.Dependencies[i].Resolver = m.Dependencies[i].Manager
+					}
+					if m.Dependencies[i].Manager == "" && m.Dependencies[i].Resolver != "" {
+						m.Dependencies[i].Manager = m.Dependencies[i].Resolver
+					}
+				}
+				deps = m.Dependencies
+				toolchain = m.Toolchain
+				formatted, _ := json.MarshalIndent(m, "", "  ")
+				manifestJSON = string(formatted)
+				manifestFound = true
+			}
+		}
+	}
+
+	if !manifestFound {
 		return nil, ErrMissingManifest
 	}
 
+	// 4. Find compilation script
 	bashMatch := bashBlockRegex.FindStringSubmatch(raw)
 	if len(bashMatch) < 2 {
 		return nil, ErrMissingScript
-	}
-
-	manifestStr := strings.TrimSpace(manifestMatch[1])
-	if manifestStr == "" {
-		return nil, fmt.Errorf("%w: empty manifest block", ErrMalformedDirective)
-	}
-
-	deps, toolchain, err := parseDirectiveBlock(manifestStr)
-	if err != nil {
-		return nil, err
 	}
 
 	script := strings.TrimSpace(bashMatch[1])
@@ -141,5 +247,6 @@ func ParseAIOutput(raw string) (*CompilePayload, error) {
 		Dependencies: deps,
 		Toolchain:    toolchain,
 		Script:       script,
+		ManifestJSON: manifestJSON,
 	}, nil
 }

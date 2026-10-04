@@ -61,11 +61,18 @@ type GithubRelease struct {
 		Resume()
 		Update(step int, a string, b string, c string, target string, e string)
 	}
-	Sidecars           string
-	SidecarSymlinkTo   []string
-	InstalledSidecars  []string
-	IsTTYFunc          func() bool
-	WarnUnmappedAssets *bool
+	Sidecars            string
+	SidecarSymlinkTo    []string
+	InstalledSidecars   []string
+	InstalledFiles      []string
+	InstalledSymlinks   []string
+	InstalledPkgManager string
+	InstalledPackageIDs []string
+	DepsPkgManager      string
+	DepsPackageIDs      []string
+	DepsFiles           []string
+	IsTTYFunc           func() bool
+	WarnUnmappedAssets  *bool
 }
 
 type Prompter interface {
@@ -561,6 +568,7 @@ func (r *GithubRelease) createSidecarSymlinks() {
 				log.Warn("failed to create symlink", "error", err, "sidecar", sidecarPath, "link", linkPath)
 			} else {
 				log.Info("created symlink", "sidecar", sidecarName, "link", linkPath)
+				r.InstalledSymlinks = append(r.InstalledSymlinks, linkPath)
 			}
 		}
 	}
@@ -690,6 +698,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 
 	destinationPath := r.resolveDestinationPath(binaryPath)
 	r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destinationPath))
+	r.InstalledFiles = append(r.InstalledFiles, destinationPath)
 
 	log.Infof("will install %s to %s", binaryPath, destinationPath)
 
@@ -954,6 +963,8 @@ func (r *GithubRelease) resolveBinaryDependencies(binaryPath string, extractDir 
 	}
 
 	r.InstalledPackageNames = append(r.InstalledPackageNames, packagesToInstall...)
+	r.DepsPkgManager = mgr.Name()
+	r.DepsPackageIDs = append(r.DepsPackageIDs, packagesToInstall...)
 	return nil
 }
 
@@ -961,6 +972,7 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 	if r.CliParams.DryRun {
 		destinationPath := r.resolveDestinationPath(binaryPath)
 		r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destinationPath))
+		r.InstalledFiles = append(r.InstalledFiles, destinationPath)
 		log.Infof("[dry-run] Would install binary: %s to %s", binaryPath, destinationPath)
 		return nil
 	}
@@ -988,6 +1000,7 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 
 	destinationPath := r.resolveDestinationPath(binaryPath)
 	r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destinationPath))
+	r.InstalledFiles = append(r.InstalledFiles, destinationPath)
 
 	log.Infof("will install %s to %s", binaryPath, destinationPath)
 
@@ -2103,6 +2116,8 @@ func (r *GithubRelease) Install() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("batched .deb installation failed: %w", err)
 		}
+		r.InstalledPkgManager = args[0]
+		r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 	}
 
 	if len(r.PendingRpms) > 0 {
@@ -2142,6 +2157,8 @@ func (r *GithubRelease) Install() error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("batched .rpm installation failed: %w", err)
 		}
+		r.InstalledPkgManager = args[0]
+		r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 	}
 
 	if pUI != nil {
@@ -2186,6 +2203,69 @@ func (r *GithubRelease) Install() error {
 				InstalledSidecars:        r.InstalledSidecars,
 				FallbackReleases:         r.CliParams.FallbackReleases,
 			})
+
+			// Save to install-map
+			var depsStep *state.InstallStep
+			if r.DepsPkgManager != "" || len(r.DepsPackageIDs) > 0 || len(r.DepsFiles) > 0 {
+				var pkgInfo *state.InstallPkg
+				if r.DepsPkgManager != "" || len(r.DepsPackageIDs) > 0 {
+					pkgInfo = &state.InstallPkg{
+						Manager:   r.DepsPkgManager,
+						PackageID: strings.Join(r.DepsPackageIDs, ", "),
+					}
+				}
+				depsStep = &state.InstallStep{
+					Pkg:   pkgInfo,
+					Files: r.DepsFiles,
+				}
+			}
+
+			allInstalledFiles := make([]string, 0)
+			seenFiles := make(map[string]bool)
+			for _, f := range r.InstalledFiles {
+				if f != "" && !seenFiles[f] {
+					seenFiles[f] = true
+					allInstalledFiles = append(allInstalledFiles, f)
+				}
+			}
+			for _, sc := range r.InstalledSidecars {
+				if sc != "" && !seenFiles[sc] {
+					seenFiles[sc] = true
+					allInstalledFiles = append(allInstalledFiles, sc)
+				}
+			}
+			for _, sym := range r.InstalledSymlinks {
+				if sym != "" && !seenFiles[sym] {
+					seenFiles[sym] = true
+					allInstalledFiles = append(allInstalledFiles, sym)
+				}
+			}
+			for _, bin := range r.InstalledBinaries {
+				fullBin := filepath.Join(r.CliParams.TargetPath, bin)
+				if !seenFiles[fullBin] {
+					seenFiles[fullBin] = true
+					allInstalledFiles = append(allInstalledFiles, fullBin)
+				}
+			}
+
+			var installedPkgInfo *state.InstallPkg
+			if r.InstalledPkgManager != "" || len(r.InstalledPackageIDs) > 0 {
+				installedPkgInfo = &state.InstallPkg{
+					Manager:   r.InstalledPkgManager,
+					PackageID: strings.Join(r.InstalledPackageIDs, ", "),
+				}
+			}
+
+			installedStep := &state.InstallStep{
+				Pkg:   installedPkgInfo,
+				Files: allInstalledFiles,
+			}
+
+			installMapEntry := &state.InstallMapEntry{
+				Deps:      depsStep,
+				Installed: installedStep,
+			}
+			_ = st.SetInstallMap(r.CliParams.Repository, installMapEntry)
 		} else {
 			log.Warn("could not save installed app state", "error", err)
 		}
@@ -2315,6 +2395,8 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 	}
 	if name := extractPackageName(binaryPath, "pacman"); name != "" {
 		r.InstalledPackageNames = append(r.InstalledPackageNames, name)
+		r.InstalledPkgManager = "pacman"
+		r.InstalledPackageIDs = append(r.InstalledPackageIDs, name)
 	}
 	log.Debug("installing pacman package", "binaryPath", binaryPath)
 
