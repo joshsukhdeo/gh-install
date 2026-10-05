@@ -2,12 +2,14 @@
 GO_BIN = go
 GO_BUILD_FLAGS = -v
 BINARY_NAME = gh-pt
+WRAPPER_NAME = ghpt
 MAIN_PACKAGE = .
+WRAPPER_PACKAGE = ./cmd/wrapper
 OUTPUT_DIR = .
 
-.PHONY: all build clean fmt lint tidy
+.PHONY: all build wrapper install-wrapper clean fmt lint tidy
 
-all: build
+all: build wrapper
 
 build:
 	@echo "Building $(BINARY_NAME)..."
@@ -15,9 +17,27 @@ build:
 	$(GO_BIN) build $(GO_BUILD_FLAGS) -o $(OUTPUT_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)
 	@echo "Build complete. Binary located at $(OUTPUT_DIR)/$(BINARY_NAME)"
 
+wrapper:
+	@echo "Building $(WRAPPER_NAME) wrapper..."
+	@mkdir -p $(OUTPUT_DIR)
+	$(GO_BIN) build $(GO_BUILD_FLAGS) -o $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper $(WRAPPER_PACKAGE)
+	@chmod 0100 $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper
+	@echo "Build complete. Wrapper located at $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper"
+
+# Install wrapper to temp directory for AI sandbox
+install-wrapper: wrapper
+	@PID=$$(ps -o ppid= -p $$$$); \
+	WRAPPER_DIR=/tmp/ghpt-ai-wrapper-$$PID; \
+	mkdir -p $$WRAPPER_DIR; \
+	chmod 0644 $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper; \
+	cp $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper $$WRAPPER_DIR/$(WRAPPER_NAME); \
+	chmod 0100 $$WRAPPER_DIR/$(WRAPPER_NAME); \
+	chmod 0100 $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper; \
+	echo "Wrapper installed to $$WRAPPER_DIR/$(WRAPPER_NAME)"
+
 clean:
 	@echo "Cleaning up..."
-	@rm -rf $(OUTPUT_DIR)
+	@rm -f $(OUTPUT_DIR)/$(BINARY_NAME) $(OUTPUT_DIR)/$(WRAPPER_NAME)-wrapper
 	@$(GO_BIN) clean
 	@echo "Cleanup complete."
 

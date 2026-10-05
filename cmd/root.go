@@ -79,14 +79,16 @@ func (r *RootCLI) Validate() error {
 	}
 
 	// Detect root user and handle global install path
-	if os.Getuid() == 0 {
+	if os.Geteuid() == 0 {
+		fmt.Fprintf(os.Stderr, "\033[33m*** running as root is *HIGHLY* discouraged ***\033[0m\n")
 		if r.Global {
-			// Root + global: ensure we're using /usr/local/bin
 			if r.TargetPath == GetDefaultTargetPath() {
 				r.TargetPath = "/usr/local/bin"
 			}
+			if err := exec.Command("sudo", "-v").Run(); err != nil {
+				log.Warn("sudo -v failed (credentials may not cache)", "error", err)
+			}
 		} else if !r.AllowRootUserInstall {
-			// Root without global flag and without explicit permission
 			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --allow-root-user-install to install to user-local paths")
 			log.Error("init error", "error", err)
 			return err

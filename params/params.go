@@ -63,6 +63,7 @@ type CLI struct {
 	Source      SourceCmd      `cmd:"" help:"Compile repository from source."`
 	Completions CompletionsCmd `cmd:"" help:"Generate shell completions."`
 	Search      SearchCmd      `cmd:"" help:"Search for repositories on GitHub."`
+	Helper      HelperCmd      `cmd:"" help:"AI-safe helper functions."`
 	Test        bool           `help:"Hidden flag for testing to dump parsed parameters." hidden:""`
 
 	// Global flags
@@ -174,10 +175,23 @@ type RmCmd = StateRmCmd
 
 type StateEditCmd struct{}
 
+type UpgradeFlags struct {
+	DisablePrompts  bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
+	Extractor       string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	Overwrite       bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
+	DryRun          bool   `default:"false" help:"Show what would be upgraded."`
+	VerifyChecksum  bool   `default:"true" help:"Verify asset checksums."`
+	SkipVtSandbox   bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	FallbackReleases int   `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
+	WarnUnmappedAssets bool `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
+	ProgressBar     string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+}
+
 type UpgradeCmd struct {
 	Repository string `arg:"" optional:"" predictor:"installed_apps" predict:"installed_apps" help:"Optional repository to update."`
 	User       bool   `short:"u" name:"user" help:"Update only user installations."`
-	CommonInstallFlags
+	Global     bool   `short:"g" name:"global" help:"Update only global installations."`
+	UpgradeFlags
 }
 
 type StateLsCmd struct {
@@ -360,4 +374,20 @@ type ExecContext struct {
 	DisableIcons        bool
 	HookEvent           string
 	HookScriptPath      string
+}
+
+type HelperCmd struct {
+	GetSystemInfo         bool   `help:"Display system information for AI context."`
+	GetManifest           bool   `help:"Display current manifest.json contents."`
+	ValidateManifest      bool   `help:"Validate manifest.json schema."`
+	ValidateCompileScript bool   `help:"Validate compile.sh for forbidden patterns."`
+	ViewTargetDirs        bool   `help:"List contents of target base directory."`
+	ViewInstalledFiles    bool   `help:"List paths of all installed files."`
+	Install               string `help:"Install file/directory (format: dirname=source)."`
+	GetBodyTemplate       bool   `help:"Display body.sh template." name:"get-body-template"`
+	AppendManifest        string `help:"Add dependencies (format: manager=pkg@version)."`
+	RemoveFromManifest    string `help:"Remove dependencies (format: manager=pkg)."`
+	RunCompileScript      bool   `help:"Execute compile.sh."`
+	TargetBaseDir         string `help:"Base installation directory." name:"target-base-dir" type:"path"`
+	Global                bool   `short:"g" help:"Use global install paths."`
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -16,11 +17,13 @@ type Config struct {
 }
 
 type PathsConfig struct {
-	InstallPath string `yaml:"install_path"`
-	GlobalPath  string `yaml:"global_path"`
-	ClonePath   string `yaml:"clone_path"`
-	ForkPath    string `yaml:"fork_path"`
-	SidecarPath string `yaml:"sidecar_path"`
+	InstallPath   string `yaml:"install_path"`
+	GlobalPath    string `yaml:"global_path"`
+	ClonePath     string `yaml:"clone_path"`
+	ForkPath      string `yaml:"fork_path"`
+	SidecarPath   string `yaml:"sidecar_path"`
+	TargetBaseDir string `yaml:"target_base_dir"`
+	RepoDir       string `yaml:"repo_dir"`
 }
 
 type AIConfig struct {
@@ -32,8 +35,9 @@ type CoreConfig struct {
 	InstallTypes                                  string `yaml:"install_types"`
 	ResolveDeps                                   bool   `yaml:"resolve_deps"`
 	NoDeps                                        bool   `yaml:"no_deps"`
-	DisablePrompts                                bool   `yaml:"disable_prompts"`
+	DisablePrompts                                bool   `yaml:"disable_propts"`
 	NoSaveState                                   bool   `yaml:"no_save_state"`
+	Global                                        bool   `yaml:"global"`
 	Wine                                          string `yaml:"wine"`
 	Extractor                                     string `yaml:"extractor"`
 	KeepSuffixes                                  bool   `yaml:"keep_suffixes"`
@@ -73,6 +77,8 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	applyConfigDefaults(&cfg)
+
 	return &cfg, nil
 }
 
@@ -86,4 +92,17 @@ func SaveConfig(cfg *Config) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+func applyConfigDefaults(cfg *Config) {
+	if cfg.Paths.TargetBaseDir == "" {
+		if cfg.Paths.InstallPath != "" {
+			cfg.Paths.TargetBaseDir = strings.TrimSuffix(cfg.Paths.InstallPath, "/bin")
+		} else if home, err := os.UserHomeDir(); err == nil {
+			cfg.Paths.TargetBaseDir = filepath.Join(home, ".local")
+		}
+	}
+	if cfg.Paths.RepoDir == "" {
+		cfg.Paths.RepoDir = filepath.Join(xdg.DataHome, "gh-pt", "repos")
+	}
 }

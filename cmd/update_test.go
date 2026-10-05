@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -142,6 +143,66 @@ func TestFetchLatestReleaseTags(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "v2.40.0", tags["cli/cli"])
 		assert.NotContains(t, tags, "deleted/repo")
+	})
+}
+
+func TestDoUpdate_TargetedUpgradeFiltersGraphQLQuery(t *testing.T) {
+	t.Run("targeted upgrade only queries specified repo", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		origDataHome := os.Getenv("XDG_DATA_HOME")
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+		defer func() { _ = os.Setenv("XDG_DATA_HOME", origDataHome) }()
+
+		st := &state.State{
+			Version: 2,
+			Apps: map[string]*state.InstalledApp{
+				"owner/repo":     {Repository: "owner/repo", Version: "v1.0.0"},
+				"another/repo":   {Repository: "another/repo", Version: "v2.0.0"},
+				"third/fakerepo": {Repository: "third/fakerepo", Version: "v0.1.0"},
+			},
+		}
+		require.NoError(t, st.Save())
+
+		var capturedQuery string
+		mockGQL := &mockGQLClient{
+			doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+				capturedQuery = query
+				resp, ok := response.(*map[string]GQLRepoResult)
+				require.True(t, ok)
+				*resp = map[string]GQLRepoResult{
+					"repo_0": {LatestRelease: &struct {
+						TagName string `json:"tagName"`
+						Name    string `json:"name"`
+					}{TagName: "v2.0.0"}},
+				}
+				return nil
+			},
+		}
+
+		origNewGQL := newGraphQLClient
+		newGraphQLClient = func() (GQLClient, error) { return mockGQL, nil }
+		defer func() { newGraphQLClient = origNewGQL }()
+
+		origInstall := installReleaseFunc
+		installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+			return nil
+		}
+		defer func() { installReleaseFunc = origInstall }()
+
+		r := &RootCLI{}
+		r.Repository = "owner/repo"
+		r.Update = true
+		r.VerifyChecksum = true
+
+		ghClient, _ := api.DefaultRESTClient()
+		err := DoUpdate(r, ghClient)
+		require.NoError(t, err)
+
+		assert.Contains(t, capturedQuery, `"owner"`)
+		assert.Contains(t, capturedQuery, `"repo"`)
+		assert.NotContains(t, capturedQuery, `"another"`)
+		assert.NotContains(t, capturedQuery, `"third"`)
+		assert.NotContains(t, capturedQuery, `"fakerepo"`)
 	})
 }
 

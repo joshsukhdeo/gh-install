@@ -276,9 +276,13 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	// for every repository tracked in state.json in exactly one network round-trip.
 	trackedRepos := make([]string, 0, len(st.Apps))
 	for repo := range st.Apps {
-		if repo != "" {
-			trackedRepos = append(trackedRepos, repo)
+		if repo == "" {
+			continue
 		}
+		if r.Repository != "" && !strings.EqualFold(r.Repository, repo) {
+			continue
+		}
+		trackedRepos = append(trackedRepos, repo)
 	}
 	sort.Strings(trackedRepos)
 

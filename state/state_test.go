@@ -312,11 +312,41 @@ func TestStateManagement(t *testing.T) {
 
 		st, err := LoadState()
 		require.NoError(t, err)
-		assert.Equal(t, 2, st.Version)
+		assert.Equal(t, 3, st.Version)
 		assert.NotContains(t, st.Apps, "sharkdp/fd")
 		assert.Contains(t, st.Apps, "junegunn/fzf")
 		assert.Contains(t, st.Repos, "sharkdp/fd")
 		assert.Contains(t, st.SystemPackages, "fzf-pkg")
+		assert.Equal(t, "/tmp", st.TargetBaseDir)
+	})
+
+	t.Run("MigrateV2toV3_TargetBaseDirInferred", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "migratev3"))
+		xdg.Reload()
+		stateDir := filepath.Join(tmpDir, "migratev3", "gh-pt")
+		err := os.MkdirAll(stateDir, 0755)
+		require.NoError(t, err)
+
+		v2JSON := `{
+  "version": 2,
+  "apps": {
+    "owner/app": {
+      "repository": "owner/app",
+      "target_path": "/home/user/.local/bin",
+      "global": false
+    }
+  }
+}`
+		statePath := filepath.Join(stateDir, "state.json")
+		err = os.WriteFile(statePath, []byte(v2JSON), 0644)
+		require.NoError(t, err)
+
+		st, err := LoadState()
+		require.NoError(t, err)
+		assert.Equal(t, 3, st.Version)
+		assert.Equal(t, "/home/user/.local", st.TargetBaseDir)
+		assert.False(t, st.Global)
+		assert.NotNil(t, st.SourceRepos)
 	})
 
 	t.Run("InstalledApp_V2Fields", func(t *testing.T) {

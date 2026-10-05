@@ -139,10 +139,24 @@ type InstallMapEntry struct {
 	Installed *InstallStep `json:"installed,omitempty"`
 }
 
+type SourceRepo struct {
+	Repository    string `json:"repository"`
+	RepoPath      string `json:"repo_path"`
+	IsFork        bool   `json:"is_fork"`
+	CurrentVersion string `json:"current_version"`
+	Track         string `json:"track"`
+	LastUpdated   string `json:"last_updated"`
+	CompileScript string `json:"compile_script"`
+	ManifestPath  string `json:"manifest_path"`
+}
+
 type State struct {
 	Version        int                         `json:"version,omitempty"`
+	TargetBaseDir  string                      `json:"target_base_dir,omitempty"`
+	Global         bool                        `json:"global,omitempty"`
 	Apps           map[string]*InstalledApp    `json:"apps"`
 	Repos          map[string]*InstalledApp    `json:"repos,omitempty"`
+	SourceRepos    map[string]*SourceRepo      `json:"source_repos,omitempty"`
 	SystemPackages []string                    `json:"system_packages,omitempty"`
 	Hooks          map[string]string           `json:"hooks,omitempty"`
 	InstallMap     map[string]*InstallMapEntry `json:"install-map,omitempty"`
@@ -217,6 +231,32 @@ func (s *State) migrateV1toV2() error {
 	return nil
 }
 
+func (s *State) migrateV2toV3() error {
+	if s.Version >= 3 {
+		return nil
+	}
+	s.Version = 3
+	if s.SourceRepos == nil {
+		s.SourceRepos = make(map[string]*SourceRepo)
+	}
+
+	// Infer TargetBaseDir from existing apps if not set
+	if s.TargetBaseDir == "" && len(s.Apps) > 0 {
+		for _, app := range s.Apps {
+			if app.TargetPath != "" {
+				dir := filepath.Dir(app.TargetPath)
+				if dir != "" && dir != "." {
+					s.TargetBaseDir = dir
+					s.Global = app.Global
+					break
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func migrateV1toV2(states ...*State) error {
 	if len(states) == 0 {
 		st, err := LoadState()
@@ -237,9 +277,10 @@ func LoadState() (*State, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &State{
-				Version:        2,
+				Version:        3,
 				Apps:           make(map[string]*InstalledApp),
 				Repos:          make(map[string]*InstalledApp),
+				SourceRepos:    make(map[string]*SourceRepo),
 				Hooks:          make(map[string]string),
 				SystemPackages: []string{},
 				InstallMap:     make(map[string]*InstallMapEntry),
@@ -268,6 +309,9 @@ func LoadState() (*State, error) {
 	if s.InstallMap == nil {
 		s.InstallMap = make(map[string]*InstallMapEntry)
 	}
+	if s.SourceRepos == nil {
+		s.SourceRepos = make(map[string]*SourceRepo)
+	}
 
 	if s.Version < 2 {
 		// Create a durable backup of the V1 state before migrating
@@ -277,6 +321,12 @@ func LoadState() (*State, error) {
 			_ = f.Close()
 		}
 		_ = s.migrateV1toV2()
+		_ = s.Save()
+	}
+
+	if s.Version < 3 {
+		_ = s.migrateV2toV3()
+		_ = s.Save()
 	}
 
 	return &s, nil

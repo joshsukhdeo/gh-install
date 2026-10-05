@@ -33,8 +33,17 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		}
 		return RemoveApp(cli.Rm.Target, cli.Rm.Purge)
 	case "upgrade", "upgrade <repository>":
-		r.CommonInstallFlags = cli.Upgrade.CommonInstallFlags
 		r.Repository = cli.Upgrade.Repository
+		r.DisablePrompts = cli.Upgrade.DisablePrompts
+		r.Extractor = cli.Upgrade.Extractor
+		r.Overwrite = cli.Upgrade.Overwrite
+		r.DryRun = cli.Upgrade.DryRun
+		r.VerifyChecksum = cli.Upgrade.VerifyChecksum
+		r.SkipVtSandbox = cli.Upgrade.SkipVtSandbox
+		r.FallbackReleases = cli.Upgrade.FallbackReleases
+		r.WarnUnmappedAssets = cli.Upgrade.WarnUnmappedAssets
+		r.ProgressBar = cli.Upgrade.ProgressBar
+		r.IsUpgradeCmd = true
 		if !cli.Upgrade.User && !cli.Upgrade.Global {
 			r.UpdateAll = true
 		} else {
@@ -157,6 +166,8 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		return GenerateCompletions("zsh")
 	case "completions powershell":
 		return GenerateCompletions("powershell")
+	case "helper":
+		return RunHelper(&cli.Helper)
 	default:
 		return fmt.Errorf("unknown command: %s", cmdStr)
 	}
