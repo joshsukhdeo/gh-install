@@ -141,3 +141,39 @@ func TestCLI_Indicators(t *testing.T) {
 	assert.Equal(t, "^*@", cmd.GetStateIndicator(true, true, false, false, true, true))
 	assert.Equal(t, "!@", cmd.GetStateIndicator(true, false, true, false, false, true))
 }
+
+func TestCLI_NoColor_NoEmojis(t *testing.T) {
+	t.Run("Install Flags", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "cli/cli", "--no-color", "--no-emojis"})
+		assert.True(t, cli.Install.NoColor)
+		assert.True(t, cli.Install.NoEmojis)
+	})
+
+	t.Run("Install Flag Aliases", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "cli/cli", "--no-colors", "--no-emoji"})
+		assert.True(t, cli.Install.NoColor)
+		assert.True(t, cli.Install.NoEmojis)
+	})
+
+	t.Run("Upgrade Flags", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"upgrade", "cli/cli", "--no-color", "--no-emojis"})
+		assert.True(t, cli.Upgrade.NoColor)
+		assert.True(t, cli.Upgrade.NoEmojis)
+	})
+
+	t.Run("Show Flags", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"show", "cli/cli", "--no-color", "--no-emojis"})
+		assert.True(t, cli.Show.NoColor)
+		assert.True(t, cli.Show.NoEmojis)
+	})
+
+	t.Run("Ls and Ll Flags", func(t *testing.T) {
+		cliLs, _ := parseWithTestVars(t, []string{"ls", "--no-color", "--no-emojis"})
+		assert.True(t, cliLs.Ls.NoColor)
+		assert.True(t, cliLs.Ls.NoEmojis)
+
+		cliLl, _ := parseWithTestVars(t, []string{"ll", "--no-color", "--no-emojis"})
+		assert.True(t, cliLl.Ll.NoColor)
+		assert.True(t, cliLl.Ll.NoEmojis)
+	})
+}

@@ -49,6 +49,7 @@ func BinaryTypeFromPath(fromPath string) BinaryType {
 
 type SelectorItem struct {
 	Name         string
+	DisplayName  string
 	Selected     bool
 	Id           int
 	Compressed   bool

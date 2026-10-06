@@ -743,6 +743,13 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 		return err
 	}
 
+	noComp := false
+	if r.CliParams != nil {
+		noComp = r.CliParams.NoCompletionSetup
+	}
+	ScanAndInstallArchiveCompletions(tempExtractDir, filepath.Base(destinationPath), noComp)
+	_ = SetupBinaryCompletions(destinationPath, noComp)
+
 	return nil
 }
 
@@ -1042,6 +1049,11 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("sudo install failed: %w", err)
 			}
+			noComp := false
+			if r.CliParams != nil {
+				noComp = r.CliParams.NoCompletionSetup
+			}
+			_ = SetupBinaryCompletions(destinationPath, noComp)
 			return nil
 		}
 		return err
@@ -1060,6 +1072,12 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 	if err != nil {
 		return err
 	}
+
+	noComp := false
+	if r.CliParams != nil {
+		noComp = r.CliParams.NoCompletionSetup
+	}
+	_ = SetupBinaryCompletions(destinationPath, noComp)
 
 	return nil
 }
@@ -1401,6 +1419,17 @@ func (r *GithubRelease) GetLatestRelease() (*selector.SelectorItem, error) {
 }
 
 func (r *GithubRelease) Install() error {
+	if r.CliParams != nil {
+		if r.CliParams.NoEmojis {
+			r.CliParams.DisableIcons = true
+		}
+		if r.CliParams.NoColor || os.Getenv("NO_COLOR") != "" {
+			r.CliParams.NoColor = true
+			_ = os.Setenv("NO_COLOR", "1")
+			pterm.DisableColor()
+		}
+	}
+
 	var pUI interface {
 		Start()
 		Stop()
@@ -1415,14 +1444,14 @@ func (r *GithubRelease) Install() error {
 	}
 	if r.CliParams.ProgressBar == "conveyor" {
 		cUI := &ui.ConveyorUI{Repo: r.CliParams.Repository}
-		if r.CliParams.DisableIcons {
+		if r.CliParams.DisableIcons || r.CliParams.NoEmojis {
 			cUI.DisableIcons = true
 		}
 		r.UI = cUI
 		pUI = cUI
 	} else {
 		pacUI := ui.NewPacmanUI(r.CliParams.Repository)
-		if r.CliParams.DisableIcons {
+		if r.CliParams.DisableIcons || r.CliParams.NoEmojis {
 			pacUI.DisableIcons = true
 		}
 		r.UI = pacUI
@@ -1430,7 +1459,16 @@ func (r *GithubRelease) Install() error {
 		pUI = pacUI
 	}
 	pUI.Update(0, "", "", "", r.CliParams.TargetPath, "")
-	pUI.Start()
+	pUIStarted := false
+	startUI := func() {
+		if pUI != nil && !pUIStarted {
+			pUI.Start()
+			pUIStarted = true
+		}
+	}
+	if r.CliParams == nil || !r.CliParams.Interactive {
+		startUI()
+	}
 	defer func() {
 		if pUI != nil {
 			pUI.Stop()
@@ -1485,12 +1523,18 @@ func (r *GithubRelease) Install() error {
 			pUI.Update(1, r.ResolvedVersion, "", "", "", "")
 		}
 
+		avxLvl := ""
+		if r.CliParams != nil {
+			avxLvl = r.CliParams.AvxLevel
+		}
 		assetSelector, err := selector.AssetSelector(r.Client, r.CliParams.Repository, selector.AssetMatchCriteria{
 			ReleaseId:        release.Id,
 			Name:             r.CliParams.ReleaseAsset,
 			Regexps:          r.CliParams.ReleaseAssetRegexps,
 			Interactive:      r.CliParams.Interactive,
 			AllowForeignArch: r.CliParams.AllowForeignArch,
+			Single:           !r.CliParams.Interactive && !r.CliParams.All,
+			AvxLevel:         avxLvl,
 		})
 		if err != nil {
 			log.Error("could not create release asset selector", "repository", r.CliParams.Repository, "release id", release.Id, "release name", release.Name, "asset name matcher", r.CliParams.ReleaseAsset, "error", err)
@@ -1631,7 +1675,11 @@ func (r *GithubRelease) Install() error {
 		ghostType := "🍒"
 		if alreadyInstalled {
 			if r.CliParams.Overwrite {
-				ghostType = "\033[5m👻\033[0m" // flashing ghost
+				if (r.CliParams != nil && r.CliParams.NoColor) || os.Getenv("NO_COLOR") != "" {
+					ghostType = "👻"
+				} else {
+					ghostType = "\033[5m👻\033[0m" // flashing ghost
+				}
 			} else {
 				ghostType = "ᗣ" // solid ghost
 			}
@@ -1719,6 +1767,7 @@ func (r *GithubRelease) Install() error {
 	}
 
 	for _, asset := range assets {
+		startUI()
 		if r.CliParams.Interactive {
 			if pUI != nil {
 				pUI.Update(3, "", "", "", "", "")
@@ -1768,12 +1817,14 @@ func (r *GithubRelease) Install() error {
 		}
 
 		binarySelector, execErr := selector.BinarySelector(selector.BinaryMatchCriteria{
-			DownloadPath: filepath.Join(downloadDir, asset.Name),
-			Names:        r.CliParams.AssetBinaries,
-			Matcher:      r.CliParams.AssetBinariesRegexp,
-			Interactive:  r.CliParams.Interactive,
-			Extractor:    r.CliParams.Extractor,
-			Repository:   r.CliParams.Repository,
+			DownloadPath:   filepath.Join(downloadDir, asset.Name),
+			Names:          r.CliParams.AssetBinaries,
+			Matcher:        r.CliParams.AssetBinariesRegexp,
+			Interactive:    r.CliParams.Interactive,
+			Extractor:      r.CliParams.Extractor,
+			Repository:     r.CliParams.Repository,
+			OnlyFirstMatch: r.CliParams.OnlyFirstMatch,
+			MaxExeInstalls: r.CliParams.MaxExeInstalls,
 		})
 		if execErr != nil {
 			log.Error("could not create release asset binary selector", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", r.CliParams.AssetBinariesRegexp, "error", execErr)
@@ -1783,6 +1834,12 @@ func (r *GithubRelease) Install() error {
 		if execErr != nil {
 			log.Error("could not select release asset binary", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", r.CliParams.AssetBinariesRegexp, "error", execErr)
 			return execErr
+		}
+		if r.CliParams.OnlyFirstMatch && len(binaries) > 1 {
+			binaries = binaries[:1]
+		}
+		if r.CliParams.MaxExeInstalls > 0 && len(binaries) > r.CliParams.MaxExeInstalls {
+			binaries = binaries[:r.CliParams.MaxExeInstalls]
 		}
 
 		if r.CliParams.Interactive && pUI != nil {
@@ -2316,13 +2373,25 @@ func (r *GithubRelease) Install() error {
 	}
 
 	if r.StatusMessage != "" {
-		fmt.Printf("\n\033[1;32m%s\033[0m\n", r.StatusMessage)
+		msg := r.StatusMessage
+		if r.CliParams != nil && (r.CliParams.NoEmojis || r.CliParams.DisableIcons) {
+			msg = ui.StripEmojis(msg)
+		}
+		if (r.CliParams != nil && r.CliParams.NoColor) || os.Getenv("NO_COLOR") != "" {
+			fmt.Printf("\n%s\n", msg)
+		} else {
+			fmt.Printf("\n\033[1;32m%s\033[0m\n", msg)
+		}
 	} else {
 		repoName := r.CliParams.Repository
 		if parts := strings.Split(repoName, "/"); len(parts) == 2 {
 			repoName = parts[1]
 		}
-		fmt.Printf("\n\033[1;32mInstalled %s successfully!\033[0m\n", repoName)
+		if (r.CliParams != nil && r.CliParams.NoColor) || os.Getenv("NO_COLOR") != "" {
+			fmt.Printf("\nInstalled %s successfully!\n", repoName)
+		} else {
+			fmt.Printf("\n\033[1;32mInstalled %s successfully!\033[0m\n", repoName)
+		}
 	}
 
 	if r.CliParams == nil || (!r.CliParams.Update && !r.CliParams.UpdateAll) {

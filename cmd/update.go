@@ -322,7 +322,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		}
 
 		if app.Pinned && !specificallyTargeted {
-			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons)
+			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
 			repoDisplay := app.Repository
 			if indicator != "" {
 				repoDisplay = indicator + " " + app.Repository
@@ -352,7 +352,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		normalizedStored := strings.TrimPrefix(app.Version, "v")
 
 		if latestTag == app.Version || (normalizedLatest != "" && normalizedLatest == normalizedStored) {
-			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons)
+			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
 			repoDisplay := app.Repository
 			if indicator != "" {
 				repoDisplay = indicator + " " + app.Repository
@@ -394,7 +394,7 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		app := item.app
 		latestTag := item.latestTag
 
-		indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons)
+		indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
 		repoDisplay := app.Repository
 		if indicator != "" {
 			repoDisplay = indicator + " " + app.Repository

@@ -658,3 +658,47 @@ func TestSelectorFallbackChain(t *testing.T) {
 		t.Errorf("expected screego_1.12.5_linux_amd64.tar.gz, got %s", selected[0].Name)
 	}
 }
+
+func TestBinarySelector_MultiBinaryOptions(t *testing.T) {
+	items := []*SelectorItem{
+		{Name: "tool1.exe"},
+		{Name: "tool2.exe"},
+		{Name: "tool3.exe"},
+	}
+
+	t.Run("DefaultInstallsAll", func(t *testing.T) {
+		s := &Selector{
+			Kind:  Binary,
+			Items: items,
+		}
+		selected, err := s.Run()
+		require.NoError(t, err)
+		assert.Len(t, selected, 3)
+	})
+
+	t.Run("OnlyFirstMatch", func(t *testing.T) {
+		s := &Selector{
+			Kind:           Binary,
+			Items:          items,
+			OnlyFirstMatch: true,
+			Single:         true,
+		}
+		selected, err := s.Run()
+		require.NoError(t, err)
+		assert.Len(t, selected, 1)
+		assert.Equal(t, "tool1.exe", selected[0].Name)
+	})
+
+	t.Run("MaxExeInstallsCap", func(t *testing.T) {
+		s := &Selector{
+			Kind:           Binary,
+			Items:          items,
+			MaxExeInstalls: 2,
+		}
+		selected, err := s.Run()
+		require.NoError(t, err)
+		assert.Len(t, selected, 2)
+		assert.Equal(t, "tool1.exe", selected[0].Name)
+		assert.Equal(t, "tool2.exe", selected[1].Name)
+	})
+}

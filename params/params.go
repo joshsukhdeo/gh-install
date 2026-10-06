@@ -126,6 +126,12 @@ type CommonInstallFlags struct {
 	WarnUnmappedAssets                            bool              `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
 	AISetupSidecars                               bool              `help:"Use AI to analyze sidecars and generate post-install setup commands."`
 	ProgressBar                                   string            `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	NoColor                                       bool              `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis                                      bool              `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
+	NoCompletionSetup                             bool              `name:"no-completion-setup" help:"Do not automatically install shell autocompletion scripts for extracted binaries."`
+	OnlyFirstMatch                                bool              `name:"only-first-match" help:"Only install the first matched binary instead of all unique binaries."`
+	MaxExeInstalls                                int               `name:"max-exe-installs" default:"0" help:"Maximum number of executables to install (0 = all unique)."`
+	AvxLevel                                      string            `default:"auto" enum:"auto,none,avx,avx2,avx512" env:"GH_PT_AVX_LEVEL" help:"AVX instruction set preference: auto, none, avx, avx2, avx512."`
 }
 
 type InstallCmd struct {
@@ -176,15 +182,17 @@ type RmCmd = StateRmCmd
 type StateEditCmd struct{}
 
 type UpgradeFlags struct {
-	DisablePrompts  bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
-	Extractor       string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
-	Overwrite       bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
-	DryRun          bool   `default:"false" help:"Show what would be upgraded."`
-	VerifyChecksum  bool   `default:"true" help:"Verify asset checksums."`
-	SkipVtSandbox   bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
-	FallbackReleases int   `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
-	WarnUnmappedAssets bool `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
-	ProgressBar     string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	DisablePrompts     bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
+	Extractor          string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	Overwrite          bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
+	DryRun             bool   `default:"false" help:"Show what would be upgraded."`
+	VerifyChecksum     bool   `default:"true" help:"Verify asset checksums."`
+	SkipVtSandbox      bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	FallbackReleases   int    `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
+	WarnUnmappedAssets bool   `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
+	ProgressBar        string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	NoColor            bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis           bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
 
 type UpgradeCmd struct {
@@ -195,15 +203,19 @@ type UpgradeCmd struct {
 }
 
 type StateLsCmd struct {
-	Filter string `arg:"" optional:"" help:"Optional filter."`
-	Global bool   `short:"g" help:"Show global installs only."`
-	Format string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
+	Filter   string `arg:"" optional:"" help:"Optional filter."`
+	Global   bool   `short:"g" help:"Show global installs only."`
+	Format   string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
+	NoColor  bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
 
 type StateLlCmd struct {
-	Filter string `arg:"" optional:"" help:"Optional filter."`
-	Global bool   `short:"g" help:"Show global installs only."`
-	Format string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
+	Filter   string `arg:"" optional:"" help:"Optional filter."`
+	Global   bool   `short:"g" help:"Show global installs only."`
+	Format   string `short:"o" default:"auto" enum:"auto,table,list,tui" env:"GH_PT_LIST_FORMAT" help:"Output format: auto (table if it fits the terminal, else list), table, list, tui."`
+	NoColor  bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
 
 type ConfigCmd struct {
@@ -277,6 +289,8 @@ type Show struct {
 	Stable           bool   `help:"Include only stable releases."`
 	Version          string `short:"v" default:"latest" help:"Version to show."`
 	DiscoverSidecars bool   `help:"Discover potential sidecar assets in the repository."`
+	NoColor          bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis         bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
 
 type ShowCmd = Show

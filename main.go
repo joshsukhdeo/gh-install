@@ -24,6 +24,14 @@ func run() int {
 	// Preprocess args to add defaults for show flags without values
 	preprocessShowArgs()
 
+	// Active Threat AI Sandbox: If an ancestor process is gh-pt, lock down execution strictly to helper commands
+	if isRestricted, err := cmd.CheckAncestorForGhPt(); err == nil && isRestricted {
+		if !cmd.IsHelperInvocation(os.Args[1:]) {
+			fmt.Fprintln(os.Stderr, "Error: Restricted AI execution context detected (gh-pt ancestor present). Only 'gh-pt helper ...' commands are permitted.")
+			return 126
+		}
+	}
+
 	if _, err := exec.LookPath("gh"); err != nil {
 		fmt.Fprintln(os.Stderr, "Error: GitHub CLI ('gh') is not installed or not in PATH. It is required for gh-pt. Please install it from https://cli.github.com/")
 		return 1
@@ -85,10 +93,19 @@ func run() int {
 
 	err = cmd.RunCommand(ctx.Command(), &cli)
 	if err != nil {
+		noColor := os.Getenv("NO_COLOR") != ""
 		if strings.HasPrefix(err.Error(), "Warning:") {
-			fmt.Fprintf(os.Stderr, "\033[33m%v\033[0m\n", err)
+			if noColor {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "\033[33m%v\033[0m\n", err)
+			}
 		} else {
-			fmt.Fprintf(os.Stderr, "\033[31mError: %v\033[0m\n", err)
+			if noColor {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "\033[31mError: %v\033[0m\n", err)
+			}
 		}
 		return 1
 	}

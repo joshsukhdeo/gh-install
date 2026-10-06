@@ -16,6 +16,9 @@ type Selector struct {
 	Single           bool
 	AllowForeignArch bool
 	Repository       string
+	OnlyFirstMatch   bool
+	MaxExeInstalls   int
+	AvxLevel         string
 }
 
 func getMajorityPrefix(items []*SelectorItem) string {
@@ -52,6 +55,37 @@ type fallbackLevel struct {
 func (s *Selector) Run() ([]*SelectorItem, error) {
 	var selectedItems []*SelectorItem
 
+	if s.Kind == Binary && len(s.NamesMatcher) == 0 && (len(s.RegexpMatchers) == 0 || (len(s.RegexpMatchers) == 1 && s.RegexpMatchers[0] == "")) {
+		var binMatches []*SelectorItem
+		seen := make(map[string]bool)
+		for _, item := range s.Items {
+			ext := strings.ToLower(filepath.Ext(item.Name))
+			isExec := false
+			switch ext {
+			case ".exe", ".appimage", ".bin", ".deb", ".rpm", ".msi", ".dmg", ".pkg":
+				isExec = true
+			case "":
+				if IsActuallyExecutable(item) {
+					isExec = true
+				}
+			}
+			if isExec && !seen[item.Name] {
+				seen[item.Name] = true
+				item.Selected = true
+				binMatches = append(binMatches, item)
+			}
+		}
+		if len(binMatches) > 0 {
+			if (s.OnlyFirstMatch || s.Single) && len(binMatches) > 1 {
+				binMatches = binMatches[:1]
+			}
+			if s.MaxExeInstalls > 0 && len(binMatches) > s.MaxExeInstalls {
+				binMatches = binMatches[:s.MaxExeInstalls]
+			}
+			return binMatches, nil
+		}
+	}
+
 	if len(s.NamesMatcher) > 0 {
 		for _, item := range s.Items {
 			for _, name := range s.NamesMatcher {
@@ -61,9 +95,20 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 				}
 			}
 		}
+		if s.OnlyFirstMatch && len(selectedItems) > 1 {
+			selectedItems = selectedItems[:1]
+		}
+		if s.MaxExeInstalls > 0 && len(selectedItems) > s.MaxExeInstalls {
+			selectedItems = selectedItems[:s.MaxExeInstalls]
+		}
 	} else if len(s.RegexpMatchers) > 0 {
 		muslRegex := regexp.MustCompile("(?i)[-_]musl[-_.]")
 		foreignArchRegex := getForeignArchRegex(runtime.GOARCH)
+
+		effectiveAVX := s.AvxLevel
+		if effectiveAVX == "" || effectiveAVX == "auto" {
+			effectiveAVX = DetectHostAVXLevel()
+		}
 
 		var ownerid, repoid string
 		parts := strings.Split(s.Repository, "/")
@@ -146,6 +191,14 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 									continue
 								}
 							}
+
+							if s.Kind == Asset && !s.AllowForeignArch && !IsAVXCompatible(item.Name, effectiveAVX) {
+								// Only apply AVX filter if the regex itself didn't explicitly ask for it
+								if !strings.Contains(strings.ToLower(rx), "avx") {
+									continue
+								}
+							}
+
 							currentMatches = append(currentMatches, item)
 						}
 					}
@@ -179,6 +232,28 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 							currentMatches = nonMusl
 						}
 
+						// If multiple assets match, prioritize highest compatible AVX level
+						if s.Kind == Asset {
+							var avxMatches []*SelectorItem
+							highestRank := -1
+							for _, item := range currentMatches {
+								rank := AVXLevelRank(AssetAVXRequirement(item.Name))
+								if rank > highestRank {
+									highestRank = rank
+								}
+							}
+							if highestRank > 0 {
+								for _, item := range currentMatches {
+									if AVXLevelRank(AssetAVXRequirement(item.Name)) == highestRank {
+										avxMatches = append(avxMatches, item)
+									}
+								}
+								if len(avxMatches) > 0 {
+									currentMatches = avxMatches
+								}
+							}
+						}
+
 						for _, item := range currentMatches {
 							item.Selected = true
 							selectedItems = append(selectedItems, item)
@@ -193,12 +268,24 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 		if matches, err := executePass(strictRegexps); err != nil {
 			return nil, err
 		} else if len(matches) > 0 {
+			if s.OnlyFirstMatch && len(matches) > 1 {
+				matches = matches[:1]
+			}
+			if s.MaxExeInstalls > 0 && len(matches) > s.MaxExeInstalls {
+				matches = matches[:s.MaxExeInstalls]
+			}
 			return matches, nil
 		}
 
 		if matches, err := executePass(weakRegexps); err != nil {
 			return nil, err
 		} else if len(matches) > 0 {
+			if s.OnlyFirstMatch && len(matches) > 1 {
+				matches = matches[:1]
+			}
+			if s.MaxExeInstalls > 0 && len(matches) > s.MaxExeInstalls {
+				matches = matches[:s.MaxExeInstalls]
+			}
 			return matches, nil
 		}
 	}

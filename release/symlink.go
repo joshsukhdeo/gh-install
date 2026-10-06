@@ -196,6 +196,13 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 		}
 
 		r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destPath))
+
+		noComp := false
+		if r.CliParams != nil {
+			noComp = r.CliParams.NoCompletionSetup
+		}
+		ScanAndInstallArchiveCompletions(symlinkDir, filepath.Base(destPath), noComp)
+		_ = SetupBinaryCompletions(destPath, noComp)
 	}
 
 	// Handle sidecar symlinking if --include-sidecars is set

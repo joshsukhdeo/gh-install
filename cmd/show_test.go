@@ -90,7 +90,7 @@ func TestShowInfo_ShowVersions(t *testing.T) {
 	defer func() { xdg.ConfigHome = "" }()
 	xdg.ConfigHome = tmpDir
 	defer func() { xdg.ConfigHome = "" }()
-	// xdg.Reload()
+	xdg.Reload()
 
 	st, err := state.LoadState()
 	require.NoError(t, err)
@@ -131,11 +131,8 @@ func TestShowInfo_ShowVersions(t *testing.T) {
 func TestShowInfo_ShowVersions_DisableIcons(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
-	xdg.ConfigHome = tmpDir
-	defer func() { xdg.ConfigHome = "" }()
-	xdg.ConfigHome = tmpDir
-	defer func() { xdg.ConfigHome = "" }()
-	// xdg.Reload()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	xdg.Reload()
 
 	cfgPath := filepath.Join(tmpDir, "gh-pt", "config.yml")
 	_ = os.MkdirAll(filepath.Dir(cfgPath), 0755)
@@ -182,7 +179,7 @@ func TestShowInfo_Show(t *testing.T) {
 	defer func() { xdg.ConfigHome = "" }()
 	xdg.ConfigHome = tmpDir
 	defer func() { xdg.ConfigHome = "" }()
-	// xdg.Reload()
+	xdg.Reload()
 
 	var releases []Release
 	for i := 15; i >= 1; i-- {
@@ -708,10 +705,9 @@ func TestHandleShow_Errors(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to download")
 }
 
-func TestShowInfo_DelegatesToHandleShow(t *testing.T) {
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems:     []gitTreeItem{{Path: "file.txt", Type: "blob"}},
+func TestShowInfo_NoFlags_DoesNotDelegateToHandleShow(t *testing.T) {
+	mockClient := &mockGhClient{
+		releases: []Release{{ID: 1, TagName: "v1.0.0", Prerelease: false}},
 	}
 
 	origClient := defaultRestClient
@@ -743,7 +739,7 @@ func TestShowInfo_DelegatesToHandleShow(t *testing.T) {
 
 	err := ShowInfo(r)
 	assert.NoError(t, err)
-	assert.True(t, called)
+	assert.False(t, called, "file browser multiselect must not be invoked")
 }
 
 // TestShowInfo_NoFlags_ShowsReleaseInfo: gh-pt show <repo> with no flags must show release info,

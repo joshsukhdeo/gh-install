@@ -167,7 +167,7 @@ func ListState(rList ...*RootCLI) error {
 			}
 		}
 		displayRepo := repo
-		if indicator := GetStateIndicator(isInstalled, app.Pinned, app.IsPrerelease, false, false, false); indicator != "" {
+		if indicator := GetStateIndicator(isInstalled, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis); indicator != "" {
 			displayRepo = indicator + " " + repo
 		}
 

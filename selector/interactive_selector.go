@@ -41,8 +41,14 @@ type InteractiveSelector struct {
 
 func (s *InteractiveSelector) showPrompt() ([]string, error) {
 	var itemOrder []string
+	displayToName := make(map[string]string)
 	for _, item := range s.Items {
-		itemOrder = append(itemOrder, item.Name)
+		disp := item.DisplayName
+		if disp == "" {
+			disp = item.Name
+		}
+		itemOrder = append(itemOrder, disp)
+		displayToName[disp] = item.Name
 	}
 
 	if s.Prompter == nil {
@@ -57,14 +63,26 @@ func (s *InteractiveSelector) showPrompt() ([]string, error) {
 		if selectedItem == "" {
 			return []string{}, nil
 		}
-		return []string{selectedItem}, nil
+		name := displayToName[selectedItem]
+		if name == "" {
+			name = selectedItem
+		}
+		return []string{name}, nil
 	}
 
-	selectedItems, err := s.Prompter.MultiSelect(itemOrder, s.Prompt)
+	selectedDisplays, err := s.Prompter.MultiSelect(itemOrder, s.Prompt)
 	if err != nil {
 		return nil, err
 	}
-	return selectedItems, nil
+	var selectedNames []string
+	for _, disp := range selectedDisplays {
+		name := displayToName[disp]
+		if name == "" {
+			name = disp
+		}
+		selectedNames = append(selectedNames, name)
+	}
+	return selectedNames, nil
 }
 
 func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
@@ -79,7 +97,7 @@ func (s *InteractiveSelector) Run() ([]*SelectorItem, error) {
 	var selectedItems []*SelectorItem
 	for _, selectedName := range selectedNames {
 		for _, item := range s.Items {
-			if item.Name == selectedName {
+			if item.Name == selectedName || item.DisplayName == selectedName {
 				selectedItems = append(selectedItems, item)
 				break
 			}

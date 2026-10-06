@@ -2,12 +2,53 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/state"
+	"github.com/muesli/termenv"
+	"github.com/pterm/pterm"
 )
+
+// ApplyDisplayPreferences applies terminal display preferences globally.
+func ApplyDisplayPreferences(noColor, noEmojis bool) {
+	if noColor || os.Getenv("NO_COLOR") != "" || os.Getenv("GH_PT_NO_COLOR") != "" {
+		_ = os.Setenv("NO_COLOR", "1")
+		pterm.DisableColor()
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
+}
+
+func resolveDisplayPreferences(flags *params.CommonInstallFlags, r *RootCLI) {
+	cfg := loadConfig()
+	if cfg != nil {
+		if cfg.Core.NoColor {
+			flags.NoColor = true
+		}
+		if cfg.Core.NoEmojis {
+			flags.NoEmojis = true
+		}
+		if cfg.Core.DisableIcons {
+			r.DisableIcons = true
+		}
+	}
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("GH_PT_NO_COLOR") != "" {
+		flags.NoColor = true
+	}
+	if os.Getenv("GH_PT_NO_EMOJIS") != "" {
+		flags.NoEmojis = true
+	}
+	if flags.NoEmojis {
+		r.DisableIcons = true
+	}
+	if flags.NoColor {
+		r.NoColor = true
+		ApplyDisplayPreferences(true, false)
+	}
+}
 
 func RunCommand(cmdStr string, cli *params.CLI) error {
 	r := &RootCLI{}
@@ -21,11 +62,16 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 	case "install", "install <repository>":
 		r.CommonInstallFlags = cli.Install.CommonInstallFlags
 		r.Repository = cli.Install.Repository
+		resolveDisplayPreferences(&r.CommonInstallFlags, r)
 		return r.RunInstall()
 	case "ls", "ls <filter>":
-		return ListState(&RootCLI{ExecContext: params.ExecContext{Ls: cli.Ls.Filter, ListFormat: cli.Ls.Format, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ls.Global}}})
+		flags := params.CommonInstallFlags{Global: cli.Ls.Global, NoColor: cli.Ls.NoColor, NoEmojis: cli.Ls.NoEmojis}
+		resolveDisplayPreferences(&flags, r)
+		return ListState(&RootCLI{ExecContext: params.ExecContext{Ls: cli.Ls.Filter, ListFormat: cli.Ls.Format, DisableIcons: r.DisableIcons, CommonInstallFlags: flags}})
 	case "ll", "ll <filter>":
-		return ListState(&RootCLI{ExecContext: params.ExecContext{Ll: cli.Ll.Filter, Full: true, ListFormat: cli.Ll.Format, CommonInstallFlags: params.CommonInstallFlags{Global: cli.Ll.Global}}})
+		flags := params.CommonInstallFlags{Global: cli.Ll.Global, NoColor: cli.Ll.NoColor, NoEmojis: cli.Ll.NoEmojis}
+		resolveDisplayPreferences(&flags, r)
+		return ListState(&RootCLI{ExecContext: params.ExecContext{Ll: cli.Ll.Filter, Full: true, ListFormat: cli.Ll.Format, DisableIcons: r.DisableIcons, CommonInstallFlags: flags}})
 	case "rm", "rm <target>":
 
 		if cli.Rm.StateOnly {
@@ -43,7 +89,10 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		r.FallbackReleases = cli.Upgrade.FallbackReleases
 		r.WarnUnmappedAssets = cli.Upgrade.WarnUnmappedAssets
 		r.ProgressBar = cli.Upgrade.ProgressBar
+		r.NoColor = cli.Upgrade.NoColor
+		r.NoEmojis = cli.Upgrade.NoEmojis
 		r.IsUpgradeCmd = true
+		resolveDisplayPreferences(&r.CommonInstallFlags, r)
 		if !cli.Upgrade.User && !cli.Upgrade.Global {
 			r.UpdateAll = true
 		} else {
@@ -81,7 +130,25 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 	case "state edit":
 		return StateEdit()
 	case "show", "show <repository>":
-		return ShowInfo(&RootCLI{ExecContext: params.ExecContext{Repository: cli.Show.Repository, Show: true, ShowAssets: cli.Show.Assets, ShowVersions: cli.Show.Versions, ShowDescription: cli.Show.Description, ShowReadme: cli.Show.Readme, DiscoverSidecars: cli.Show.DiscoverSidecars, CommonInstallFlags: params.CommonInstallFlags{ReleaseVersion: cli.Show.Version, Stable: cli.Show.Stable, Prerelease: cli.Show.Prerelease}}})
+		flags := params.CommonInstallFlags{
+			ReleaseVersion: cli.Show.Version,
+			Stable:         cli.Show.Stable,
+			Prerelease:     cli.Show.Prerelease,
+			NoColor:        cli.Show.NoColor,
+			NoEmojis:       cli.Show.NoEmojis,
+		}
+		resolveDisplayPreferences(&flags, r)
+		return ShowInfo(&RootCLI{ExecContext: params.ExecContext{
+			Repository:         cli.Show.Repository,
+			Show:               true,
+			ShowAssets:         cli.Show.Assets,
+			ShowVersions:       cli.Show.Versions,
+			ShowDescription:    cli.Show.Description,
+			ShowReadme:         cli.Show.Readme,
+			DiscoverSidecars:   cli.Show.DiscoverSidecars,
+			DisableIcons:       r.DisableIcons,
+			CommonInstallFlags: flags,
+		}})
 	case "repo", "repo clone", "repo clone <repository>", "repo fork", "repo fork <repository>":
 		// Handle both repo clone and repo fork subcommands
 		// kong populates either cli.Repo.Clone or cli.Repo.Fork based on subcommand used
@@ -94,6 +161,7 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 			if cli.Repo.Clone.TargetPath != "" {
 				r.TargetPath = cli.Repo.Clone.TargetPath
 			}
+			resolveDisplayPreferences(&r.CommonInstallFlags, r)
 			return r.RunInstall()
 		}
 		if cli.Repo.Fork.Repository != "" {
@@ -105,6 +173,7 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 			if cli.Repo.Fork.TargetPath != "" {
 				r.TargetPath = cli.Repo.Fork.TargetPath
 			}
+			resolveDisplayPreferences(&r.CommonInstallFlags, r)
 			return r.RunInstall()
 		}
 		// If no repository specified, check if it was passed via env var
@@ -120,6 +189,7 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		r.Repository = cli.Source.Repository
 		r.CompileFromSource = true
 		r.AI = true
+		resolveDisplayPreferences(&r.CommonInstallFlags, r)
 		aiCmd := cli.Source.AICmd
 		if aiCmd == "" {
 			cfg, _ := config.LoadConfig()

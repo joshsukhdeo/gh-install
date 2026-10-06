@@ -223,14 +223,11 @@ func (r *RootCLI) handleShowWithClient(client ghRestClient) error {
 }
 
 func ShowInfo(r *RootCLI) error {
-	if r.ShowAssets > -1 || r.ShowVersions > -1 || r.ShowDescription > -1 || r.ShowReadme > -1 || r.DiscoverSidecars {
-		client, err := defaultRestClient()
-		if err != nil {
-			return fmt.Errorf("could not init GitHub REST client: %w", err)
-		}
-		return showInfoWithClient(r, client)
+	client, err := defaultRestClient()
+	if err != nil {
+		return fmt.Errorf("could not init GitHub REST client: %w", err)
 	}
-	return r.handleShow()
+	return showInfoWithClient(r, client)
 }
 
 func showInfoWithClient(r *RootCLI, client ghRestClient) error {
@@ -260,6 +257,18 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 	var disableIcons bool
 	if cfg != nil {
 		disableIcons = cfg.Core.DisableIcons
+		if cfg.Core.NoEmojis {
+			r.NoEmojis = true
+		}
+		if cfg.Core.NoColor {
+			r.NoColor = true
+		}
+	}
+	if r.DisableIcons || r.NoEmojis {
+		disableIcons = true
+	}
+	if r.NoColor || os.Getenv("NO_COLOR") != "" {
+		ApplyDisplayPreferences(true, false)
 	}
 
 	var releases []Release

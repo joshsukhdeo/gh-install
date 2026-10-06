@@ -23,3 +23,10 @@ CLAUDE.md
 CURSOR.md
 .cursorrules
 .windsurfrules
+
+# Local agent artifacts & workspaces
+.kiro/
+.memory/
+.trace-mcp/
+.wayfinder/
+system-info-prototype/

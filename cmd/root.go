@@ -80,7 +80,11 @@ func (r *RootCLI) Validate() error {
 
 	// Detect root user and handle global install path
 	if os.Geteuid() == 0 {
-		fmt.Fprintf(os.Stderr, "\033[33m*** running as root is *HIGHLY* discouraged ***\033[0m\n")
+		if r.NoColor || os.Getenv("NO_COLOR") != "" {
+			fmt.Fprintf(os.Stderr, "*** running as root is *HIGHLY* discouraged ***\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "\033[33m*** running as root is *HIGHLY* discouraged ***\033[0m\n")
+		}
 		if r.Global {
 			if r.TargetPath == GetDefaultTargetPath() {
 				r.TargetPath = "/usr/local/bin"
@@ -143,6 +147,13 @@ func PostBuild(k *kong.Kong) error {
 
 func (r *RootCLI) RunInstall() error {
 	r.ensureCliParams()
+	if r.NoEmojis {
+		r.DisableIcons = true
+	}
+	if r.NoColor || os.Getenv("NO_COLOR") != "" {
+		r.NoColor = true
+		ApplyDisplayPreferences(true, false)
+	}
 	if r.Barbarous {
 		r.VerifyChecksum = false
 		r.SkipVtSandbox = true
@@ -197,7 +208,27 @@ func (r *RootCLI) RunInstall() error {
 		if cfg.Core.AllowPrerelease {
 			r.Prerelease = true
 		}
-		r.DisableIcons = cfg.Core.DisableIcons
+		if cfg.Core.DisableIcons {
+			r.DisableIcons = true
+		}
+		if cfg.Core.NoColor {
+			r.NoColor = true
+		}
+		if cfg.Core.NoEmojis {
+			r.NoEmojis = true
+		}
+		if cfg.Core.AvxLevel != "" && (r.AvxLevel == "" || r.AvxLevel == "auto") {
+			r.AvxLevel = cfg.Core.AvxLevel
+			if r.CliParams != nil {
+				r.CliParams.AvxLevel = cfg.Core.AvxLevel
+			}
+		}
+	}
+	if r.NoEmojis {
+		r.DisableIcons = true
+	}
+	if r.NoColor {
+		ApplyDisplayPreferences(true, false)
 	}
 	if r.Stable {
 		r.Prerelease = false
@@ -1454,7 +1485,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		log.Warn("AI verification returned warning or non-zero exit", "error", verifyErr)
 	}
 
-	indicator := GetStateIndicator(true, r.PinInstall, false, false, false, r.DisableIcons)
+	indicator := GetStateIndicator(true, r.PinInstall, false, false, false, r.DisableIcons || r.NoEmojis)
 	displayRepo := r.Repository
 	if indicator != "" {
 		displayRepo = indicator + " " + r.Repository

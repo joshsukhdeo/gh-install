@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -140,15 +141,37 @@ type AssetMatchCriteria struct {
 	Regexps          []string
 	Interactive      bool
 	AllowForeignArch bool
+	Single           bool
+	AvxLevel         string
+}
+
+// IsAllowedBinaryDir checks if a file inside an archive sits in root, bin, bin32, or bin64.
+func IsAllowedBinaryDir(relPath string) bool {
+	clean := filepath.ToSlash(filepath.Clean(relPath))
+	parts := strings.Split(clean, "/")
+	if len(parts) == 1 {
+		return true
+	}
+	if len(parts) == 2 {
+		dir := parts[0]
+		return dir == "bin" || dir == "bin32" || dir == "bin64" || !strings.Contains(dir, "/")
+	}
+	if len(parts) == 3 {
+		dir := parts[1]
+		return dir == "bin" || dir == "bin32" || dir == "bin64"
+	}
+	return false
 }
 
 type BinaryMatchCriteria struct {
-	DownloadPath string
-	Names        []string
-	Matcher      string
-	Interactive  bool
-	Extractor    string
-	Repository   string
+	DownloadPath   string
+	Names          []string
+	Matcher        string
+	Interactive    bool
+	Extractor      string
+	Repository     string
+	OnlyFirstMatch bool
+	MaxExeInstalls int
 }
 
 func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriteria) (ISelector, error) {
@@ -201,12 +224,19 @@ func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriter
 	}
 
 	if criteria.Interactive {
+		for _, item := range items {
+			FormatCategorizedItem(item)
+		}
+		sort.SliceStable(items, func(i, j int) bool {
+			return AssetCategoryPriority(items[i].Name) < AssetCategoryPriority(items[j].Name)
+		})
+
 		return &InteractiveSelector{
 			Kind:  Asset,
 			Items: items,
 
 			Prompt: fmt.Sprintf("Please select %s asset", repo),
-			Single: true,
+			Single: criteria.Single,
 		}, nil
 	}
 
@@ -224,6 +254,7 @@ func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriter
 		Single:           true,
 		AllowForeignArch: criteria.AllowForeignArch,
 		Repository:       repo,
+		AvxLevel:         criteria.AvxLevel,
 	}, nil
 }
 
@@ -298,6 +329,10 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 		if extracted {
 			_ = filepath.Walk(extractDir, func(path string, info os.FileInfo, err error) error {
 				if err == nil && !info.IsDir() {
+					relPath, relErr := filepath.Rel(extractDir, path)
+					if relErr == nil && !IsAllowedBinaryDir(relPath) {
+						return nil
+					}
 					items = append(items, &SelectorItem{
 						Name:         info.Name(),
 						Compressed:   false,
@@ -313,7 +348,7 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 					Kind:       Binary,
 					Items:      items,
 					Prompt:     "Select binaries to be installed",
-					Single:     false,
+					Single:     criteria.OnlyFirstMatch,
 					Repository: criteria.Repository,
 				}, nil
 			}
@@ -322,8 +357,10 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 				Items:          items,
 				NamesMatcher:   criteria.Names,
 				RegexpMatchers: []string{criteria.Matcher},
-				Single:         false,
+				Single:         criteria.OnlyFirstMatch,
 				Repository:     criteria.Repository,
+				OnlyFirstMatch: criteria.OnlyFirstMatch,
+				MaxExeInstalls: criteria.MaxExeInstalls,
 			}, nil
 		}
 		log.Warn("native extraction failed, falling back to pure Go archiver")
@@ -373,6 +410,9 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 			return err
 		}
 		if !d.IsDir() {
+			if !IsAllowedBinaryDir(fsPath) {
+				return nil
+			}
 			items = append(items, &SelectorItem{
 				Name:       d.Name(),
 				Compressed: true,
@@ -392,7 +432,7 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 			Kind:       Binary,
 			Items:      items,
 			Prompt:     "Select binaries to be installed",
-			Single:     false,
+			Single:     criteria.OnlyFirstMatch,
 			Repository: criteria.Repository,
 		}, nil
 	}
@@ -402,7 +442,9 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 		Items:          items,
 		NamesMatcher:   criteria.Names,
 		RegexpMatchers: []string{criteria.Matcher},
-		Single:         false,
+		Single:         criteria.OnlyFirstMatch,
 		Repository:     criteria.Repository,
+		OnlyFirstMatch: criteria.OnlyFirstMatch,
+		MaxExeInstalls: criteria.MaxExeInstalls,
 	}, nil
 }

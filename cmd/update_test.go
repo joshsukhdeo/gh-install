@@ -151,7 +151,11 @@ func TestDoUpdate_TargetedUpgradeFiltersGraphQLQuery(t *testing.T) {
 		tmpDir := t.TempDir()
 		origDataHome := os.Getenv("XDG_DATA_HOME")
 		t.Setenv("XDG_DATA_HOME", tmpDir)
-		defer func() { _ = os.Setenv("XDG_DATA_HOME", origDataHome) }()
+		xdg.Reload()
+		defer func() {
+			_ = os.Setenv("XDG_DATA_HOME", origDataHome)
+			xdg.Reload()
+		}()
 
 		st := &state.State{
 			Version: 2,

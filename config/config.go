@@ -49,6 +49,9 @@ type CoreConfig struct {
 	SearchForInstallInstructionsIfNoReleaseAssets bool   `yaml:"readme_fallback"`
 	WarnUnmappedAssets                            bool   `yaml:"warn_unmapped_assets"`
 	ProgressBar                                   string `yaml:"progress_bar"`
+	NoColor                                       bool   `yaml:"no_color"`
+	NoEmojis                                      bool   `yaml:"no_emojis"`
+	AvxLevel                                      string `yaml:"avx_level"`
 }
 
 type DependencyResolutionConfig struct {
