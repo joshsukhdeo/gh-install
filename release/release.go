@@ -1508,8 +1508,8 @@ func (r *GithubRelease) Install() error {
 			log.Debug("auto-enabled --include-sidecars due to sidecar params")
 		}
 	}
-	if r.CliParams.IncludeSidecars && (r.CliParams.SidecarMode == "" || r.CliParams.SidecarMode == "auto") {
-		r.CliParams.SidecarMode = "xdg_data_home"
+	if r.CliParams.IncludeSidecars && r.CliParams.SidecarMode == "" {
+		r.CliParams.SidecarMode = "auto"
 	}
 
 	var prerelease, stable bool

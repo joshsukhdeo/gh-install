@@ -212,3 +212,109 @@ func TestGetDefaultSidecarRegex(t *testing.T) {
 	// Path with ".local/bin" substring but not a bin directory
 	assert.Equal(t, expectedCustPattern, gr.getDefaultSidecarRegex("/home/user/.local/bin_backups/custom"))
 }
+
+func TestHasLocalMapLayout(t *testing.T) {
+	tmpDir := t.TempDir()
+	r := &GithubRelease{}
+
+	// Empty dir: no local map
+	assert.False(t, r.hasLocalMapLayout(tmpDir))
+
+	// Dir with only LICENSE: no local map
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "LICENSE"), []byte("MIT"), 0644))
+	assert.False(t, r.hasLocalMapLayout(tmpDir))
+
+	// Standard share dir: has local map
+	shareDir := filepath.Join(tmpDir, "share", "man")
+	require.NoError(t, os.MkdirAll(shareDir, 0755))
+	assert.True(t, r.hasLocalMapLayout(tmpDir))
+
+	// Dir with bin containing auxiliary script
+	tmpDir2 := t.TempDir()
+	binDir := filepath.Join(tmpDir2, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "aux-helper"), []byte("#!/bin/sh"), 0755))
+
+	rWithBinary := &GithubRelease{
+		InstalledBinaries: []string{"main-app"},
+	}
+	assert.True(t, rWithBinary.hasLocalMapLayout(tmpDir2))
+
+	// If the only binary in bin is the primary binary itself, no extra local map
+	rPrimaryOnly := &GithubRelease{
+		InstalledBinaries: []string{"aux-helper"},
+	}
+	assert.False(t, rPrimaryOnly.hasLocalMapLayout(tmpDir2))
+}
+
+func TestSymlinkSidecars_AutoMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	targetBin := filepath.Join(homeDir, ".local", "bin")
+	require.NoError(t, os.MkdirAll(targetBin, 0755))
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(homeDir, ".local", "share"))
+	xdg.Reload()
+
+	// 1. Package with Unix layout -> Auto chooses local-map
+	pkgDir := filepath.Join(tmpDir, "pkg-with-layout")
+	manDir := filepath.Join(pkgDir, "share", "man", "man1")
+	libDir := filepath.Join(pkgDir, "lib")
+	require.NoError(t, os.MkdirAll(manDir, 0755))
+	require.NoError(t, os.MkdirAll(libDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(manDir, "tool.1"), []byte(".TH TOOL 1"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(libDir, "libtool.so"), []byte("binary data"), 0755))
+
+	rAuto := &GithubRelease{
+		CliParams: &params.ExecContext{
+			Repository: "coolorg/cooltool",
+			CommonInstallFlags: params.CommonInstallFlags{
+				SidecarFlags: params.SidecarFlags{
+					IncludeSidecars: true,
+					SidecarMode:     "auto",
+				},
+				TargetPath: targetBin,
+			},
+		},
+	}
+
+	err := rAuto.symlinkSidecars(pkgDir)
+	require.NoError(t, err)
+
+	// Verify mapped into ~/.local/share/man/man1 and ~/.local/lib
+	expectedMan := filepath.Join(homeDir, ".local", "share", "man", "man1", "tool.1")
+	expectedLib := filepath.Join(homeDir, ".local", "lib", "libtool.so")
+	assert.FileExists(t, expectedMan)
+	assert.FileExists(t, expectedLib)
+	assert.Contains(t, rAuto.InstalledSidecars, expectedMan)
+	assert.Contains(t, rAuto.InstalledSidecars, expectedLib)
+
+	// 2. Flat package without Unix layout -> Auto falls back to xdg_data_home
+	pkgFlat := filepath.Join(tmpDir, "pkg-flat")
+	require.NoError(t, os.MkdirAll(pkgFlat, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgFlat, "config.json"), []byte(`{"key":"val"}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgFlat, "tool.h"), []byte(`#define FOO 1`), 0644))
+
+	rFlat := &GithubRelease{
+		CliParams: &params.ExecContext{
+			Repository: "flatorg/flattool",
+			CommonInstallFlags: params.CommonInstallFlags{
+				SidecarFlags: params.SidecarFlags{
+					IncludeSidecars: true,
+					SidecarMode:     "auto",
+				},
+				TargetPath: targetBin,
+			},
+		},
+	}
+
+	err = rFlat.symlinkSidecars(pkgFlat)
+	require.NoError(t, err)
+
+	expectedXDGJson := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", "flatorg/flattool", "config.json")
+	expectedXDGH := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", "flatorg/flattool", "tool.h")
+	assert.FileExists(t, expectedXDGJson)
+	assert.FileExists(t, expectedXDGH)
+}

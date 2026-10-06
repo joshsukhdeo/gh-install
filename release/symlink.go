@@ -309,32 +309,83 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 	return symlinkDir, nil
 }
 
-// symlinkSidecars symlinks sidecar files to the appropriate destination based on --include-sidecars mode
-func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
-	mode := r.CliParams.SidecarMode
-	if mode == "" || mode == "auto" {
-		mode = "xdg_data_home"
+// hasLocalMapLayout returns true if the extracted package contains standard Unix hierarchy directories.
+func (r *GithubRelease) hasLocalMapLayout(symlinkDir string) bool {
+	// Standard non-bin Unix hierarchy directories
+	standardDirs := []string{"share", "include", "lib", "lib64", "libs", "etc", "var", "man"}
+	for _, dir := range standardDirs {
+		info, err := os.Stat(filepath.Join(symlinkDir, dir))
+		if err == nil && info.IsDir() {
+			return true
+		}
 	}
 
-	// Handle local-map mode separately
+	// Check if bin directory contains auxiliary files/scripts other than the primary installed binaries
+	binDir := filepath.Join(symlinkDir, "bin")
+	if info, err := os.Stat(binDir); err == nil && info.IsDir() {
+		entries, err := os.ReadDir(binDir)
+		if err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && !isLicenseFileName(entry.Name()) {
+					isPrimary := false
+					for _, installed := range r.InstalledBinaries {
+						if entry.Name() == installed {
+							isPrimary = true
+							break
+						}
+					}
+					if !isPrimary {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// symlinkSidecars symlinks sidecar files to the appropriate destination based on --include-sidecars mode
+func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
+	mode := ""
+	if r.CliParams != nil {
+		mode = r.CliParams.SidecarMode
+	}
+	if mode == "" || mode == "auto" {
+		if r.hasLocalMapLayout(symlinkDir) {
+			mode = "local-map"
+		} else {
+			mode = "xdg_data_home"
+		}
+	}
+
+	// Handle local-map mode
 	if mode == "local-map" {
 		return r.symlinkLocalMap(symlinkDir)
 	}
 
-	// Determine sidecar destination based on mode
-	sidecarDest, err := r.resolveSidecarSymlinkDest()
+	if mode == "bin" || mode == "same_dest" {
+		log.Warn("sidecar-mode 'bin'/'same_dest' dumps non-binaries into binary directory; consider 'auto' or 'local-map'")
+	}
+
+	sidecarDest, err := r.resolveSidecarSymlinkDest(mode)
 	if err != nil {
 		return err
 	}
 
+	return r.symlinkSidecarsToDest(symlinkDir, sidecarDest)
+}
+
+// symlinkSidecarsToDest symlinks files matching sidecar regex from symlinkDir into sidecarDest
+func (r *GithubRelease) symlinkSidecarsToDest(symlinkDir, sidecarDest string) error {
 	if err := os.MkdirAll(sidecarDest, 0755); err != nil {
 		return err
 	}
 
-	// Get the sidecar regex pattern
-	sidecarRegex := r.CliParams.Sidecars
+	sidecarRegex := ""
+	if r.CliParams != nil {
+		sidecarRegex = r.CliParams.Sidecars
+	}
 	if sidecarRegex == "" {
-		// Use default pattern based on destination
 		sidecarRegex = r.getDefaultSidecarRegex(sidecarDest)
 	}
 
@@ -343,8 +394,7 @@ func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
 		return fmt.Errorf("invalid sidecar regex: %w", err)
 	}
 
-	// Walk through symlinkDir and find sidecar files
-	err = filepath.WalkDir(symlinkDir, func(path string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(symlinkDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -354,17 +404,14 @@ func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
 			return nil
 		}
 
-		// Check if this file matches the sidecar regex
 		if isLicenseFileName(path) || isLicenseFileName(d.Name()) || isLicenseFileName(relPath) {
 			return nil
 		}
 		if regex.MatchString(relPath) || regex.MatchString(d.Name()) {
-			// This is a sidecar, symlink it to the destination
 			destPath := filepath.Join(sidecarDest, d.Name())
 
-			// Remove existing symlink if it exists
 			if _, err := os.Lstat(destPath); err == nil {
-				if r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd {
+				if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
 					if err := os.Remove(destPath); err != nil {
 						log.Warn("failed to remove existing sidecar symlink", "error", err, "path", destPath)
 						return nil
@@ -386,103 +433,129 @@ func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
 
 		return nil
 	})
-
-	return err
 }
 
-// symlinkLocalMap maps standard Unix directories to /usr/local/ equivalents
-// For example: ~/src/apps/owner/repo/bin/* -> /usr/local/bin/*
+// symlinkLocalMap maps standard Unix directories to prefix equivalents (~/.local or /usr/local)
 func (r *GithubRelease) symlinkLocalMap(symlinkDir string) error {
-	// Standard Unix directories to map
-	standardDirs := []string{"bin", "include", "lib", "lib64", "libs", "share", "etc", "var"}
+	basePrefix := ""
+	if r.CliParams != nil && r.CliParams.TargetPath != "" {
+		basePrefix = filepath.Dir(r.CliParams.TargetPath)
+	}
+	homeDir, _ := os.UserHomeDir()
+	if (r.CliParams != nil && r.CliParams.Global) || os.Geteuid() == 0 {
+		basePrefix = "/usr/local"
+	} else if basePrefix == "." || basePrefix == "" || basePrefix == "/" || (r.CliParams != nil && basePrefix == filepath.Clean(r.CliParams.TargetPath)) {
+		basePrefix = filepath.Join(homeDir, ".local")
+	}
+
+	standardDirs := []string{"bin", "include", "lib", "lib64", "libs", "share", "etc", "var", "man"}
+	foundAny := false
 
 	for _, dir := range standardDirs {
 		srcDir := filepath.Join(symlinkDir, dir)
-
-		// Check if this directory exists in the symlinkDir
-		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		info, err := os.Stat(srcDir)
+		if err != nil || !info.IsDir() {
 			continue
 		}
 
-		// Determine the target directory in /usr/local/
-		// Map "libs" to "lib" for consistency
-		targetDirName := dir
-		if dir == "libs" {
+		var targetDirName string
+		switch dir {
+		case "libs":
 			targetDirName = "lib"
+		case "man":
+			targetDirName = filepath.Join("share", "man")
+		default:
+			targetDirName = dir
 		}
-		targetDir := filepath.Join("/usr/local", targetDirName)
+		targetBase := filepath.Join(basePrefix, targetDirName)
 
-		// Create target directory if it doesn't exist
-		if err := os.MkdirAll(targetDir, 0755); err != nil {
-			log.Warn("failed to create target directory", "path", targetDir, "error", err)
-			continue
-		}
-
-		// Read all items directly in the source directory
-		entries, err := os.ReadDir(srcDir)
-		if err != nil {
-			log.Warn("failed to read directory", "path", srcDir, "error", err)
-			continue
+		if dir == "bin" && r.CliParams != nil && r.CliParams.TargetPath != "" {
+			targetBase = r.CliParams.TargetPath
 		}
 
-		// Symlink each item directly in the directory
-		for _, entry := range entries {
-			if isLicenseFileName(entry.Name()) {
-				continue
+		_ = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil || d.IsDir() {
+				return nil
 			}
-			srcPath := filepath.Join(srcDir, entry.Name())
-			destPath := filepath.Join(targetDir, entry.Name())
+			if isLicenseFileName(d.Name()) {
+				return nil
+			}
 
-			// Remove existing symlink/file if it exists
-			if _, err := os.Lstat(destPath); err == nil {
-				if r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd {
-					if err := os.Remove(destPath); err != nil {
-						log.Warn("failed to remove existing file/symlink", "path", destPath, "error", err)
-						continue
-					}
-				} else {
-					log.Warn("file/symlink already exists, skipping", "path", destPath)
-					continue
+			relPath, err := filepath.Rel(srcDir, path)
+			if err != nil {
+				return nil
+			}
+			destPath := filepath.Join(targetBase, relPath)
+
+			// Skip if already installed as a primary binary
+			for _, installed := range r.InstalledSymlinks {
+				if filepath.Clean(installed) == filepath.Clean(destPath) {
+					return nil
 				}
 			}
 
-			// Create symlink
-			if err := createSymlinkOrCopy(srcPath, destPath); err != nil {
-				log.Warn("failed to create symlink or copy", "src", srcPath, "dest", destPath, "error", err)
-				continue
+			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+				log.Warn("failed to create destination directory", "dir", filepath.Dir(destPath), "error", err)
+				return nil
 			}
 
-			log.Info("created local-map symlink", "src", srcPath, "dest", destPath)
+			if _, err := os.Lstat(destPath); err == nil {
+				if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
+					if err := os.Remove(destPath); err != nil {
+						log.Warn("failed to remove existing sidecar target", "dest", destPath, "error", err)
+						return nil
+					}
+				} else {
+					log.Warn("sidecar target already exists, skipping", "dest", destPath)
+					return nil
+				}
+			}
+
+			if err := createSymlinkOrCopy(path, destPath); err != nil {
+				log.Warn("failed to create local-map symlink", "src", path, "dest", destPath, "error", err)
+				return nil
+			}
+
+			foundAny = true
+			log.Info("created local-map symlink", "src", path, "dest", destPath)
 			r.InstalledSidecars = append(r.InstalledSidecars, destPath)
+			return nil
+		})
+	}
+
+	if !foundAny {
+		log.Info("no standard Unix hierarchy directories found for local-map, falling back to xdg_data_home", "repo", r.CliParams.Repository)
+		sidecarDest, err := r.resolveSidecarSymlinkDest("xdg_data_home")
+		if err != nil {
+			return err
 		}
+		return r.symlinkSidecarsToDest(symlinkDir, sidecarDest)
 	}
 
 	return nil
 }
 
-// resolveSidecarSymlinkDest determines where sidecars should be symlinked based on --sidecar-mode
-func (r *GithubRelease) resolveSidecarSymlinkDest() (string, error) {
-	mode := r.CliParams.SidecarMode
-	if mode == "" || mode == "auto" {
-		mode = "xdg_data_home"
-	}
-
+// resolveSidecarSymlinkDest maps a specific sidecar mode to its destination directory
+func (r *GithubRelease) resolveSidecarSymlinkDest(mode string) (string, error) {
 	switch {
 	case mode == "same_dest":
-		// Symlink sidecars to the same directory as binaries (TargetPath)
-		return r.CliParams.TargetPath, nil
+		if r.CliParams != nil {
+			return r.CliParams.TargetPath, nil
+		}
+		return "", fmt.Errorf("no target path set")
 	case mode == "xdg_data_home":
-		// Symlink sidecars to XDG data home
-		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", r.CliParams.Repository), nil
+		repo := ""
+		if r.CliParams != nil {
+			repo = r.CliParams.Repository
+		}
+		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", repo), nil
 	case mode == "bin":
-		// Symlink sidecars to bin directory
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
 		return filepath.Join(homeDir, ".local", "bin"), nil
 	case strings.HasPrefix(mode, "custom-path:"):
-		// Extract custom path
 		return strings.TrimPrefix(mode, "custom-path:"), nil
 	default:
 		return "", fmt.Errorf("unknown sidecar mode: %s", mode)

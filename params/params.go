@@ -125,7 +125,7 @@ type SidecarFlags struct {
 	Sidecars           string   `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
 	SidecarSymlinkTo   []string `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
 	IncludeSidecars    bool     `name:"include-sidecars" short:"s" negatable:"" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
-	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto, same_dest, xdg_data_home, bin, local-map, or custom-path:/path/to/ (default: auto)."`
+	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto (maps standard Unix layout to prefix, else xdg_data_home), local-map, xdg_data_home, or custom-path:/path/to/ (default: auto)."`
 	EnvInject          []string `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
 	WarnUnmappedAssets bool     `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
 	AISetupSidecars    bool     `help:"Use AI to analyze sidecars and generate post-install setup commands."`
@@ -154,6 +154,9 @@ func (s *SidecarFlags) ResolveSidecars(ctx ...*kong.Context) {
 		if !explicitlyDisabled {
 			s.IncludeSidecars = true
 		}
+	}
+	if s.IncludeSidecars && (s.SidecarMode == "" || s.SidecarMode == "default") {
+		s.SidecarMode = "auto"
 	}
 }
 
