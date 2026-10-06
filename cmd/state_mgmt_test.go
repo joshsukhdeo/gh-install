@@ -179,3 +179,48 @@ func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
 	_, exists := st.Apps["test/repo3"]
 	assert.False(t, exists)
 }
+
+func TestRemoveApp_PrunesEmptyParentDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDataHome := os.Getenv("XDG_DATA_HOME")
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+	defer func() {
+		_ = os.Setenv("XDG_DATA_HOME", origDataHome)
+		xdg.Reload()
+	}()
+
+	// Create deeply nested sidecar inside a data directory: <tmpDir>/data/myapp/nested/asset.json
+	dataDir := filepath.Join(tmpDir, "data")
+	nestedDir := filepath.Join(dataDir, "myapp", "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0755))
+	sidecarFile := filepath.Join(nestedDir, "asset.json")
+	require.NoError(t, os.WriteFile(sidecarFile, []byte("{}"), 0644))
+
+	// Add a sibling file in dataDir so dataDir is non-empty and preserved
+	siblingFile := filepath.Join(dataDir, "sibling.txt")
+	require.NoError(t, os.WriteFile(siblingFile, []byte("keep"), 0644))
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository:        "owner/myapp",
+		TargetPath:        tmpDir,
+		InstalledSidecars: []string{sidecarFile},
+	}))
+
+	err = RemoveApp("owner/myapp", false)
+	require.NoError(t, err)
+
+	// Sidecar file must be deleted
+	assert.NoFileExists(t, sidecarFile)
+	// Empty parent directories nested/ and myapp/ must be pruned
+	assert.NoDirExists(t, nestedDir)
+	assert.NoDirExists(t, filepath.Join(dataDir, "myapp"))
+	// dataDir has sibling.txt so it must remain intact
+	assert.DirExists(t, dataDir)
+	assert.FileExists(t, siblingFile)
+	// tmpDir (XDG_DATA_HOME stop-dir) must remain intact
+	assert.DirExists(t, tmpDir)
+}

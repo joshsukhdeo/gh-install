@@ -2,8 +2,10 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/adrg/xdg"
@@ -512,5 +514,43 @@ func TestStateManagement(t *testing.T) {
 		err = json.Unmarshal([]byte(jsonFalse), &app4)
 		require.NoError(t, err)
 		assert.False(t, app4.IncludeSidecars)
+	})
+
+	t.Run("Mutate_ConcurrentNoLostUpdates", func(t *testing.T) {
+		const numWorkers = 20
+		var wg sync.WaitGroup
+		wg.Add(numWorkers)
+
+		for i := 0; i < numWorkers; i++ {
+			workerID := i
+			go func() {
+				defer wg.Done()
+				repoName := fmt.Sprintf("owner/app-%d", workerID)
+				err := Mutate(func(st *State) error {
+					if st.Apps == nil {
+						st.Apps = make(map[string]*InstalledApp)
+					}
+					st.Apps[repoName] = &InstalledApp{
+						Repository: repoName,
+						Version:    fmt.Sprintf("v1.%d.0", workerID),
+					}
+					return nil
+				})
+				assert.NoError(t, err)
+			}()
+		}
+
+		wg.Wait()
+
+		st, err := LoadState()
+		require.NoError(t, err)
+		for i := 0; i < numWorkers; i++ {
+			repoName := fmt.Sprintf("owner/app-%d", i)
+			app, exists := st.Apps[repoName]
+			assert.True(t, exists, "app %s should exist in state without being lost to race condition", repoName)
+			if exists {
+				assert.Equal(t, fmt.Sprintf("v1.%d.0", i), app.Version)
+			}
+		}
 	})
 }

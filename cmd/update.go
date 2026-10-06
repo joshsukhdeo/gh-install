@@ -89,43 +89,72 @@ func BuildBatchReleaseQuery(repos []string) (string, map[string]string) {
 	return sb.String(), aliasToRepo
 }
 
-// FetchLatestReleaseTags sends a single batched GraphQL query to GitHub
+const maxGraphQLBatchSize = 30
+
+// FetchLatestReleaseTags sends batched GraphQL queries to GitHub in chunks of 30
 // and returns a map of repository name to latest release tag.
 func FetchLatestReleaseTags(client GQLClient, repos []string) (map[string]string, error) {
-	query, aliasToRepo := BuildBatchReleaseQuery(repos)
-	if query == "" || len(aliasToRepo) == 0 {
+	repoSet := make(map[string]bool)
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo != "" {
+			parts := strings.Split(repo, "/")
+			if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+				repoSet[repo] = true
+			}
+		}
+	}
+	if len(repoSet) == 0 {
 		return make(map[string]string), nil
 	}
 
-	var rawResponse map[string]GQLRepoResult
-	err := client.Do(query, nil, &rawResponse)
-	if err != nil {
-		var gqlErr *api.GraphQLError
-		if errors.As(err, &gqlErr) && len(rawResponse) > 0 {
-			log.Warn("GraphQL batch query returned partial errors", "error", err)
-		} else if len(rawResponse) == 0 {
-			return nil, fmt.Errorf("failed to fetch latest releases via GraphQL: %w", err)
-		}
+	sortedRepos := make([]string, 0, len(repoSet))
+	for r := range repoSet {
+		sortedRepos = append(sortedRepos, r)
 	}
+	sort.Strings(sortedRepos)
 
-	tags := make(map[string]string, len(rawResponse))
-	for alias, result := range rawResponse {
-		repo := aliasToRepo[alias]
-		if repo == "" {
+	mergedTags := make(map[string]string)
+	for i := 0; i < len(sortedRepos); i += maxGraphQLBatchSize {
+		end := i + maxGraphQLBatchSize
+		if end > len(sortedRepos) {
+			end = len(sortedRepos)
+		}
+		chunk := sortedRepos[i:end]
+		query, aliasToRepo := BuildBatchReleaseQuery(chunk)
+		if query == "" {
 			continue
 		}
-		if result.LatestRelease != nil {
-			tag := result.LatestRelease.TagName
-			if tag == "" {
-				tag = result.LatestRelease.Name
+
+		var rawResponse map[string]GQLRepoResult
+		err := client.Do(query, nil, &rawResponse)
+		if err != nil {
+			var gqlErr *api.GraphQLError
+			if errors.As(err, &gqlErr) && len(rawResponse) > 0 {
+				log.Warn("GraphQL batch query returned partial errors", "error", err)
+			} else if len(rawResponse) == 0 {
+				return nil, fmt.Errorf("failed to fetch latest releases via GraphQL: %w", err)
 			}
-			if tag != "" {
-				tags[repo] = tag
+		}
+
+		for alias, result := range rawResponse {
+			repo := aliasToRepo[alias]
+			if repo == "" {
+				continue
+			}
+			if result.LatestRelease != nil {
+				tag := result.LatestRelease.TagName
+				if tag == "" {
+					tag = result.LatestRelease.Name
+				}
+				if tag != "" {
+					mergedTags[repo] = tag
+				}
 			}
 		}
 	}
 
-	return tags, nil
+	return mergedTags, nil
 }
 
 func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
@@ -495,6 +524,11 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 							log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
 						} else if err == nil {
 							log.Info(fmt.Sprintf("Removed obsolete sidecar %s", oldSidecar))
+							stopDirs := getPruneStopDirs()
+							if targetPath != "" {
+								stopDirs = append(stopDirs, targetPath)
+							}
+							pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
 						}
 					}
 				}
@@ -533,9 +567,32 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			log.Info(fmt.Sprintf("Successfully updated %s", app.Repository))
 			state.LogHistory("update", app.Repository, latestTag)
 
+			// Incremental checkpointing: atomically persist state per completed app update
+			if !r.NoSaveState && !r.DryRun {
+				if err := state.Mutate(func(currentSt *state.State) error {
+					if currentSt.Apps == nil {
+						currentSt.Apps = make(map[string]*state.InstalledApp)
+					}
+					if currentApp, ok := currentSt.Apps[app.Repository]; ok && currentApp != nil {
+						currentApp.Version = latestTag
+						currentApp.InstalledSidecars = updatedSidecars
+						currentApp.InstalledBinaries = updatedBinaries
+					} else {
+						app.Version = latestTag
+						app.InstalledSidecars = updatedSidecars
+						app.InstalledBinaries = updatedBinaries
+						currentSt.Apps[app.Repository] = app
+					}
+					return nil
+				}); err != nil {
+					log.Warn(fmt.Sprintf("Failed to checkpoint state for %s", app.Repository), "error", err)
+				}
+			}
+
 			mu.Lock()
 			successfulUpdates[app.Repository] = latestTag
 			if appEntry, ok := st.Apps[app.Repository]; ok {
+				appEntry.Version = latestTag
 				appEntry.InstalledSidecars = updatedSidecars
 				appEntry.InstalledBinaries = updatedBinaries
 			}
@@ -547,35 +604,8 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 
 	waitErr := g.Wait()
 
-	// Atomic thread-safe batch save: only save state once at the end
 	if len(successfulUpdates) > 0 && !r.NoSaveState && !r.DryRun {
-		freshSt, err := state.LoadState()
-		if err == nil {
-			for repo, newVersion := range successfulUpdates {
-				if app, ok := freshSt.Apps[repo]; ok {
-					app.Version = newVersion
-					if memApp, okMem := st.Apps[repo]; okMem {
-						app.InstalledSidecars = memApp.InstalledSidecars
-						app.InstalledBinaries = memApp.InstalledBinaries
-					}
-				}
-			}
-			st = freshSt
-		} else {
-			for repo, newVersion := range successfulUpdates {
-				if app, ok := st.Apps[repo]; ok {
-					app.Version = newVersion
-				}
-			}
-		}
-		if err := st.Save(); err != nil {
-			log.Error("Failed to save state after batch update", "error", err)
-			if waitErr == nil {
-				return err
-			}
-		} else {
-			pterm.Success.Printf("Successfully updated %d application(s)\n", len(successfulUpdates))
-		}
+		pterm.Success.Printf("Successfully updated %d application(s)\n", len(successfulUpdates))
 	}
 
 	return waitErr

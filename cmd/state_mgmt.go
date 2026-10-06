@@ -439,12 +439,18 @@ func RemoveApp(target string, purge bool) error {
 			}
 		}
 
+		stopDirs := getPruneStopDirs()
+		if app.TargetPath != "" {
+			stopDirs = append(stopDirs, app.TargetPath)
+		}
+
 		for _, sc := range app.InstalledSidecars {
 			if _, err := os.Lstat(sc); err == nil {
 				if err := os.Remove(sc); err != nil && !os.IsNotExist(err) {
 					log.Warn(fmt.Sprintf("Failed to remove sidecar %s", sc), "error", err)
 				} else if err == nil {
 					log.Infof("Deleted sidecar %s", sc)
+					pruneEmptyParentDirs(filepath.Dir(sc), stopDirs)
 				}
 			}
 		}
@@ -514,7 +520,15 @@ func RemoveApp(target string, purge bool) error {
 		log.Infof("Removed %s from state tracking.", r)
 		state.LogHistory("remove", r, "")
 	}
-	return st.Save()
+	return state.Mutate(func(currentSt *state.State) error {
+		for _, r := range toRemove {
+			delete(currentSt.Apps, r)
+			if currentSt.InstallMap != nil {
+				delete(currentSt.InstallMap, r)
+			}
+		}
+		return nil
+	})
 }
 
 func PinAppState(target string) error {
@@ -722,5 +736,70 @@ func editStateAppFields(st *state.State) {
 		pterm.Error.Printf("Failed to save state: %v\n", err)
 	} else {
 		pterm.Success.Println("App state updated successfully.")
+	}
+}
+
+func getPruneStopDirs() []string {
+	var stopDirs []string
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		stopDirs = append(stopDirs,
+			home,
+			filepath.Join(home, ".local"),
+			filepath.Join(home, ".local", "share"),
+			filepath.Join(home, ".local", "lib"),
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".local", "include"),
+			filepath.Join(home, "bin"),
+		)
+	}
+	if xdg.DataHome != "" {
+		stopDirs = append(stopDirs, xdg.DataHome)
+	}
+	if xdg.ConfigHome != "" {
+		stopDirs = append(stopDirs, xdg.ConfigHome)
+	}
+	if xdg.StateHome != "" {
+		stopDirs = append(stopDirs, xdg.StateHome)
+	}
+	stopDirs = append(stopDirs,
+		"/usr",
+		"/usr/local",
+		"/usr/local/share",
+		"/usr/local/lib",
+		"/usr/local/bin",
+		"/usr/local/include",
+		"/etc",
+		"/var",
+		"/opt",
+		"/tmp",
+		os.TempDir(),
+	)
+	return stopDirs
+}
+
+// pruneEmptyParentDirs ascends the directory tree starting from startDir and removes
+// empty directories until it encounters a non-empty directory or a directory in stopDirs.
+func pruneEmptyParentDirs(startDir string, stopDirs []string) {
+	stopMap := make(map[string]bool)
+	for _, s := range stopDirs {
+		if s != "" {
+			stopMap[filepath.Clean(s)] = true
+		}
+	}
+
+	for curr := filepath.Clean(startDir); curr != "." && curr != string(filepath.Separator) && curr != filepath.VolumeName(curr)+string(filepath.Separator); curr = filepath.Dir(curr) {
+		if stopMap[curr] {
+			break
+		}
+
+		entries, err := os.ReadDir(curr)
+		if err != nil || len(entries) > 0 {
+			break
+		}
+
+		if err := os.Remove(curr); err != nil {
+			break
+		}
+		log.Infof("Pruned empty parent directory %s", curr)
 	}
 }

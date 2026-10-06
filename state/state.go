@@ -381,18 +381,11 @@ func LoadState() (*State, error) {
 	return &s, nil
 }
 
-func (s *State) Save() error {
+func (s *State) saveUnlocked() error {
 	path := GetStatePath()
-	err := os.MkdirAll(filepath.Dir(path), 0755)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-
-	lock := flock.New(path + ".lock")
-	if err := lock.Lock(); err != nil {
-		return err
-	}
-	defer func() { _ = lock.Unlock() }()
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -402,20 +395,74 @@ func (s *State) Save() error {
 	return os.WriteFile(path, data, 0644)
 }
 
-func (s *State) AddApp(app *InstalledApp) error {
-	if s.Apps == nil {
-		s.Apps = make(map[string]*InstalledApp)
+func (s *State) Save() error {
+	path := GetStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
 	}
-	s.Apps[app.Repository] = app
-	return s.Save()
+
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	return s.saveUnlocked()
+}
+
+// Mutate acquires an exclusive file lock, loads fresh state from disk, executes fn,
+// and saves the mutated state atomically before releasing the lock.
+// This guarantees transactional read-modify-write without lost updates.
+func Mutate(fn func(st *State) error) error {
+	path := GetStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	st, err := LoadState()
+	if err != nil {
+		return err
+	}
+
+	if err := fn(st); err != nil {
+		return err
+	}
+
+	return st.saveUnlocked()
+}
+
+func (s *State) AddApp(app *InstalledApp) error {
+	return Mutate(func(st *State) error {
+		if st.Apps == nil {
+			st.Apps = make(map[string]*InstalledApp)
+		}
+		st.Apps[app.Repository] = app
+		if s.Apps == nil {
+			s.Apps = make(map[string]*InstalledApp)
+		}
+		s.Apps[app.Repository] = app
+		return nil
+	})
 }
 
 func (s *State) SetInstallMap(repo string, entry *InstallMapEntry) error {
-	if s.InstallMap == nil {
-		s.InstallMap = make(map[string]*InstallMapEntry)
-	}
-	s.InstallMap[repo] = entry
-	return s.Save()
+	return Mutate(func(st *State) error {
+		if st.InstallMap == nil {
+			st.InstallMap = make(map[string]*InstallMapEntry)
+		}
+		st.InstallMap[repo] = entry
+		if s.InstallMap == nil {
+			s.InstallMap = make(map[string]*InstallMapEntry)
+		}
+		s.InstallMap[repo] = entry
+		return nil
+	})
 }
 
 func (s *State) GetInstallMap(repo string) *InstallMapEntry {

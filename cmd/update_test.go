@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -138,12 +139,44 @@ func TestFetchLatestReleaseTags(t *testing.T) {
 				}
 			},
 		}
-
 		repos := []string{"cli/cli", "deleted/repo"}
 		tags, err := FetchLatestReleaseTags(mockClient, repos)
 		require.NoError(t, err)
 		assert.Equal(t, "v2.40.0", tags["cli/cli"])
 		assert.NotContains(t, tags, "deleted/repo")
+	})
+
+	t.Run("chunks repositories in batches of 30", func(t *testing.T) {
+		mockClient := &mockGQLClient{
+			doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+				resp, ok := response.(*map[string]GQLRepoResult)
+				require.True(t, ok)
+				batchResp := make(map[string]GQLRepoResult)
+				for i := 0; i < 75; i++ {
+					alias := fmt.Sprintf("repo_%d", i)
+					if strings.Contains(query, alias+":") {
+						batchResp[alias] = GQLRepoResult{
+							LatestRelease: &struct {
+								TagName string `json:"tagName"`
+								Name    string `json:"name"`
+							}{TagName: fmt.Sprintf("v1.%d.0", i)},
+						}
+					}
+				}
+				*resp = batchResp
+				return nil
+			},
+		}
+
+		repos := make([]string, 75)
+		for i := 0; i < 75; i++ {
+			repos[i] = fmt.Sprintf("org/repo-%d", i)
+		}
+
+		tags, err := FetchLatestReleaseTags(mockClient, repos)
+		require.NoError(t, err)
+		assert.Equal(t, int32(3), mockClient.callCount.Load(), "75 repos should be chunked into 3 queries (30 + 30 + 15)")
+		assert.Len(t, tags, 75)
 	})
 }
 
@@ -972,4 +1005,75 @@ func TestUpdate_ReconcilesObsoleteAssets(t *testing.T) {
 	assert.Equal(t, "v2.0.0", finalApp.Version)
 	assert.Equal(t, []string{"tool-main"}, finalApp.InstalledBinaries)
 	assert.Equal(t, []string{keptSidecar}, finalApp.InstalledSidecars)
+}
+
+func TestDoUpdate_IncrementalCheckpointing(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDataHome := os.Getenv("XDG_DATA_HOME")
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+	defer func() {
+		_ = os.Setenv("XDG_DATA_HOME", origDataHome)
+		xdg.Reload()
+	}()
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/app-success",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+	}))
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/app-fail",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+	}))
+
+	mockGQL := &mockGQLClient{
+		doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+			resp, ok := response.(*map[string]GQLRepoResult)
+			require.True(t, ok)
+			*resp = map[string]GQLRepoResult{
+				"repo_0": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+				"repo_1": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+			}
+			return nil
+		},
+	}
+	origNewGQL := newGraphQLClient
+	newGraphQLClient = func() (GQLClient, error) { return mockGQL, nil }
+	defer func() { newGraphQLClient = origNewGQL }()
+
+	origInstall := installReleaseFunc
+	installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+		if appParams.Repository == "test/app-fail" {
+			// Small sleep to ensure the success worker finishes first
+			time.Sleep(50 * time.Millisecond)
+			return errors.New("simulated install explosion")
+		}
+		return nil
+	}
+	defer func() { installReleaseFunc = origInstall }()
+
+	r := &RootCLI{}
+	r.Update = true
+
+	err = DoUpdate(r, nil)
+	assert.Error(t, err, "DoUpdate should report error when a worker fails")
+
+	// Verify that the successful app was checkpointed durably to state despite batch failure
+	freshSt, err := state.LoadState()
+	require.NoError(t, err)
+	require.NotNil(t, freshSt.Apps["test/app-success"])
+	assert.Equal(t, "v2.0.0", freshSt.Apps["test/app-success"].Version, "successful app must be checkpointed to state")
+	require.NotNil(t, freshSt.Apps["test/app-fail"])
+	assert.Equal(t, "v1.0.0", freshSt.Apps["test/app-fail"].Version, "failed app must remain at old version")
 }
