@@ -46,6 +46,29 @@ type InstalledApp struct {
 	InstalledSidecars        []string          `json:"installed_sidecars,omitempty"`
 	EnvInject                []string          `json:"env_inject,omitempty"`
 	FallbackReleases         int               `json:"fallback_releases,omitempty"`
+	InsecureAllowUnsigned    bool              `json:"insecure_allow_unsigned,omitempty"`
+	WasSigned                bool              `json:"was_signed,omitempty"`
+	VerificationMethod       string            `json:"verification_method,omitempty"`
+	CommitHash               string            `json:"commit_hash,omitempty"`
+}
+
+// AllowsUnsigned determines if this specific item permits unsigned artifacts.
+// When passed specific named entries (targeted == true), combining --insecure-allow-unsigned
+// and --force allows bypassing the standard verification track (falling back to commit lineage verification).
+// In generic execution contexts (user, global, or default all applications where targeted == false),
+// --force --insecure-allow-unsigned does NOT work on previously signed packages (WasSigned == true).
+func (app *InstalledApp) AllowsUnsigned(globalAllowUnsigned bool, targeted bool, force ...bool) bool {
+	isForce := len(force) > 0 && force[0]
+	if targeted {
+		if isForce && globalAllowUnsigned {
+			return true
+		}
+		return globalAllowUnsigned || app.InsecureAllowUnsigned
+	}
+	if app.WasSigned {
+		return false
+	}
+	return globalAllowUnsigned || app.InsecureAllowUnsigned
 }
 
 // UnmarshalJSON implements custom unmarshaling for backward compatibility.

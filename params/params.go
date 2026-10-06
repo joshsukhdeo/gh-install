@@ -112,11 +112,13 @@ type CommonInstallFlags struct {
 	PinInstall                                    bool              `name:"pin-install" default:"false" help:"Pin this installation to the current version."`
 	DryRun                                        bool              `default:"false" help:"Show what would be downloaded."`
 	VerifyChecksum                                bool              `default:"true" help:"Verify asset checksums."`
+	InsecureAllowUnsigned                         bool              `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
 	SkipVtSandbox                                 bool              `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
 	Prerelease                                    bool              `short:"P" help:"Include prereleases."`
 	Stable                                        bool              `help:"Include only stable releases."`
 	AI                                            bool              `help:"Use AI to scan and analyze releases."`
 	IsUpgradeCmd                                  bool              `kong:"-"`
+	SpecificallyTargeted                          bool              `kong:"-"`
 	SearchForInstallInstructionsIfNoReleaseAssets bool              `env:"GH_PT_README_FALLBACK" help:"Extract alternative installation instructions from README if release asset matching fails."`
 	FallbackReleases                              int               `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
 	Sidecars                                      string            `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
@@ -182,17 +184,18 @@ type RmCmd = StateRmCmd
 type StateEditCmd struct{}
 
 type UpgradeFlags struct {
-	DisablePrompts     bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
-	Extractor          string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
-	Overwrite          bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
-	DryRun             bool   `default:"false" help:"Show what would be upgraded."`
-	VerifyChecksum     bool   `default:"true" help:"Verify asset checksums."`
-	SkipVtSandbox      bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
-	FallbackReleases   int    `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
-	WarnUnmappedAssets bool   `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
-	ProgressBar        string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
-	NoColor            bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
-	NoEmojis           bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
+	DisablePrompts        bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
+	Extractor             string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	Overwrite             bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
+	DryRun                bool   `default:"false" help:"Show what would be upgraded."`
+	VerifyChecksum        bool   `default:"true" help:"Verify asset checksums."`
+	InsecureAllowUnsigned bool   `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
+	SkipVtSandbox         bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	FallbackReleases      int    `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
+	WarnUnmappedAssets    bool   `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
+	ProgressBar           string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	NoColor               bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis              bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
 
 type UpgradeCmd struct {
@@ -404,4 +407,16 @@ type HelperCmd struct {
 	RunCompileScript      bool   `help:"Execute compile.sh."`
 	TargetBaseDir         string `help:"Base installation directory." name:"target-base-dir" type:"path"`
 	Global                bool   `short:"g" help:"Use global install paths."`
+}
+
+// TruncateRegex truncates a regex pattern to maxLen characters (default 200) if it is longer than maxLen.
+func TruncateRegex(s string, maxLen ...int) string {
+	limit := 200
+	if len(maxLen) > 0 && maxLen[0] > 0 {
+		limit = maxLen[0]
+	}
+	if len(s) > limit {
+		return s[:limit] + "..."
+	}
+	return s
 }

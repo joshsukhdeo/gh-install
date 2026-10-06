@@ -57,11 +57,15 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 	r.LogFormat = cli.LogFormat
 	r.LogQuietInteractive = cli.LogQuietInteractive
 	r.Verbose = cli.Verbose
+	if r.Verbose {
+		r.ProgressBar = "none"
+	}
 
 	switch cmdStr {
 	case "install", "install <repository>":
 		r.CommonInstallFlags = cli.Install.CommonInstallFlags
 		r.Repository = cli.Install.Repository
+		r.SpecificallyTargeted = cli.Install.Repository != ""
 		resolveDisplayPreferences(&r.CommonInstallFlags, r)
 		return r.RunInstall()
 	case "ls", "ls <filter>":
@@ -80,15 +84,20 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		return RemoveApp(cli.Rm.Target, cli.Rm.Purge)
 	case "upgrade", "upgrade <repository>":
 		r.Repository = cli.Upgrade.Repository
+		r.SpecificallyTargeted = cli.Upgrade.Repository != ""
 		r.DisablePrompts = cli.Upgrade.DisablePrompts
 		r.Extractor = cli.Upgrade.Extractor
 		r.Overwrite = cli.Upgrade.Overwrite
 		r.DryRun = cli.Upgrade.DryRun
 		r.VerifyChecksum = cli.Upgrade.VerifyChecksum
+		r.InsecureAllowUnsigned = cli.Upgrade.InsecureAllowUnsigned
 		r.SkipVtSandbox = cli.Upgrade.SkipVtSandbox
 		r.FallbackReleases = cli.Upgrade.FallbackReleases
 		r.WarnUnmappedAssets = cli.Upgrade.WarnUnmappedAssets
 		r.ProgressBar = cli.Upgrade.ProgressBar
+		if r.Verbose {
+			r.ProgressBar = "none"
+		}
 		r.NoColor = cli.Upgrade.NoColor
 		r.NoEmojis = cli.Upgrade.NoEmojis
 		r.IsUpgradeCmd = true

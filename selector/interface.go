@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/log"
+	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/mholt/archiver/v4"
 )
 
@@ -259,7 +260,7 @@ func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriter
 }
 
 func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
-	log.Info("getting release asset binaries", "asset download path", criteria.DownloadPath, "asset matching binary names", criteria.Names, "asset matching binary regexp", criteria.Matcher)
+	log.Info("getting release asset binaries", "asset download path", criteria.DownloadPath, "asset matching binary names", criteria.Names, "asset matching binary regexp", params.TruncateRegex(criteria.Matcher, 200))
 
 	inputStream, err := os.Open(criteria.DownloadPath)
 	if err != nil {

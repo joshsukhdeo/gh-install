@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/state"
+	"github.com/joshsukhdeo/gh-pt/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,4 +238,33 @@ func TestInstallDirWatcherAndSymlinking(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, fiAfter.Mode()&os.ModeSymlink != 0, "should now be regular file, not symlink")
 	assert.NoFileExists(t, stagedFile)
+}
+
+func TestRootCLI_Verbose_TerminalLoggingAndRegexTruncation(t *testing.T) {
+	cli := &params.CLI{
+		Verbose: true,
+	}
+	r := &RootCLI{}
+	r.Verbose = cli.Verbose
+	if r.Verbose {
+		r.ProgressBar = "none"
+	}
+	r.ensureCliParams()
+
+	assert.True(t, r.Verbose)
+	assert.Equal(t, "none", r.ProgressBar)
+
+	// Verify RegexTruncatingWriter truncates long regex in log events
+	var buf bytes.Buffer
+	writer := &ui.RegexTruncatingWriter{Writer: &buf, MaxLen: 200}
+
+	longRegex := strings.Repeat("z", 250)
+	testLog := `DEBU installing with values repository=cli/cli release asset regexp="` + longRegex + `" target=/usr/local/bin`
+	_, err := writer.Write([]byte(testLog))
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.NotContains(t, out, longRegex)
+	assert.Contains(t, out, strings.Repeat("z", 200)+"...")
+	assert.Contains(t, out, "target=/usr/local/bin")
 }

@@ -3,13 +3,9 @@ package release
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -31,6 +27,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/joshsukhdeo/gh-pt/status"
 	"github.com/joshsukhdeo/gh-pt/ui"
+	"github.com/joshsukhdeo/gh-pt/verification"
 	"github.com/pterm/pterm"
 	"golang.org/x/term"
 )
@@ -73,6 +70,8 @@ type GithubRelease struct {
 	DepsFiles           []string
 	IsTTYFunc           func() bool
 	WarnUnmappedAssets  *bool
+	VerifiedSigned      bool
+	VerificationMethod  string
 }
 
 type Prompter interface {
@@ -1295,37 +1294,58 @@ func (r *GithubRelease) verifyChecksum(filePath, checksumFilePath string) error 
 		return nil
 	}
 
-	// Determine hash algorithm based on hash length
-	var hasher hash.Hash
-	switch len(expectedHash) {
-	case 64: // SHA-256
-		hasher = sha256.New()
-	case 128: // SHA-512
-		hasher = sha512.New()
-	default:
+	if len(expectedHash) != 64 && len(expectedHash) != 128 {
 		log.Warn("unknown hash algorithm, skipping verification", "hash_length", len(expectedHash))
 		return nil
 	}
 
-	// Calculate the hash of the downloaded file
-	downloadedFile, err := os.Open(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open downloaded file: %w", err)
 	}
-	defer func() { _ = downloadedFile.Close() }()
 
-	if _, err := io.Copy(hasher, downloadedFile); err != nil {
-		return fmt.Errorf("failed to calculate hash: %w", err)
+	insecure := false
+	forceBypass := false
+	var repoName, oldCommit, newCommit string
+	if r != nil && r.CliParams != nil {
+		insecure = r.CliParams.InsecureAllowUnsigned
+		forceBypass = r.CliParams.Overwrite && r.CliParams.InsecureAllowUnsigned && r.CliParams.SpecificallyTargeted
+		repoName = r.CliParams.Repository
+		if st, _ := state.LoadState(); st != nil && st.Apps != nil {
+			if app, ok := st.Apps[repoName]; ok {
+				if app.CommitHash != "" {
+					oldCommit = app.CommitHash
+				} else {
+					oldCommit = app.Version
+				}
+			}
+		}
+		newCommit = r.ResolvedVersion
+	}
+	v := verification.NewVerifier(insecure)
+	if err := v.Verify(verification.ArtifactContext{
+		Data:                data,
+		Checksum:            expectedHash,
+		Repo:                repoName,
+		OldCommit:           oldCommit,
+		NewCommit:           newCommit,
+		GlobalAllowUnsigned: insecure,
+		ItemAllowsUnsigned:  insecure,
+		ForceBypass:         forceBypass,
+	}); err != nil {
+		return err
 	}
 
-	actualHash := hex.EncodeToString(hasher.Sum(nil))
-
-	if !strings.EqualFold(actualHash, expectedHash) {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
+	if r != nil {
+		if forceBypass {
+			r.VerifiedSigned = false
+			r.VerificationMethod = "commit_lineage_bypass"
+		} else {
+			r.VerifiedSigned = true
+			r.VerificationMethod = "checksum"
+		}
 	}
-
-	log.Info("checksum verified successfully", "filename", targetFilename, "hash", actualHash)
-
+	log.Info("checksum verified successfully", "filename", targetFilename, "hash", expectedHash)
 	return nil
 }
 
@@ -1442,7 +1462,11 @@ func (r *GithubRelease) Install() error {
 		SetAssetInstallCmd(installCmd string)
 		WaitForAnimation()
 	}
-	if r.CliParams.ProgressBar == "conveyor" {
+	if (r.CliParams != nil && r.CliParams.Verbose) || (r.CliParams != nil && r.CliParams.ProgressBar == "none") {
+		pUI = &ui.NullProgressBar{}
+		r.UI = pUI
+		ui.GlobalPacman = nil
+	} else if r.CliParams != nil && r.CliParams.ProgressBar == "conveyor" {
 		cUI := &ui.ConveyorUI{Repo: r.CliParams.Repository}
 		if r.CliParams.DisableIcons || r.CliParams.NoEmojis {
 			cUI.DisableIcons = true
@@ -1450,8 +1474,12 @@ func (r *GithubRelease) Install() error {
 		r.UI = cUI
 		pUI = cUI
 	} else {
-		pacUI := ui.NewPacmanUI(r.CliParams.Repository)
-		if r.CliParams.DisableIcons || r.CliParams.NoEmojis {
+		repo := ""
+		if r.CliParams != nil {
+			repo = r.CliParams.Repository
+		}
+		pacUI := ui.NewPacmanUI(repo)
+		if r.CliParams != nil && (r.CliParams.DisableIcons || r.CliParams.NoEmojis) {
 			pacUI.DisableIcons = true
 		}
 		r.UI = pacUI
@@ -1803,6 +1831,39 @@ func (r *GithubRelease) Install() error {
 				log.Error("checksum verification failed", "error", err, "asset", asset.Name)
 				return fmt.Errorf("checksum verification failed for %s: %w", asset.Name, err)
 			}
+		} else if r.CliParams.IsUpgradeCmd {
+			data, readErr := os.ReadFile(downloadedAssetPath)
+			if readErr != nil {
+				return fmt.Errorf("failed to read downloaded asset %s: %w", asset.Name, readErr)
+			}
+			forceBypass := r.CliParams.Overwrite && r.CliParams.InsecureAllowUnsigned && r.CliParams.SpecificallyTargeted
+			var repoName, oldCommit, newCommit string
+			repoName = r.CliParams.Repository
+			if st, _ := state.LoadState(); st != nil && st.Apps != nil {
+				if app, ok := st.Apps[repoName]; ok {
+					if app.CommitHash != "" {
+						oldCommit = app.CommitHash
+					} else {
+						oldCommit = app.Version
+					}
+				}
+			}
+			newCommit = r.ResolvedVersion
+			v := verification.NewVerifier(r.CliParams.InsecureAllowUnsigned)
+			if err := v.Verify(verification.ArtifactContext{
+				Data:                data,
+				Repo:                repoName,
+				OldCommit:           oldCommit,
+				NewCommit:           newCommit,
+				GlobalAllowUnsigned: r.CliParams.InsecureAllowUnsigned,
+				ItemAllowsUnsigned:  r.CliParams.InsecureAllowUnsigned,
+				ForceBypass:         forceBypass,
+			}); err != nil {
+				log.Error("verification failed for unsigned artifact", "error", err, "asset", asset.Name)
+				return fmt.Errorf("artifact verification failed for %s: %w", asset.Name, err)
+			}
+			r.VerifiedSigned = false
+			r.VerificationMethod = "commit_lineage"
 		}
 
 		if r.CliParams.VTApiKey != "" {
@@ -1827,12 +1888,12 @@ func (r *GithubRelease) Install() error {
 			MaxExeInstalls: r.CliParams.MaxExeInstalls,
 		})
 		if execErr != nil {
-			log.Error("could not create release asset binary selector", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", r.CliParams.AssetBinariesRegexp, "error", execErr)
+			log.Error("could not create release asset binary selector", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", execErr)
 			return execErr
 		}
 		binaries, execErr := binarySelector.Run()
 		if execErr != nil {
-			log.Error("could not select release asset binary", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", r.CliParams.AssetBinariesRegexp, "error", execErr)
+			log.Error("could not select release asset binary", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", execErr)
 			return execErr
 		}
 		if r.CliParams.OnlyFirstMatch && len(binaries) > 1 {
@@ -2259,6 +2320,9 @@ func (r *GithubRelease) Install() error {
 				IncludeSidecars:          r.CliParams.IncludeSidecars,
 				InstalledSidecars:        r.InstalledSidecars,
 				FallbackReleases:         r.CliParams.FallbackReleases,
+				InsecureAllowUnsigned:    r.CliParams.InsecureAllowUnsigned,
+				WasSigned:                r.VerifiedSigned,
+				VerificationMethod:       r.VerificationMethod,
 			})
 
 			// Save to install-map

@@ -440,4 +440,43 @@ func TestStateManagement(t *testing.T) {
 		assert.Equal(t, "my-app", retrieved.Installed.Pkg.PackageID)
 		assert.Len(t, retrieved.Installed.Files, 2)
 	})
+
+	t.Run("InstalledApp_AllowsUnsigned_Policy", func(t *testing.T) {
+		// App that was previously signed
+		signedApp := &InstalledApp{
+			Repository: "secure/tool",
+			WasSigned:  true,
+		}
+		// In bulk upgrade with global allow unsigned, previously signed app strictly rejects unsigned
+		assert.False(t, signedApp.AllowsUnsigned(true, false))
+		assert.False(t, signedApp.AllowsUnsigned(false, false))
+		// If targeted explicitly by user, user override is respected
+		assert.True(t, signedApp.AllowsUnsigned(true, true))
+
+		// --insecure-allow-unsigned --force in generic execution context (targeted == false)
+		// DOES NOT bypass previously signed packages (generic user, global, or all apps)
+		assert.False(t, signedApp.AllowsUnsigned(true, false, true))
+
+		// --insecure-allow-unsigned --force with specific named entry (targeted == true)
+		// ALLOWS bypassing standard verification track (falling back to commit lineage)
+		assert.True(t, signedApp.AllowsUnsigned(true, true, true))
+
+		// App that never had signatures
+		unsignedApp := &InstalledApp{
+			Repository: "unsigned/tool",
+			WasSigned:  false,
+		}
+		// In bulk upgrade, allowed if global flag is true
+		assert.True(t, unsignedApp.AllowsUnsigned(true, false))
+		assert.False(t, unsignedApp.AllowsUnsigned(false, false))
+
+		// App with explicit item-level insecure permission saved in state
+		itemPermittedApp := &InstalledApp{
+			Repository:            "explicit/tool",
+			InsecureAllowUnsigned: true,
+			WasSigned:             false,
+		}
+		assert.True(t, itemPermittedApp.AllowsUnsigned(false, false))
+		assert.True(t, itemPermittedApp.AllowsUnsigned(true, false))
+	})
 }

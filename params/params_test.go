@@ -1,6 +1,7 @@
 package params
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -95,4 +96,37 @@ func TestCLIParse(t *testing.T) {
 
 	assert.Equal(t, "joshsukhdeo/gh-pt", cli.Install.Repository)
 	assert.True(t, cli.Install.Interactive)
+}
+
+func TestTruncateRegex(t *testing.T) {
+	t.Run("short regex not truncated", func(t *testing.T) {
+		input := "^[a-z0-9_-]+$"
+		assert.Equal(t, input, TruncateRegex(input))
+	})
+
+	t.Run("exactly 200 chars not truncated", func(t *testing.T) {
+		input := ""
+		for i := 0; i < 200; i++ {
+			input += "a"
+		}
+		assert.Equal(t, 200, len(input))
+		assert.Equal(t, input, TruncateRegex(input))
+	})
+
+	t.Run("longer than 200 chars truncated to 200 chars with ellipsis", func(t *testing.T) {
+		input := ""
+		for i := 0; i < 250; i++ {
+			input += "b"
+		}
+		truncated := TruncateRegex(input)
+		assert.Equal(t, 203, len(truncated))
+		assert.True(t, strings.HasPrefix(truncated, input[:200]))
+		assert.True(t, strings.HasSuffix(truncated, "..."))
+	})
+
+	t.Run("custom maxLen limit", func(t *testing.T) {
+		input := "1234567890"
+		truncated := TruncateRegex(input, 5)
+		assert.Equal(t, "12345...", truncated)
+	})
 }

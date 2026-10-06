@@ -129,6 +129,7 @@ func FetchLatestReleaseTags(client GQLClient, repos []string) (map[string]string
 
 func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	if r.Barbarous {
+		r.InsecureAllowUnsigned = true
 		r.VerifyChecksum = false
 		r.SkipVtSandbox = true
 		r.AllowForeignArch = true
@@ -440,6 +441,9 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			}
 			appParams.IsUpgradeCmd = true
 			appParams.NoSaveState = true // thread safety: don't save per worker
+			specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
+			appParams.SpecificallyTargeted = specificallyTargeted
+			appParams.InsecureAllowUnsigned = app.AllowsUnsigned(r.InsecureAllowUnsigned, specificallyTargeted, r.Overwrite)
 
 			err := installReleaseFunc(&appParams, ghClient)
 			if err != nil {

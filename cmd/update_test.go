@@ -612,3 +612,252 @@ func TestDoUpdate_DryRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", freshSt.Apps["test/dryrun-app"].Version)
 }
+
+func TestDoUpdate_InsecureAllowUnsigned_PerItemEnforcement(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	// App A: was previously signed
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/signed-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+		WasSigned:  true,
+	}))
+
+	// App B: genuinely lacked signatures
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/unsigned-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+		WasSigned:  false,
+	}))
+
+	mockGQL := &mockGQLClient{
+		doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+			resp, ok := response.(*map[string]GQLRepoResult)
+			require.True(t, ok)
+			*resp = map[string]GQLRepoResult{
+				"repo_0": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+				"repo_1": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+			}
+			return nil
+		},
+	}
+
+	origNewGQL := newGraphQLClient
+	newGraphQLClient = func() (GQLClient, error) {
+		return mockGQL, nil
+	}
+	defer func() { newGraphQLClient = origNewGQL }()
+
+	var mu sync.Mutex
+	capturedInsecure := make(map[string]bool)
+
+	origInstall := installReleaseFunc
+	installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+		mu.Lock()
+		capturedInsecure[appParams.Repository] = appParams.InsecureAllowUnsigned
+		mu.Unlock()
+		return nil
+	}
+	defer func() { installReleaseFunc = origInstall }()
+
+	// Case 1: Bulk upgrade with --insecure-allow-unsigned
+	// Guarantees flag only permits unsigned for packages that genuinely lack signatures,
+	// while strictly enforcing cryptographic checks on packages that previously possessed them.
+	r := &RootCLI{}
+	r.Update = true
+	r.InsecureAllowUnsigned = true
+	err = DoUpdate(r, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, capturedInsecure["test/signed-app"], "previously signed app must not inherit allow-unsigned in bulk upgrade")
+	assert.True(t, capturedInsecure["test/unsigned-app"], "unsigned app must allow unsigned in bulk upgrade when flag is set")
+	mu.Unlock()
+
+	// Case 2: Targeted upgrade specifically overrides per-item
+	mockGQL.doFunc = func(query string, variables map[string]interface{}, response interface{}) error {
+		resp, ok := response.(*map[string]GQLRepoResult)
+		require.True(t, ok)
+		*resp = map[string]GQLRepoResult{
+			"repo_0": {LatestRelease: &struct {
+				TagName string `json:"tagName"`
+				Name    string `json:"name"`
+			}{TagName: "v3.0.0"}},
+		}
+		return nil
+	}
+
+	mu.Lock()
+	capturedInsecure = make(map[string]bool)
+	mu.Unlock()
+
+	rTargeted := &RootCLI{}
+	rTargeted.Update = true
+	rTargeted.Repository = "test/signed-app"
+	rTargeted.InsecureAllowUnsigned = true
+	err = DoUpdate(rTargeted, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.True(t, capturedInsecure["test/signed-app"], "explicitly targeted repo must honor user override")
+	mu.Unlock()
+}
+
+func TestDoUpdate_InsecureAllowUnsigned_Force_TargetedVsGeneric(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/signed-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+		WasSigned:  true,
+		Global:     false,
+	}))
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/signed-global-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+		WasSigned:  true,
+		Global:     true,
+	}))
+
+	mockGQL := &mockGQLClient{
+		doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+			resp, ok := response.(*map[string]GQLRepoResult)
+			require.True(t, ok)
+			*resp = map[string]GQLRepoResult{
+				"repo_0": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+				"repo_1": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+			}
+			return nil
+		},
+	}
+
+	origNewGQL := newGraphQLClient
+	newGraphQLClient = func() (GQLClient, error) {
+		return mockGQL, nil
+	}
+	defer func() { newGraphQLClient = origNewGQL }()
+
+	var mu sync.Mutex
+	capturedInsecure := make(map[string]bool)
+	capturedTargeted := make(map[string]bool)
+
+	origInstall := installReleaseFunc
+	installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+		mu.Lock()
+		capturedInsecure[appParams.Repository] = appParams.InsecureAllowUnsigned
+		capturedTargeted[appParams.Repository] = appParams.SpecificallyTargeted
+		mu.Unlock()
+		return nil
+	}
+	defer func() { installReleaseFunc = origInstall }()
+
+	// 1. Generic Default User + Global (all applications): r.Repository == "", r.UpdateAll == true
+	rAll := &RootCLI{}
+	rAll.UpdateAll = true
+	rAll.InsecureAllowUnsigned = true
+	rAll.Overwrite = true // --force
+	err = DoUpdate(rAll, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, capturedInsecure["test/signed-app"], "all-applications context must NOT bypass verification for previously signed app")
+	assert.False(t, capturedTargeted["test/signed-app"], "all-applications context must NOT be specifically targeted")
+	assert.False(t, capturedInsecure["test/signed-global-app"], "all-applications context must NOT bypass verification for previously signed global app")
+	mu.Unlock()
+
+	// 2. Generic User context: r.Update == true, r.Global == false, r.Repository == ""
+	mu.Lock()
+	capturedInsecure = make(map[string]bool)
+	capturedTargeted = make(map[string]bool)
+	mu.Unlock()
+
+	rUser := &RootCLI{}
+	rUser.Update = true
+	rUser.Global = false
+	rUser.InsecureAllowUnsigned = true
+	rUser.Overwrite = true // --force
+	err = DoUpdate(rUser, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, capturedInsecure["test/signed-app"], "generic user context must NOT bypass verification for previously signed app even with --force")
+	assert.False(t, capturedTargeted["test/signed-app"], "generic user context must NOT be specifically targeted")
+	mu.Unlock()
+
+	// 3. Generic Global context: r.Update == true, r.Global == true, r.Repository == ""
+	mu.Lock()
+	capturedInsecure = make(map[string]bool)
+	capturedTargeted = make(map[string]bool)
+	mu.Unlock()
+
+	rGlobal := &RootCLI{}
+	rGlobal.Update = true
+	rGlobal.Global = true
+	rGlobal.InsecureAllowUnsigned = true
+	rGlobal.Overwrite = true // --force
+	err = DoUpdate(rGlobal, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.False(t, capturedInsecure["test/signed-global-app"], "generic global context must NOT bypass verification for previously signed app even with --force")
+	assert.False(t, capturedTargeted["test/signed-global-app"], "generic global context must NOT be specifically targeted")
+	mu.Unlock()
+
+	// 4. Specifically targeted named entry: r.Repository == "test/signed-app"
+	mu.Lock()
+	capturedInsecure = make(map[string]bool)
+	capturedTargeted = make(map[string]bool)
+	mu.Unlock()
+
+	mockGQL.doFunc = func(query string, variables map[string]interface{}, response interface{}) error {
+		resp, ok := response.(*map[string]GQLRepoResult)
+		require.True(t, ok)
+		*resp = map[string]GQLRepoResult{
+			"repo_0": {LatestRelease: &struct {
+				TagName string `json:"tagName"`
+				Name    string `json:"name"`
+			}{TagName: "v3.0.0"}},
+		}
+		return nil
+	}
+
+	rTargeted := &RootCLI{}
+	rTargeted.Update = true
+	rTargeted.Repository = "test/signed-app"
+	rTargeted.InsecureAllowUnsigned = true
+	rTargeted.Overwrite = true // --force
+	err = DoUpdate(rTargeted, nil)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.True(t, capturedInsecure["test/signed-app"], "specifically targeted named entry with --force must allow bypass")
+	assert.True(t, capturedTargeted["test/signed-app"], "specifically targeted named entry must set SpecificallyTargeted = true")
+	mu.Unlock()
+}

@@ -155,6 +155,7 @@ func (r *RootCLI) RunInstall() error {
 		ApplyDisplayPreferences(true, false)
 	}
 	if r.Barbarous {
+		r.InsecureAllowUnsigned = true
 		r.VerifyChecksum = false
 		r.SkipVtSandbox = true
 		r.AllowForeignArch = true
@@ -180,14 +181,29 @@ func (r *RootCLI) RunInstall() error {
 	} else {
 		log.SetLevel(log.DebugLevel)
 	}
-	if r.LogQuietInteractive && r.Interactive {
+	if r.LogQuietInteractive && r.Interactive && !r.Verbose {
 		log.SetLevel(log.FatalLevel)
+	}
+
+	if r.Verbose {
+		r.ProgressBar = "none"
+		if r.CliParams != nil {
+			r.CliParams.ProgressBar = "none"
+			r.CliParams.Verbose = true
+		}
+		ui.GlobalPacman = nil
 	}
 
 	cfg := loadConfig()
 
 	stdoutWrapper := ui.PacmanLogWriter{Writer: os.Stdout}
 
+	var terminalWriter io.Writer = stdoutWrapper
+	if r.Verbose {
+		terminalWriter = os.Stdout
+	}
+
+	baseWriter := terminalWriter
 	if cfg != nil && cfg.Core.LogToFile {
 		fileLogger := &lumberjack.Logger{
 			Filename:   filepath.Join(xdg.DataHome, "gh-pt", "gh-pt.log"),
@@ -196,9 +212,13 @@ func (r *RootCLI) RunInstall() error {
 			MaxAge:     30,
 			Compress:   true,
 		}
-		log.SetOutput(io.MultiWriter(stdoutWrapper, fileLogger))
+		baseWriter = io.MultiWriter(terminalWriter, fileLogger)
+	}
+
+	if r.Verbose {
+		log.SetOutput(&ui.RegexTruncatingWriter{Writer: baseWriter, MaxLen: 200})
 	} else {
-		log.SetOutput(stdoutWrapper)
+		log.SetOutput(baseWriter)
 	}
 
 	if cfg != nil {
@@ -387,8 +407,9 @@ func (r *RootCLI) RunInstall() error {
 		"repository", r.Repository,
 		"release version", r.ReleaseVersion,
 		"release asset name", r.ReleaseAsset,
+		"release asset regexp", params.TruncateRegex(r.ReleaseAssetRegexp, 200),
 		"release asset binary names", r.AssetBinaries,
-		"release asset binary name regexp", r.AssetBinariesRegexp,
+		"release asset binary name regexp", params.TruncateRegex(r.AssetBinariesRegexp, 200),
 		"target path", r.TargetPath,
 		"renaming binaries", r.Rename,
 	)

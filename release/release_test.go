@@ -16,6 +16,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/resolver"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
+	"github.com/joshsukhdeo/gh-pt/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1114,4 +1115,27 @@ func TestInstallMapLoggedOnInstall(t *testing.T) {
 	require.NotNil(t, logged.Installed)
 	assert.Contains(t, logged.Installed.Files, filepath.Join(targetDir, "my-bin"))
 	assert.Contains(t, logged.Installed.Files, filepath.Join(targetDir, "config.yaml"))
+}
+
+func TestGithubRelease_Verbose_DisablesAnimation(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tempDir)
+	xdg.Reload()
+
+	cliParams := &params.ExecContext{
+		Repository: "test/repo",
+		Verbose:    true,
+	}
+
+	gr := MakeGithubRelease(cliParams, &MockGithubClient{})
+	// Mock pre-existing GlobalPacman to verify it gets unset
+	ui.GlobalPacman = ui.NewPacmanUI("test/repo")
+
+	// Trigger Install with empty releases to test early UI initialization
+	_ = gr.Install()
+
+	// Verify animation progress bar is NullProgressBar and GlobalPacman is nil
+	_, isNullUI := gr.UI.(*ui.NullProgressBar)
+	assert.True(t, isNullUI, "UI must be NullProgressBar when Verbose is true")
+	assert.Nil(t, ui.GlobalPacman, "GlobalPacman must be nil when Verbose is true")
 }

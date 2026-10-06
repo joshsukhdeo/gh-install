@@ -54,6 +54,7 @@ func TestCLI_SpecialtyFlagCascades(t *testing.T) {
 		r.VerifyChecksum = true
 		r.Wine = "off"
 		if r.Barbarous {
+			r.InsecureAllowUnsigned = true
 			r.VerifyChecksum = false
 			r.SkipVtSandbox = true
 			r.AllowForeignArch = true
@@ -63,6 +64,7 @@ func TestCLI_SpecialtyFlagCascades(t *testing.T) {
 			}
 		}
 
+		assert.True(t, r.InsecureAllowUnsigned)
 		assert.False(t, r.VerifyChecksum)
 		assert.True(t, r.SkipVtSandbox)
 		assert.True(t, r.AllowForeignArch)
@@ -175,5 +177,27 @@ func TestCLI_NoColor_NoEmojis(t *testing.T) {
 		cliLl, _ := parseWithTestVars(t, []string{"ll", "--no-color", "--no-emojis"})
 		assert.True(t, cliLl.Ll.NoColor)
 		assert.True(t, cliLl.Ll.NoEmojis)
+	})
+}
+
+func TestCLI_InsecureAllowUnsignedFlags(t *testing.T) {
+	t.Run("Install Flag", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "cli/cli", "--insecure-allow-unsigned"})
+		assert.True(t, cli.Install.InsecureAllowUnsigned)
+	})
+
+	t.Run("Install Flag Alias skip-checksums", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "cli/cli", "--skip-checksums"})
+		assert.True(t, cli.Install.InsecureAllowUnsigned)
+	})
+
+	t.Run("Upgrade Flag", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"upgrade", "cli/cli", "--insecure-allow-unsigned"})
+		assert.True(t, cli.Upgrade.InsecureAllowUnsigned)
+	})
+
+	t.Run("Upgrade Flag Alias skip-checksums", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"upgrade", "cli/cli", "--skip-checksums"})
+		assert.True(t, cli.Upgrade.InsecureAllowUnsigned)
 	})
 }
