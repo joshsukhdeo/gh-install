@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -403,6 +404,10 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		log.Info(fmt.Sprintf("Updating %s from %s to %s", repoDisplay, app.Version, latestTag))
 
 		g.Go(func() error {
+			oldInstalledSidecars := append([]string(nil), app.InstalledSidecars...)
+			oldInstalledBinaries := append([]string(nil), app.InstalledBinaries...)
+			oldTargetPath := app.TargetPath
+
 			appParams := r.ExecContext
 			appParams.Repository = app.Repository
 			appParams.TargetPath = app.TargetPath
@@ -452,11 +457,88 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 				return fmt.Errorf("failed to update %s: %w", app.Repository, err)
 			}
 
+			// Reconcile obsolete assets after successful update installation
+			updatedSidecars := app.InstalledSidecars
+			updatedBinaries := app.InstalledBinaries
+			targetPath := oldTargetPath
+			if targetPath == "" {
+				targetPath = app.TargetPath
+			}
+
+			if freshState, err := state.LoadState(); err == nil && freshState.Apps != nil {
+				if updatedApp, ok := freshState.Apps[app.Repository]; ok && updatedApp != nil {
+					if updatedApp.TargetPath != "" {
+						targetPath = updatedApp.TargetPath
+					}
+					if !stringSlicesEqual(updatedApp.InstalledSidecars, oldInstalledSidecars) ||
+						!stringSlicesEqual(updatedApp.InstalledBinaries, oldInstalledBinaries) ||
+						updatedApp.Version == latestTag {
+						updatedSidecars = updatedApp.InstalledSidecars
+						updatedBinaries = updatedApp.InstalledBinaries
+					}
+				}
+			}
+
+			newSidecarSet := make(map[string]bool, len(updatedSidecars)*2)
+			for _, sc := range updatedSidecars {
+				newSidecarSet[sc] = true
+				newSidecarSet[filepath.Clean(sc)] = true
+			}
+
+			for _, oldSidecar := range oldInstalledSidecars {
+				if strings.TrimSpace(oldSidecar) == "" {
+					continue
+				}
+				if !newSidecarSet[oldSidecar] && !newSidecarSet[filepath.Clean(oldSidecar)] {
+					if _, err := os.Lstat(oldSidecar); err == nil {
+						if err := os.Remove(oldSidecar); err != nil && !os.IsNotExist(err) {
+							log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
+						} else if err == nil {
+							log.Info(fmt.Sprintf("Removed obsolete sidecar %s", oldSidecar))
+						}
+					}
+				}
+			}
+
+			newBinarySet := make(map[string]bool, len(updatedBinaries)*2)
+			for _, b := range updatedBinaries {
+				newBinarySet[b] = true
+				newBinarySet[filepath.Base(b)] = true
+			}
+
+			if targetPath != "" {
+				for _, oldBin := range oldInstalledBinaries {
+					if strings.TrimSpace(oldBin) == "" {
+						continue
+					}
+					if !newBinarySet[oldBin] && !newBinarySet[filepath.Base(oldBin)] {
+						binName := oldBin
+						if filepath.Base(binName) != binName || filepath.IsAbs(binName) {
+							binName = filepath.Base(oldBin)
+						}
+						binPath, err := safeDeletePath(targetPath, binName)
+						if err != nil {
+							log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", oldBin), "error", err)
+							continue
+						}
+						if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+							log.Warn(fmt.Sprintf("Failed to remove obsolete binary %s", binPath), "error", err)
+						} else if err == nil {
+							log.Info(fmt.Sprintf("Removed obsolete binary %s", binPath))
+						}
+					}
+				}
+			}
+
 			log.Info(fmt.Sprintf("Successfully updated %s", app.Repository))
 			state.LogHistory("update", app.Repository, latestTag)
 
 			mu.Lock()
 			successfulUpdates[app.Repository] = latestTag
+			if appEntry, ok := st.Apps[app.Repository]; ok {
+				appEntry.InstalledSidecars = updatedSidecars
+				appEntry.InstalledBinaries = updatedBinaries
+			}
 			mu.Unlock()
 
 			return nil
@@ -467,9 +549,23 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 
 	// Atomic thread-safe batch save: only save state once at the end
 	if len(successfulUpdates) > 0 && !r.NoSaveState && !r.DryRun {
-		for repo, newVersion := range successfulUpdates {
-			if app, ok := st.Apps[repo]; ok {
-				app.Version = newVersion
+		freshSt, err := state.LoadState()
+		if err == nil {
+			for repo, newVersion := range successfulUpdates {
+				if app, ok := freshSt.Apps[repo]; ok {
+					app.Version = newVersion
+					if memApp, okMem := st.Apps[repo]; okMem {
+						app.InstalledSidecars = memApp.InstalledSidecars
+						app.InstalledBinaries = memApp.InstalledBinaries
+					}
+				}
+			}
+			st = freshSt
+		} else {
+			for repo, newVersion := range successfulUpdates {
+				if app, ok := st.Apps[repo]; ok {
+					app.Version = newVersion
+				}
 			}
 		}
 		if err := st.Save(); err != nil {
@@ -483,4 +579,16 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	}
 
 	return waitErr
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -110,3 +110,72 @@ func TestListState(t *testing.T) {
 	err := ListState()
 	assert.NoError(t, err)
 }
+
+func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
+	tmpDir := setupState(t)
+
+	// Create package directory (SymlinkDir) with contents
+	symlinkDir := filepath.Join(tmpDir, "packages", "test-repo3")
+	require.NoError(t, os.MkdirAll(symlinkDir, 0755))
+	targetBinary := filepath.Join(symlinkDir, "binary3")
+	require.NoError(t, os.WriteFile(targetBinary, []byte("pkg binary data"), 0755))
+	extraFile := filepath.Join(symlinkDir, "extra.txt")
+	require.NoError(t, os.WriteFile(extraFile, []byte("extra data"), 0644))
+
+	// Create binary symlink in TargetPath pointing to symlinkDir binary
+	binSymlink := filepath.Join(tmpDir, "repo3")
+	require.NoError(t, os.Symlink(targetBinary, binSymlink))
+
+	// Create sidecar files: regular file, symlink, and dangling symlink
+	sidecarFile := filepath.Join(tmpDir, "sidecar.json")
+	require.NoError(t, os.WriteFile(sidecarFile, []byte(`{"plugin":true}`), 0644))
+
+	sidecarSymlink := filepath.Join(tmpDir, "sidecar-link.txt")
+	require.NoError(t, os.Symlink(extraFile, sidecarSymlink))
+
+	danglingSidecarSymlink := filepath.Join(tmpDir, "dangling-sidecar.so")
+	require.NoError(t, os.Symlink(filepath.Join(tmpDir, "nonexistent-target"), danglingSidecarSymlink))
+
+	// Create canonical sidecar directory $XDG_DATA_HOME/gh-pt/sidecars/{repo}
+	canonicalSidecarDir := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", "test/repo3")
+	require.NoError(t, os.MkdirAll(canonicalSidecarDir, 0755))
+	canonicalFile := filepath.Join(canonicalSidecarDir, "canonical.cfg")
+	require.NoError(t, os.WriteFile(canonicalFile, []byte("cfg"), 0644))
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository:        "test/repo3",
+		TargetPath:        tmpDir,
+		SymlinkDir:        symlinkDir,
+		InstalledSidecars: []string{sidecarFile, sidecarSymlink, danglingSidecarSymlink},
+	}))
+
+	origExecCommand := execCommand
+	execCommand = helperCommand
+	defer func() { execCommand = origExecCommand }()
+
+	err = RemoveApp("test/repo3", true)
+	require.NoError(t, err)
+
+	// Assert that all sidecars are gone from disk
+	assert.NoFileExists(t, sidecarFile)
+	_, err = os.Lstat(sidecarSymlink)
+	assert.True(t, os.IsNotExist(err), "sidecar symlink should not exist on disk")
+	_, err = os.Lstat(danglingSidecarSymlink)
+	assert.True(t, os.IsNotExist(err), "dangling sidecar symlink should not exist on disk")
+
+	// Assert binary in target path is removed
+	_, err = os.Lstat(binSymlink)
+	assert.True(t, os.IsNotExist(err), "binary symlink in target path should not exist on disk")
+
+	// Assert SymlinkDir and canonical sidecar directory are gone from disk
+	assert.NoDirExists(t, symlinkDir)
+	assert.NoDirExists(t, canonicalSidecarDir)
+
+	// Assert app is removed from state
+	st, _ = state.LoadState()
+	_, exists := st.Apps["test/repo3"]
+	assert.False(t, exists)
+}

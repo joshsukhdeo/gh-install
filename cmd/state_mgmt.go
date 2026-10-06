@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/mattn/go-runewidth"
@@ -334,8 +335,12 @@ func RemoveApp(target string, purge bool) error {
 
 	for _, r := range toRemove {
 		app := st.Apps[r]
+		if app == nil {
+			delete(st.Apps, r)
+			continue
+		}
 
-		if app != nil && app.Hooks != nil {
+		if app.Hooks != nil {
 			if script, ok := app.Hooks["pre-uninstall"]; ok && strings.TrimSpace(script) != "" {
 				if err := executeHookScript("pre-uninstall", r, script); err != nil {
 					return fmt.Errorf("pre-uninstall hook failed for %s: %w", r, err)
@@ -376,10 +381,12 @@ func RemoveApp(target string, purge bool) error {
 						log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", renamed), "error", err)
 						continue
 					}
-					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
-						log.Warn(fmt.Sprintf("Failed to remove binary %s", binPath), "error", err)
-					} else if err == nil {
-						log.Infof("Deleted %s", binPath)
+					if _, err := os.Lstat(binPath); err == nil {
+						if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+							log.Warn(fmt.Sprintf("Failed to remove binary %s", binPath), "error", err)
+						} else if err == nil {
+							log.Infof("Deleted %s", binPath)
+						}
 					}
 				}
 			} else {
@@ -387,10 +394,12 @@ func RemoveApp(target string, purge bool) error {
 				if err != nil {
 					log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", repoName), "error", err)
 				} else {
-					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
-						log.Warn(fmt.Sprintf("Failed to remove binary %s", binPath), "error", err)
-					} else if err == nil {
-						log.Infof("Deleted %s", binPath)
+					if _, err := os.Lstat(binPath); err == nil {
+						if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+							log.Warn(fmt.Sprintf("Failed to remove binary %s", binPath), "error", err)
+						} else if err == nil {
+							log.Infof("Deleted %s", binPath)
+						}
 					}
 				}
 			}
@@ -401,23 +410,80 @@ func RemoveApp(target string, purge bool) error {
 					log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", binName), "error", err)
 					continue
 				}
-				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
-					log.Warn(fmt.Sprintf("Failed to delete %s", binPath), "error", err)
-				} else if err == nil {
-					log.Infof("Deleted %s", binPath)
+				if _, err := os.Lstat(binPath); err == nil {
+					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+						log.Warn(fmt.Sprintf("Failed to delete %s", binPath), "error", err)
+					} else if err == nil {
+						log.Infof("Deleted %s", binPath)
+					}
+				}
+			}
+
+			for _, binName := range app.InstalledBinaries {
+				name := filepath.Base(binName)
+				if name == "" || name == "." || name == string(filepath.Separator) {
+					continue
+				}
+				binPath, err := safeDeletePath(app.TargetPath, name)
+				if err != nil {
+					log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", name), "error", err)
+					continue
+				}
+				if _, err := os.Lstat(binPath); err == nil {
+					if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+						log.Warn(fmt.Sprintf("Failed to delete %s", binPath), "error", err)
+					} else if err == nil {
+						log.Infof("Deleted %s", binPath)
+					}
 				}
 			}
 		}
 
-		// Sidecar cleanup is now handled by the IncludeSidecars mode logic
-		// Sidecars are stored in standard locations (XDG data home, bin, etc.)
+		for _, sc := range app.InstalledSidecars {
+			if _, err := os.Lstat(sc); err == nil {
+				if err := os.Remove(sc); err != nil && !os.IsNotExist(err) {
+					log.Warn(fmt.Sprintf("Failed to remove sidecar %s", sc), "error", err)
+				} else if err == nil {
+					log.Infof("Deleted sidecar %s", sc)
+				}
+			}
+		}
+
+		if app.SymlinkDir != "" {
+			if _, err := os.Lstat(app.SymlinkDir); err == nil {
+				if err := os.RemoveAll(app.SymlinkDir); err != nil {
+					log.Warn(fmt.Sprintf("Failed to purge package directory %s", app.SymlinkDir), "error", err)
+				} else {
+					log.Infof("Purged package directory %s", app.SymlinkDir)
+				}
+			}
+		}
+
+		if purge {
+			repo := app.Repository
+			if repo == "" {
+				repo = r
+			}
+			if repo != "" {
+				canonicalSidecarDir := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", repo)
+				if _, err := os.Lstat(canonicalSidecarDir); err == nil {
+					if err := os.RemoveAll(canonicalSidecarDir); err != nil {
+						log.Warn(fmt.Sprintf("Failed to remove sidecar directory %s", canonicalSidecarDir), "error", err)
+					} else {
+						log.Infof("Purged sidecar directory %s", canonicalSidecarDir)
+					}
+				}
+			}
+		}
 
 		if app.Clone || app.Fork {
 			if purge && app.TargetPath != "" {
-				if err := os.RemoveAll(app.TargetPath); err != nil {
-					log.Warn(fmt.Sprintf("Failed to purge repository directory %s", app.TargetPath), "error", err)
-				} else {
-					log.Infof("Purged cloned/forked repository at %s", app.TargetPath)
+				if _, err := os.Lstat(app.TargetPath); err == nil {
+					if err := os.RemoveAll(app.TargetPath); err != nil {
+						log.Warn(fmt.Sprintf("Failed to purge repository directory %s", app.TargetPath), "error", err)
+					} else {
+						log.Infof("Purged cloned/forked repository at %s", app.TargetPath)
+					}
 				}
 			} else {
 				log.Infof("Kept repository directory at %s (use --purge to delete)", app.TargetPath)
@@ -425,13 +491,15 @@ func RemoveApp(target string, purge bool) error {
 		}
 
 		if app.CompileScript != "" {
-			if err := os.Remove(app.CompileScript); err != nil && !os.IsNotExist(err) {
-				log.Warn(fmt.Sprintf("Failed to remove compile script %s", app.CompileScript), "error", err)
-			} else if err == nil {
-				if purge {
-					log.Infof("Purged compile script %s", app.CompileScript)
-				} else {
-					log.Infof("Removed compile script %s", app.CompileScript)
+			if _, err := os.Lstat(app.CompileScript); err == nil {
+				if err := os.Remove(app.CompileScript); err != nil && !os.IsNotExist(err) {
+					log.Warn(fmt.Sprintf("Failed to remove compile script %s", app.CompileScript), "error", err)
+				} else if err == nil {
+					if purge {
+						log.Infof("Purged compile script %s", app.CompileScript)
+					} else {
+						log.Infof("Removed compile script %s", app.CompileScript)
+					}
 				}
 			}
 

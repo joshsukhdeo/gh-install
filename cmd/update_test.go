@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -860,4 +861,115 @@ func TestDoUpdate_InsecureAllowUnsigned_Force_TargetedVsGeneric(t *testing.T) {
 	assert.True(t, capturedInsecure["test/signed-app"], "specifically targeted named entry with --force must allow bypass")
 	assert.True(t, capturedTargeted["test/signed-app"], "specifically targeted named entry must set SpecificallyTargeted = true")
 	mu.Unlock()
+}
+
+func TestUpdate_ReconcilesObsoleteAssets(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDataHome := os.Getenv("XDG_DATA_HOME")
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+	defer func() {
+		_ = os.Setenv("XDG_DATA_HOME", origDataHome)
+		xdg.Reload()
+	}()
+
+	targetDir := filepath.Join(tmpDir, "bin")
+	sidecarDir := filepath.Join(tmpDir, "sidecars")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, os.MkdirAll(sidecarDir, 0755))
+
+	// Initial files on disk
+	keptBin := filepath.Join(targetDir, "tool-main")
+	obsoleteBin := filepath.Join(targetDir, "tool-helper-old")
+	require.NoError(t, os.WriteFile(keptBin, []byte("main v1"), 0755))
+	require.NoError(t, os.WriteFile(obsoleteBin, []byte("helper v1"), 0755))
+
+	keptSidecar := filepath.Join(sidecarDir, "config.yaml")
+	obsoleteSidecarFile := filepath.Join(sidecarDir, "legacy.json")
+	obsoleteSidecarSymlink := filepath.Join(sidecarDir, "symlink-old")
+	require.NoError(t, os.WriteFile(keptSidecar, []byte("config v1"), 0644))
+	require.NoError(t, os.WriteFile(obsoleteSidecarFile, []byte("legacy v1"), 0644))
+	require.NoError(t, os.Symlink(keptSidecar, obsoleteSidecarSymlink))
+
+	// Seed state
+	st, err := state.LoadState()
+	require.NoError(t, err)
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository:        "owner/mytool",
+		Version:           "v1.0.0",
+		TargetPath:        targetDir,
+		InstalledBinaries: []string{"tool-main", "tool-helper-old"},
+		InstalledSidecars: []string{keptSidecar, obsoleteSidecarFile, obsoleteSidecarSymlink},
+	}))
+	require.NoError(t, st.Save())
+
+	// Mock GraphQL
+	mockGQL := &mockGQLClient{
+		doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+			resp, ok := response.(*map[string]GQLRepoResult)
+			require.True(t, ok)
+			*resp = map[string]GQLRepoResult{
+				"repo_0": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}},
+			}
+			return nil
+		},
+	}
+	origNewGQL := newGraphQLClient
+	newGraphQLClient = func() (GQLClient, error) { return mockGQL, nil }
+	defer func() { newGraphQLClient = origNewGQL }()
+
+	// Mock installer: simulates update installing new binary & saving new state
+	origInstall := installReleaseFunc
+	installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+		require.NoError(t, os.WriteFile(keptBin, []byte("main v2"), 0755))
+
+		freshSt, err := state.LoadState()
+		if err != nil {
+			return err
+		}
+		if updatedApp, ok := freshSt.Apps[appParams.Repository]; ok {
+			updatedApp.Version = "v2.0.0"
+			updatedApp.InstalledBinaries = []string{"tool-main"}
+			updatedApp.InstalledSidecars = []string{keptSidecar}
+		}
+		return freshSt.Save()
+	}
+	defer func() { installReleaseFunc = origInstall }()
+
+	r := &RootCLI{}
+	r.Update = true
+	r.Repository = "owner/mytool"
+	err = DoUpdate(r, nil)
+	require.NoError(t, err)
+
+	// Verify kept assets still exist
+	assert.FileExists(t, keptBin)
+	content, err := os.ReadFile(keptBin)
+	require.NoError(t, err)
+	assert.Equal(t, "main v2", string(content))
+	assert.FileExists(t, keptSidecar)
+
+	// Verify obsolete binary was deleted
+	_, err = os.Stat(obsoleteBin)
+	assert.True(t, os.IsNotExist(err), "obsolete binary %s should have been removed", obsoleteBin)
+
+	// Verify obsolete sidecar file was deleted
+	_, err = os.Lstat(obsoleteSidecarFile)
+	assert.True(t, os.IsNotExist(err), "obsolete sidecar file %s should have been removed", obsoleteSidecarFile)
+
+	// Verify obsolete sidecar symlink was deleted
+	_, err = os.Lstat(obsoleteSidecarSymlink)
+	assert.True(t, os.IsNotExist(err), "obsolete sidecar symlink %s should have been removed", obsoleteSidecarSymlink)
+
+	// Verify final state on disk
+	finalSt, err := state.LoadState()
+	require.NoError(t, err)
+	finalApp := finalSt.Apps["owner/mytool"]
+	require.NotNil(t, finalApp)
+	assert.Equal(t, "v2.0.0", finalApp.Version)
+	assert.Equal(t, []string{"tool-main"}, finalApp.InstalledBinaries)
+	assert.Equal(t, []string{keptSidecar}, finalApp.InstalledSidecars)
 }
