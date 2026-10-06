@@ -13,7 +13,40 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/selector"
+	"github.com/joshsukhdeo/gh-pt/state"
 )
+
+var symlinkFunc = os.Symlink
+
+func createSymlinkOrCopy(srcPath, destPath string) error {
+	if err := symlinkFunc(srcPath, destPath); err == nil {
+		return nil
+	} else {
+		log.Warn("failed to create symlink, attempting fallback", "error", err, "src", srcPath, "dest", destPath)
+	}
+
+	_ = os.Remove(destPath)
+
+	// Attempt hardlink fallback where appropriate
+	if err := os.Link(srcPath, destPath); err == nil {
+		log.Info("created hardlink fallback instead of symlink", "src", srcPath, "dest", destPath)
+		return nil
+	}
+
+	// Fallback to copying file
+	info, err := os.Stat(srcPath)
+	mode := os.FileMode(0755)
+	if err == nil {
+		mode = info.Mode()
+	}
+
+	if err := copyFile(srcPath, destPath, mode); err != nil {
+		return fmt.Errorf("failed to create symlink, hardlink, or copy file from %s to %s: %w", srcPath, destPath, err)
+	}
+
+	log.Info("copied file fallback instead of symlink", "src", srcPath, "dest", destPath)
+	return nil
+}
 
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
@@ -34,7 +67,17 @@ func copyDir(src, dst string) error {
 				return err
 			}
 			_ = os.Remove(target) // Ignore error, will fail if it's a directory but that's fine
-			return os.Symlink(link, target)
+			if err := symlinkFunc(link, target); err != nil {
+				resolvedPath := link
+				if !filepath.IsAbs(resolvedPath) {
+					resolvedPath = filepath.Join(filepath.Dir(path), link)
+				}
+				if fi, statErr := os.Stat(resolvedPath); statErr == nil && !fi.IsDir() {
+					return copyFile(resolvedPath, target, fi.Mode())
+				}
+				return err
+			}
+			return nil
 		}
 		_ = os.Remove(target) // Remove existing file before overwrite
 		// Ensure parent directory is writable before we attempt to write
@@ -108,23 +151,56 @@ func copyFS(fileSystem fs.FS, dst string) error {
 
 // resolvePackageDir determines the canonical extraction path for an application package.
 // Per ADR-004, the standard location is $XDG_DATA_HOME/gh-pt/packages/{ownerID}/{repoID}.
-// Falls back to ~/src/apps/{ownerID}/{repoID} if that directory already exists or if
-// configured via cfg.Paths.ClonePath / cfg.Paths.TargetBaseDir to maintain backward compatibility.
+// Falls back to explicitly configured paths (cfg.Paths.ClonePath or cfg.Paths.PackagePath) or
+// checks state (state.LoadState()) to see if an app with this repository was actually previously installed there.
 func (r *GithubRelease) resolvePackageDir(ownerID, repoID string) string {
-	homeDir, _ := os.UserHomeDir()
-	legacyAppDir := filepath.Join(homeDir, "src", "apps", ownerID, repoID)
-	if _, err := os.Stat(legacyAppDir); err == nil {
-		return legacyAppDir
-	}
+	// 1. Explicitly configured paths in config
 	cfg, err := config.LoadConfig()
 	if err == nil && cfg != nil {
 		if cfg.Paths.PackagePath != "" {
 			return filepath.Join(cfg.Paths.PackagePath, ownerID, repoID)
 		}
-		if cfg.Paths.ClonePath != "" && strings.Contains(cfg.Paths.ClonePath, "src/apps") {
+		if cfg.Paths.ClonePath != "" {
 			return filepath.Join(cfg.Paths.ClonePath, ownerID, repoID)
 		}
 	}
+
+	homeDir, _ := os.UserHomeDir()
+	legacyAppDir := filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+
+	// 2. Check state (state.LoadState()) to see if an app with this repository was actually previously installed there
+	if st, err := state.LoadState(); err == nil && st != nil && st.Apps != nil {
+		repoKey := repoID
+		if ownerID != "" {
+			repoKey = ownerID + "/" + repoID
+		}
+		var app *state.InstalledApp
+		if a, ok := st.Apps[repoKey]; ok {
+			app = a
+		} else if r != nil && r.CliParams != nil && r.CliParams.Repository != "" {
+			if a, ok := st.Apps[r.CliParams.Repository]; ok {
+				app = a
+			}
+		} else if a, ok := st.Apps[repoID]; ok {
+			app = a
+		}
+
+		if app != nil {
+			if app.SymlinkDir != "" && filepath.Clean(app.SymlinkDir) == filepath.Clean(legacyAppDir) {
+				return legacyAppDir
+			}
+			for _, sc := range app.InstalledSidecars {
+				if strings.HasPrefix(filepath.Clean(sc), filepath.Clean(legacyAppDir)) {
+					return legacyAppDir
+				}
+			}
+			if app.SymlinkDir != "" {
+				return app.SymlinkDir
+			}
+		}
+	}
+
+	// 3. Canonical ADR-004 path
 	return filepath.Join(xdg.DataHome, "gh-pt", "packages", ownerID, repoID)
 }
 
@@ -195,7 +271,7 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 			}
 		}
 
-		if err := os.Symlink(srcPath, destPath); err != nil {
+		if err := createSymlinkOrCopy(srcPath, destPath); err != nil {
 			return "", err
 		}
 		r.InstalledFiles = append(r.InstalledFiles, srcPath)
@@ -299,8 +375,8 @@ func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
 				}
 			}
 
-			if err := os.Symlink(path, destPath); err != nil {
-				log.Warn("failed to create sidecar symlink", "error", err, "src", path, "dest", destPath)
+			if err := createSymlinkOrCopy(path, destPath); err != nil {
+				log.Warn("failed to create sidecar symlink or copy", "error", err, "src", path, "dest", destPath)
 				return nil
 			}
 
@@ -371,8 +447,8 @@ func (r *GithubRelease) symlinkLocalMap(symlinkDir string) error {
 			}
 
 			// Create symlink
-			if err := os.Symlink(srcPath, destPath); err != nil {
-				log.Warn("failed to create symlink", "src", srcPath, "dest", destPath, "error", err)
+			if err := createSymlinkOrCopy(srcPath, destPath); err != nil {
+				log.Warn("failed to create symlink or copy", "src", srcPath, "dest", destPath, "error", err)
 				continue
 			}
 
@@ -413,18 +489,52 @@ func (r *GithubRelease) resolveSidecarSymlinkDest() (string, error) {
 	}
 }
 
-// getDefaultSidecarRegex returns a default regex pattern based on the destination
+// getDefaultSidecarRegex returns a default regex pattern based on the destination or sidecar mode
 func (r *GithubRelease) getDefaultSidecarRegex(destPath string) string {
-	// Determine appropriate regex based on destination
-	switch {
-	case strings.Contains(destPath, ".local/bin") || strings.Contains(destPath, "/usr/bin"):
-		// For bin directories, match executables and libraries
-		return `\.so.*|\.dll|\.dylib|\.exe$`
-	case strings.Contains(destPath, ".local/share") || strings.Contains(destPath, "xdg"):
-		// For XDG data home, match libraries, headers, configs, docs
-		return `\.so.*|\.h$|\.hpp$|\.c$|\.cpp$|\.txt$|README.*|\.md$|\.json$|\.yaml$|\.yml$|\.toml$|\.conf$`
-	default:
-		// Default pattern for custom paths
-		return `\.so.*|\.h$|\.dll|\.dylib|\.txt$|README.*`
+	binRegex := `\.so.*|\.dll|\.dylib|\.exe$`
+	xdgRegex := `\.so.*|\.h$|\.hpp$|\.c$|\.cpp$|\.txt$|README.*|\.md$|\.json$|\.yaml$|\.yml$|\.toml$|\.conf$`
+	customRegex := `\.so.*|\.h$|\.dll|\.dylib|\.txt$|README.*`
+
+	var mode string
+	if r != nil && r.CliParams != nil {
+		mode = r.CliParams.SidecarMode
 	}
+
+	// 1. Explicit sidecar modes
+	switch {
+	case mode == "bin":
+		return binRegex
+	case mode == "xdg_data_home":
+		return xdgRegex
+	case strings.HasPrefix(mode, "custom-path:"):
+		return customRegex
+	}
+
+	// 2. Classify based on target directory / destPath
+	cleanDest := filepath.Clean(destPath)
+	homeDir, _ := os.UserHomeDir()
+
+	// Bin destinations: match executables/libraries
+	if filepath.Base(cleanDest) == "bin" ||
+		(homeDir != "" && cleanDest == filepath.Join(homeDir, ".local", "bin")) ||
+		cleanDest == "/usr/bin" ||
+		cleanDest == "/usr/local/bin" {
+		return binRegex
+	}
+
+	// Data/XDG destinations: match libraries, headers, configs, docs
+	if filepath.Base(cleanDest) == "share" ||
+		(homeDir != "" && strings.HasPrefix(cleanDest, filepath.Join(homeDir, ".local", "share"))) ||
+		(xdg.DataHome != "" && (cleanDest == filepath.Clean(xdg.DataHome) || strings.HasPrefix(cleanDest, filepath.Clean(xdg.DataHome)+string(filepath.Separator)))) {
+		return xdgRegex
+	}
+
+	for _, part := range strings.Split(cleanDest, string(filepath.Separator)) {
+		if part == "share" {
+			return xdgRegex
+		}
+	}
+
+	// 3. Fallback for custom paths
+	return customRegex
 }

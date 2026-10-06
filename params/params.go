@@ -124,11 +124,37 @@ type VerificationFlags struct {
 type SidecarFlags struct {
 	Sidecars           string   `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
 	SidecarSymlinkTo   []string `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
-	IncludeSidecars    bool     `name:"include-sidecars" short:"s" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
+	IncludeSidecars    bool     `name:"include-sidecars" short:"s" negatable:"" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
 	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto, same_dest, xdg_data_home, bin, local-map, or custom-path:/path/to/ (default: auto)."`
 	EnvInject          []string `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
 	WarnUnmappedAssets bool     `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
 	AISetupSidecars    bool     `help:"Use AI to analyze sidecars and generate post-install setup commands."`
+}
+
+// AfterApply is a kong hook that resolves sidecar settings after CLI parsing.
+func (s *SidecarFlags) AfterApply(ctx *kong.Context) error {
+	s.ResolveSidecars(ctx)
+	return nil
+}
+
+// ResolveSidecars auto-enables IncludeSidecars if SidecarMode is explicitly provided,
+// non-empty, and != "none" or "default", unless IncludeSidecars was explicitly set to false.
+func (s *SidecarFlags) ResolveSidecars(ctx ...*kong.Context) {
+	mode := strings.ToLower(strings.TrimSpace(s.SidecarMode))
+	if mode != "" && mode != "none" && mode != "default" {
+		explicitlyDisabled := false
+		if len(ctx) > 0 && ctx[0] != nil {
+			for _, f := range ctx[0].Flags() {
+				if f.Name == "include-sidecars" && f.Value != nil && f.Set && !s.IncludeSidecars {
+					explicitlyDisabled = true
+					break
+				}
+			}
+		}
+		if !explicitlyDisabled {
+			s.IncludeSidecars = true
+		}
+	}
 }
 
 // ExecutionFlags controls interactive runtime behavior and compatibility switches.
@@ -175,6 +201,30 @@ type CommonInstallFlags struct {
 type InstallCmd struct {
 	Repository string `arg:"" env:"GH_PT_REPOSITORY" optional:"" predictor:"github_repos" predict:"github_repos" help:"Github repository in OWNER/REPOSITORY_NAME format."`
 	CommonInstallFlags
+}
+
+// ToExecContext converts InstallCmd into an ExecContext with resolved parameters.
+func (c *InstallCmd) ToExecContext() ExecContext {
+	c.ResolveSidecars()
+	ctx := ExecContext{
+		CommonInstallFlags: c.CommonInstallFlags,
+		Repository:         c.Repository,
+	}
+	ctx.SpecificallyTargeted = c.Repository != ""
+	return ctx
+}
+
+// ToExecContext converts CommonInstallFlags into an ExecContext with resolved parameters.
+func (c *CommonInstallFlags) ToExecContext() ExecContext {
+	c.ResolveSidecars()
+	return ExecContext{
+		CommonInstallFlags: *c,
+	}
+}
+
+// ToExecContext converts CLI into an ExecContext using the InstallCmd context.
+func (c *CLI) ToExecContext() ExecContext {
+	return c.Install.ToExecContext()
 }
 
 type StateCmd struct {

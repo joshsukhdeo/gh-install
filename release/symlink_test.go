@@ -1,13 +1,16 @@
 package release
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/adrg/xdg"
+	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/selector"
+	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +24,7 @@ func TestExecuteSymlinkInstall(t *testing.T) {
 	t.Setenv("HOME", homeDir)
 	t.Setenv("USERPROFILE", homeDir)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(homeDir, ".local", "share"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
 	xdg.Reload()
 
 	assetFile := filepath.Join(tmpDir, "jq-linux-amd64")
@@ -59,14 +63,152 @@ func TestExecuteSymlinkInstall(t *testing.T) {
 	linkInfo, err := os.Readlink(symlinkTarget)
 	assert.NoError(t, err)
 	assert.Equal(t, copiedFile, linkInfo)
+}
 
-	// Verify fallback to ~/src/apps when legacy folder exists
-	legacyAppDir := filepath.Join(homeDir, "src", "apps", "legacy", "app")
-	require.NoError(t, os.MkdirAll(legacyAppDir, 0755))
-	rLegacy := &GithubRelease{
+func TestResolvePackageDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	require.NoError(t, os.MkdirAll(homeDir, 0755))
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(homeDir, ".local", "share"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	xdg.Reload()
+
+	r := &GithubRelease{
 		CliParams: &params.ExecContext{
 			Repository: "legacy/app",
 		},
 	}
-	assert.Equal(t, legacyAppDir, rLegacy.resolvePackageDir("legacy", "app"))
+
+	canonicalDir := filepath.Join(xdg.DataHome, "gh-pt", "packages", "legacy", "app")
+
+	// P1: 1. Do NOT hijack arbitrary ~/src/apps directory if neither configured nor in state
+	arbitraryLegacyDir := filepath.Join(homeDir, "src", "apps", "legacy", "app")
+	require.NoError(t, os.MkdirAll(arbitraryLegacyDir, 0755))
+
+	resolved := r.resolvePackageDir("legacy", "app")
+	assert.Equal(t, canonicalDir, resolved, "must not hijack arbitrary legacy directory on disk")
+
+	// P1: 2. Return explicitly configured PackagePath
+	cfgPkg := &config.Config{
+		Paths: config.PathsConfig{
+			PackagePath: filepath.Join(tmpDir, "custom-packages"),
+		},
+	}
+	require.NoError(t, config.SaveConfig(cfgPkg))
+	assert.Equal(t, filepath.Join(tmpDir, "custom-packages", "legacy", "app"), r.resolvePackageDir("legacy", "app"))
+
+	// P1: 3. Return explicitly configured ClonePath
+	cfgClone := &config.Config{
+		Paths: config.PathsConfig{
+			ClonePath: filepath.Join(tmpDir, "custom-clones"),
+		},
+	}
+	require.NoError(t, config.SaveConfig(cfgClone))
+	assert.Equal(t, filepath.Join(tmpDir, "custom-clones", "legacy", "app"), r.resolvePackageDir("legacy", "app"))
+
+	// Clear config back to empty
+	require.NoError(t, config.SaveConfig(&config.Config{}))
+
+	// P1: 4. Check state (state.LoadState()): if app with repository was actually previously installed there
+	st, err := state.LoadState()
+	require.NoError(t, err)
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "legacy/app",
+		SymlinkDir: arbitraryLegacyDir,
+	}))
+	require.NoError(t, st.Save())
+
+	assert.Equal(t, arbitraryLegacyDir, r.resolvePackageDir("legacy", "app"), "must return legacy dir when state records app was installed there")
+}
+
+func TestExecuteSymlinkInstall_FallbackOnSymlinkFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	targetPath := filepath.Join(homeDir, ".local", "bin")
+	require.NoError(t, os.MkdirAll(targetPath, 0755))
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(homeDir, ".local", "share"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	xdg.Reload()
+
+	// Mock symlink creation to fail (simulating Windows without symlink privileges or unsupported FS)
+	symlinkFunc = func(src, dst string) error {
+		return errors.New("operation not supported: symlink privilege not held")
+	}
+	t.Cleanup(func() {
+		symlinkFunc = os.Symlink
+	})
+
+	assetFile := filepath.Join(tmpDir, "mytool")
+	require.NoError(t, os.WriteFile(assetFile, []byte("executable binary payload"), 0755))
+
+	r := &GithubRelease{
+		CliParams: &params.ExecContext{
+			Repository:         "myorg/mytool",
+			CommonInstallFlags: params.CommonInstallFlags{TargetPath: targetPath},
+		},
+	}
+
+	binaries := []*selector.SelectorItem{
+		{
+			Name:         "mytool",
+			DownloadPath: assetFile,
+		},
+	}
+
+	symlinkDir, err := r.executeSymlinkInstall(binaries, assetFile)
+	assert.NoError(t, err, "installation should succeed via fallback when symlink fails")
+	assert.NotEmpty(t, symlinkDir)
+
+	installedTarget := filepath.Join(targetPath, "mytool")
+	assert.FileExists(t, installedTarget)
+
+	// Ensure the file content matches payload
+	content, err := os.ReadFile(installedTarget)
+	assert.NoError(t, err)
+	assert.Equal(t, "executable binary payload", string(content))
+}
+
+func TestGetDefaultSidecarRegex(t *testing.T) {
+	const (
+		expectedBinPattern  = `\.so.*|\.dll|\.dylib|\.exe$`
+		expectedDataPattern = `\.so.*|\.h$|\.hpp$|\.c$|\.cpp$|\.txt$|README.*|\.md$|\.json$|\.yaml$|\.yml$|\.toml$|\.conf$`
+		expectedCustPattern = `\.so.*|\.h$|\.dll|\.dylib|\.txt$|README.*`
+	)
+
+	// 1. Explicit sidecar modes
+	rBin := &GithubRelease{CliParams: &params.ExecContext{SidecarMode: "bin"}}
+	assert.Equal(t, expectedBinPattern, rBin.getDefaultSidecarRegex("/any/path"))
+
+	rXdg := &GithubRelease{CliParams: &params.ExecContext{SidecarMode: "xdg_data_home"}}
+	assert.Equal(t, expectedDataPattern, rXdg.getDefaultSidecarRegex("/any/path"))
+
+	rCust := &GithubRelease{CliParams: &params.ExecContext{SidecarMode: "custom-path:/opt/myfolder"}}
+	assert.Equal(t, expectedCustPattern, rCust.getDefaultSidecarRegex("/opt/myfolder"))
+
+	// 2. Destination path classification (without fragile substring matching)
+	gr := &GithubRelease{}
+
+	// Bin destinations
+	assert.Equal(t, expectedBinPattern, gr.getDefaultSidecarRegex("/usr/local/bin"))
+	assert.Equal(t, expectedBinPattern, gr.getDefaultSidecarRegex("/usr/bin"))
+	assert.Equal(t, expectedBinPattern, gr.getDefaultSidecarRegex("/home/user/.local/bin"))
+
+	// Bin destination with "xdg" in parent directory name should NOT be misclassified as xdg data
+	assert.Equal(t, expectedBinPattern, gr.getDefaultSidecarRegex("/opt/xdg-runner/bin"))
+
+	// XDG / data destinations
+	assert.Equal(t, expectedDataPattern, gr.getDefaultSidecarRegex("/home/user/.local/share"))
+	assert.Equal(t, expectedDataPattern, gr.getDefaultSidecarRegex("/usr/share"))
+	assert.Equal(t, expectedDataPattern, gr.getDefaultSidecarRegex(filepath.Join(xdg.DataHome, "gh-pt", "sidecars")))
+
+	// Custom destinations
+	assert.Equal(t, expectedCustPattern, gr.getDefaultSidecarRegex("/opt/custom"))
+	// Path with ".local/bin" substring but not a bin directory
+	assert.Equal(t, expectedCustPattern, gr.getDefaultSidecarRegex("/home/user/.local/bin_backups/custom"))
 }

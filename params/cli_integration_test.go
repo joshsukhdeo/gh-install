@@ -115,24 +115,98 @@ func TestCLI_SpecialtyFlagCascades(t *testing.T) {
 }
 
 func TestCLI_SidecarFlags(t *testing.T) {
-	cli, _ := parseWithTestVars(t, []string{
-		"install", "test/app",
-		"-S", `plugins/.*\.so|data/.*`,
-		"--sidecar-symlink-to", "/etc/plugins",
-		"--sidecar-symlink-to", "/var/lib/plugins",
-		"--include-sidecars",
-		"--sidecar-mode", "custom-path:/my/sidecars",
-		"--env-inject", "PLUGIN_DIR=/opt/sidecars",
-		"--ai-setup-sidecars",
+	t.Run("All Sidecar Flags Explicit", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"-S", `plugins/.*\.so|data/.*`,
+			"--sidecar-symlink-to", "/etc/plugins",
+			"--sidecar-symlink-to", "/var/lib/plugins",
+			"--include-sidecars",
+			"--sidecar-mode", "custom-path:/my/sidecars",
+			"--env-inject", "PLUGIN_DIR=/opt/sidecars",
+			"--ai-setup-sidecars",
+		})
+
+		// Sidecars is now a regex pattern string
+		assert.Equal(t, `plugins/.*\.so|data/.*`, cli.Install.Sidecars)
+		assert.Equal(t, []string{"/etc/plugins", "/var/lib/plugins"}, cli.Install.SidecarSymlinkTo)
+		assert.True(t, cli.Install.IncludeSidecars)
+		assert.Equal(t, "custom-path:/my/sidecars", cli.Install.SidecarMode)
+		assert.Equal(t, []string{"PLUGIN_DIR=/opt/sidecars"}, cli.Install.EnvInject)
+		assert.True(t, cli.Install.AISetupSidecars)
 	})
 
-	// Sidecars is now a regex pattern string
-	assert.Equal(t, `plugins/.*\.so|data/.*`, cli.Install.Sidecars)
-	assert.Equal(t, []string{"/etc/plugins", "/var/lib/plugins"}, cli.Install.SidecarSymlinkTo)
-	assert.True(t, cli.Install.IncludeSidecars)
-	assert.Equal(t, "custom-path:/my/sidecars", cli.Install.SidecarMode)
-	assert.Equal(t, []string{"PLUGIN_DIR=/opt/sidecars"}, cli.Install.EnvInject)
-	assert.True(t, cli.Install.AISetupSidecars)
+	t.Run("SidecarMode Auto-Enables IncludeSidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=bin",
+		})
+		assert.Equal(t, "bin", cli.Install.SidecarMode)
+		assert.True(t, cli.Install.IncludeSidecars, "specifying --sidecar-mode=bin should auto-enable IncludeSidecars")
+	})
+
+	t.Run("SidecarMode None Does Not Enable IncludeSidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=none",
+		})
+		assert.Equal(t, "none", cli.Install.SidecarMode)
+		assert.False(t, cli.Install.IncludeSidecars, "specifying --sidecar-mode=none should not auto-enable IncludeSidecars")
+	})
+
+	t.Run("SidecarMode Default Does Not Enable IncludeSidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=default",
+		})
+		assert.Equal(t, "default", cli.Install.SidecarMode)
+		assert.False(t, cli.Install.IncludeSidecars, "specifying --sidecar-mode=default should not auto-enable IncludeSidecars")
+	})
+
+	t.Run("SidecarMode With Explicit NoIncludeSidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=bin",
+			"--no-include-sidecars",
+		})
+		assert.Equal(t, "bin", cli.Install.SidecarMode)
+		assert.False(t, cli.Install.IncludeSidecars, "explicit --no-include-sidecars should override auto-enabling")
+	})
+
+	t.Run("SidecarMode With Explicit IncludeSidecars False", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=bin",
+			"--include-sidecars=false",
+		})
+		assert.Equal(t, "bin", cli.Install.SidecarMode)
+		assert.False(t, cli.Install.IncludeSidecars, "explicit --include-sidecars=false should override auto-enabling")
+	})
+
+	t.Run("ToExecContext Resolution", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{
+			"install", "test/app",
+			"--sidecar-mode=bin",
+		})
+		execCtx := cli.ToExecContext()
+		assert.Equal(t, "test/app", execCtx.Repository)
+		assert.Equal(t, "bin", execCtx.SidecarMode)
+		assert.True(t, execCtx.IncludeSidecars)
+
+		// Manual struct without parsing
+		manualCmd := params.InstallCmd{
+			Repository: "owner/repo",
+			CommonInstallFlags: params.CommonInstallFlags{
+				SidecarFlags: params.SidecarFlags{
+					SidecarMode: "same_dest",
+				},
+			},
+		}
+		manualExecCtx := manualCmd.ToExecContext()
+		assert.Equal(t, "owner/repo", manualExecCtx.Repository)
+		assert.Equal(t, "same_dest", manualExecCtx.SidecarMode)
+		assert.True(t, manualExecCtx.IncludeSidecars)
+	})
 }
 
 func TestCLI_Indicators(t *testing.T) {
