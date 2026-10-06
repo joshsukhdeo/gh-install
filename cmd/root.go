@@ -933,7 +933,7 @@ func (r *RootCLI) moveDistWithSidecarDetection(srcDir, dstDir string) ([]string,
 	// Route suspected sidecars
 	var selected []string
 	if len(suspectedSidecars) > 0 {
-		if r != nil && (r.IncludeSidecars != "" || (r.CliParams != nil && r.CliParams.IncludeSidecars != "")) {
+		if r != nil && (r.IncludeSidecars || (r.CliParams != nil && r.CliParams.IncludeSidecars)) {
 			selected = suspectedSidecars
 		} else if r != nil && r.isInteractive() {
 			sel, err := r.interactiveMultiselect("Suspected sidecar assets detected. Select items to deploy:", suspectedSidecars)

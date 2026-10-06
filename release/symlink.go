@@ -9,7 +9,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
+	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/selector"
 )
 
@@ -104,14 +106,31 @@ func copyFS(fileSystem fs.FS, dst string) error {
 	})
 }
 
+// resolvePackageDir determines the canonical extraction path for an application package.
+// Per ADR-004, the standard location is $XDG_DATA_HOME/gh-pt/packages/{ownerID}/{repoID}.
+// Falls back to ~/src/apps/{ownerID}/{repoID} if that directory already exists or if
+// configured via cfg.Paths.ClonePath / cfg.Paths.TargetBaseDir to maintain backward compatibility.
+func (r *GithubRelease) resolvePackageDir(ownerID, repoID string) string {
+	homeDir, _ := os.UserHomeDir()
+	legacyAppDir := filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+	if _, err := os.Stat(legacyAppDir); err == nil {
+		return legacyAppDir
+	}
+	cfg, err := config.LoadConfig()
+	if err == nil && cfg != nil {
+		if cfg.Paths.PackagePath != "" {
+			return filepath.Join(cfg.Paths.PackagePath, ownerID, repoID)
+		}
+		if cfg.Paths.ClonePath != "" && strings.Contains(cfg.Paths.ClonePath, "src/apps") {
+			return filepath.Join(cfg.Paths.ClonePath, ownerID, repoID)
+		}
+	}
+	return filepath.Join(xdg.DataHome, "gh-pt", "packages", ownerID, repoID)
+}
+
 func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem, assetPath string) (string, error) {
 	if len(binaries) == 0 {
 		return "", fmt.Errorf("no binaries to symlink")
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
 	}
 
 	// Parse owner and repo from repository string
@@ -125,8 +144,7 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 		repoID = parts[0]
 	}
 
-	// Always use ~/src/apps/{ownerID}/{repoID}
-	symlinkDir := filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+	symlinkDir := r.resolvePackageDir(ownerID, repoID)
 
 	if err := os.MkdirAll(symlinkDir, 0755); err != nil {
 		return "", err
@@ -206,7 +224,7 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 	}
 
 	// Handle sidecar symlinking if --include-sidecars is set
-	if r.CliParams.IncludeSidecars != "" {
+	if r.CliParams.IncludeSidecars {
 		if err := r.symlinkSidecars(symlinkDir); err != nil {
 			log.Warn("failed to symlink sidecars", "error", err)
 		}
@@ -217,7 +235,10 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 
 // symlinkSidecars symlinks sidecar files to the appropriate destination based on --include-sidecars mode
 func (r *GithubRelease) symlinkSidecars(symlinkDir string) error {
-	mode := r.CliParams.IncludeSidecars
+	mode := r.CliParams.SidecarMode
+	if mode == "" || mode == "auto" {
+		mode = "xdg_data_home"
+	}
 
 	// Handle local-map mode separately
 	if mode == "local-map" {
@@ -363,9 +384,12 @@ func (r *GithubRelease) symlinkLocalMap(symlinkDir string) error {
 	return nil
 }
 
-// resolveSidecarSymlinkDest determines where sidecars should be symlinked based on --include-sidecars mode
+// resolveSidecarSymlinkDest determines where sidecars should be symlinked based on --sidecar-mode
 func (r *GithubRelease) resolveSidecarSymlinkDest() (string, error) {
-	mode := r.CliParams.IncludeSidecars
+	mode := r.CliParams.SidecarMode
+	if mode == "" || mode == "auto" {
+		mode = "xdg_data_home"
+	}
 
 	switch {
 	case mode == "same_dest":
@@ -373,11 +397,7 @@ func (r *GithubRelease) resolveSidecarSymlinkDest() (string, error) {
 		return r.CliParams.TargetPath, nil
 	case mode == "xdg_data_home":
 		// Symlink sidecars to XDG data home
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(homeDir, ".local", "share", r.CliParams.Repository), nil
+		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", r.CliParams.Repository), nil
 	case mode == "bin":
 		// Symlink sidecars to bin directory
 		homeDir, err := os.UserHomeDir()
@@ -389,7 +409,7 @@ func (r *GithubRelease) resolveSidecarSymlinkDest() (string, error) {
 		// Extract custom path
 		return strings.TrimPrefix(mode, "custom-path:"), nil
 	default:
-		return "", fmt.Errorf("unknown include-sidecars mode: %s", mode)
+		return "", fmt.Errorf("unknown sidecar mode: %s", mode)
 	}
 }
 

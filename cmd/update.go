@@ -426,7 +426,8 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			appParams.Sidecars = app.Sidecars
 			appParams.SidecarSymlinkTo = app.SidecarSymlinkTo
 			appParams.IncludeSidecars = app.IncludeSidecars
-			if app.SymlinkDir != "" || appParams.IncludeSidecars != "" {
+			appParams.SidecarMode = app.SidecarMode
+			if app.SymlinkDir != "" {
 				appParams.Symlink = true
 			}
 			appParams.EnvInject = app.EnvInject

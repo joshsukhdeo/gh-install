@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/stretchr/testify/assert"
@@ -19,6 +20,8 @@ func TestExecuteSymlinkInstall(t *testing.T) {
 
 	t.Setenv("HOME", homeDir)
 	t.Setenv("USERPROFILE", homeDir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(homeDir, ".local", "share"))
+	xdg.Reload()
 
 	assetFile := filepath.Join(tmpDir, "jq-linux-amd64")
 	require.NoError(t, os.WriteFile(assetFile, []byte("dummy binary"), 0755))
@@ -40,8 +43,8 @@ func TestExecuteSymlinkInstall(t *testing.T) {
 	symlinkDir, err := r.executeSymlinkInstall(binaries, assetFile)
 	assert.NoError(t, err)
 
-	// Now using owner/repo path: ~/src/apps/jqlang/jq
-	expectedAppDir := filepath.Join(homeDir, "src", "apps", "jqlang", "jq")
+	// Canonical ADR-004 package path: $XDG_DATA_HOME/gh-pt/packages/jqlang/jq
+	expectedAppDir := filepath.Join(xdg.DataHome, "gh-pt", "packages", "jqlang", "jq")
 	assert.Equal(t, expectedAppDir, symlinkDir)
 
 	// Verify the file was copied to the app dir
@@ -56,4 +59,14 @@ func TestExecuteSymlinkInstall(t *testing.T) {
 	linkInfo, err := os.Readlink(symlinkTarget)
 	assert.NoError(t, err)
 	assert.Equal(t, copiedFile, linkInfo)
+
+	// Verify fallback to ~/src/apps when legacy folder exists
+	legacyAppDir := filepath.Join(homeDir, "src", "apps", "legacy", "app")
+	require.NoError(t, os.MkdirAll(legacyAppDir, 0755))
+	rLegacy := &GithubRelease{
+		CliParams: &params.ExecContext{
+			Repository: "legacy/app",
+		},
+	}
+	assert.Equal(t, legacyAppDir, rLegacy.resolvePackageDir("legacy", "app"))
 }

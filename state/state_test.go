@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -478,5 +479,38 @@ func TestStateManagement(t *testing.T) {
 		}
 		assert.True(t, itemPermittedApp.AllowsUnsigned(false, false))
 		assert.True(t, itemPermittedApp.AllowsUnsigned(true, false))
+	})
+
+	t.Run("InstalledApp_IncludeSidecars_UnmarshalMigration", func(t *testing.T) {
+		// 1. Legacy string mode "xdg_data_home"
+		jsonLegacy := `{"repository":"legacy/app","include_sidecars":"xdg_data_home"}`
+		var app1 InstalledApp
+		err := json.Unmarshal([]byte(jsonLegacy), &app1)
+		require.NoError(t, err)
+		assert.True(t, app1.IncludeSidecars)
+		assert.Equal(t, "xdg_data_home", app1.SidecarMode)
+
+		// 2. Legacy string mode "same_dest"
+		jsonCustom := `{"repository":"custom/app","include_sidecars":"same_dest"}`
+		var app2 InstalledApp
+		err = json.Unmarshal([]byte(jsonCustom), &app2)
+		require.NoError(t, err)
+		assert.True(t, app2.IncludeSidecars)
+		assert.Equal(t, "same_dest", app2.SidecarMode)
+
+		// 3. Modern boolean true
+		jsonModern := `{"repository":"modern/app","include_sidecars":true,"sidecar_mode":"bin"}`
+		var app3 InstalledApp
+		err = json.Unmarshal([]byte(jsonModern), &app3)
+		require.NoError(t, err)
+		assert.True(t, app3.IncludeSidecars)
+		assert.Equal(t, "bin", app3.SidecarMode)
+
+		// 4. Boolean false / omitted
+		jsonFalse := `{"repository":"off/app","include_sidecars":false}`
+		var app4 InstalledApp
+		err = json.Unmarshal([]byte(jsonFalse), &app4)
+		require.NoError(t, err)
+		assert.False(t, app4.IncludeSidecars)
 	})
 }

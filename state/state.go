@@ -42,7 +42,8 @@ type InstalledApp struct {
 	SystemPackages           []string          `json:"system_packages,omitempty"`
 	Sidecars                 string            `json:"sidecars,omitempty"`
 	SidecarSymlinkTo         []string          `json:"sidecar_symlink_to,omitempty"`
-	IncludeSidecars          string            `json:"include_sidecars,omitempty"`
+	IncludeSidecars          bool              `json:"include_sidecars,omitempty"`
+	SidecarMode              string            `json:"sidecar_mode,omitempty"`
 	InstalledSidecars        []string          `json:"installed_sidecars,omitempty"`
 	EnvInject                []string          `json:"env_inject,omitempty"`
 	FallbackReleases         int               `json:"fallback_releases,omitempty"`
@@ -72,7 +73,7 @@ func (app *InstalledApp) AllowsUnsigned(globalAllowUnsigned bool, targeted bool,
 }
 
 // UnmarshalJSON implements custom unmarshaling for backward compatibility.
-// Handles the migration from bool to string for IncludeSidecars field.
+// Handles the migration from string/bool for IncludeSidecars and SidecarMode fields.
 // Handles the migration from []string to string for Sidecars field.
 func (app *InstalledApp) UnmarshalJSON(data []byte) error {
 	type Alias InstalledApp
@@ -88,18 +89,24 @@ func (app *InstalledApp) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Handle IncludeSidecars migration from bool to string
+	// Handle IncludeSidecars migration from legacy string to bool + SidecarMode
 	switch v := aux.IncludeSidecars.(type) {
 	case bool:
-		if v {
-			app.IncludeSidecars = "xdg_data_home"
-		} else {
-			app.IncludeSidecars = ""
+		app.IncludeSidecars = v
+		if v && app.SidecarMode == "" {
+			app.SidecarMode = "xdg_data_home"
 		}
 	case string:
-		app.IncludeSidecars = v
+		if v != "" {
+			app.IncludeSidecars = true
+			if app.SidecarMode == "" {
+				app.SidecarMode = v
+			}
+		} else {
+			app.IncludeSidecars = false
+		}
 	case nil:
-		app.IncludeSidecars = ""
+		app.IncludeSidecars = false
 	}
 
 	// Handle Sidecars migration from []string to string

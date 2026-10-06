@@ -120,14 +120,17 @@ func TestCLI_SidecarFlags(t *testing.T) {
 		"-S", `plugins/.*\.so|data/.*`,
 		"--sidecar-symlink-to", "/etc/plugins",
 		"--sidecar-symlink-to", "/var/lib/plugins",
+		"--include-sidecars",
+		"--sidecar-mode", "custom-path:/my/sidecars",
 		"--env-inject", "PLUGIN_DIR=/opt/sidecars",
 		"--ai-setup-sidecars",
 	})
 
 	// Sidecars is now a regex pattern string
 	assert.Equal(t, `plugins/.*\.so|data/.*`, cli.Install.Sidecars)
-	// SidecarTargetPath removed - use IncludeSidecars mode instead
 	assert.Equal(t, []string{"/etc/plugins", "/var/lib/plugins"}, cli.Install.SidecarSymlinkTo)
+	assert.True(t, cli.Install.IncludeSidecars)
+	assert.Equal(t, "custom-path:/my/sidecars", cli.Install.SidecarMode)
 	assert.Equal(t, []string{"PLUGIN_DIR=/opt/sidecars"}, cli.Install.EnvInject)
 	assert.True(t, cli.Install.AISetupSidecars)
 }

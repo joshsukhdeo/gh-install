@@ -186,10 +186,9 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 		return ""
 	}
 
-	mode := r.CliParams.IncludeSidecars
-	if mode == "" {
-		// Default to xdg_data_home for backward compatibility
-		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", r.CliParams.Repository)
+	mode := r.CliParams.SidecarMode
+	if mode == "" || mode == "auto" {
+		mode = "xdg_data_home"
 	}
 
 	// Parse the mode
@@ -205,8 +204,7 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 		homeDir, _ := os.UserHomeDir()
 		return filepath.Join(homeDir, ".local", "bin")
 	case mode == "local-map":
-		// Sidecars stay in symlinkDir and get mapped to /usr/local/
-		homeDir, _ := os.UserHomeDir()
+		// Sidecars stay in packageDir and get mapped to /usr/local/
 		parts := strings.Split(r.CliParams.Repository, "/")
 		var ownerID, repoID string
 		if len(parts) >= 2 {
@@ -216,12 +214,12 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 			ownerID = ""
 			repoID = parts[0]
 		}
-		return filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+		return r.resolvePackageDir(ownerID, repoID)
 	case strings.HasPrefix(mode, "custom-path:"):
 		// Extract custom path
 		return strings.TrimPrefix(mode, "custom-path:")
 	default:
-		log.Warn("unknown include-sidecars mode, defaulting to xdg_data_home", "mode", mode)
+		log.Warn("unknown sidecar mode, defaulting to xdg_data_home", "mode", mode)
 		return filepath.Join(xdg.DataHome, "gh-pt", "sidecars", r.CliParams.Repository)
 	}
 }
@@ -1504,17 +1502,14 @@ func (r *GithubRelease) Install() error {
 	}()
 
 	// Auto-enable IncludeSidecars when any sidecar param is specified
-	includeSidecarsMode := r.CliParams.IncludeSidecars
-	if includeSidecarsMode == "" {
-		if r.CliParams.Sidecars != "" || len(r.CliParams.SidecarSymlinkTo) > 0 || r.CliParams.AISetupSidecars {
-			includeSidecarsMode = "xdg_data_home"
-			log.Debug("auto-enabled --include-sidecars due to --sidecar-* params")
+	if !r.CliParams.IncludeSidecars {
+		if r.CliParams.Sidecars != "" || len(r.CliParams.SidecarSymlinkTo) > 0 || r.CliParams.AISetupSidecars || r.CliParams.SidecarMode != "" {
+			r.CliParams.IncludeSidecars = true
+			log.Debug("auto-enabled --include-sidecars due to sidecar params")
 		}
 	}
-
-	// Validate --include-sidecars requires --symlink
-	if includeSidecarsMode != "" && !r.CliParams.Symlink {
-		return fmt.Errorf("--include-sidecars requires --symlink")
+	if r.CliParams.IncludeSidecars && (r.CliParams.SidecarMode == "" || r.CliParams.SidecarMode == "auto") {
+		r.CliParams.SidecarMode = "xdg_data_home"
 	}
 
 	var prerelease, stable bool
@@ -1986,7 +1981,7 @@ func (r *GithubRelease) Install() error {
 
 		if len(suspectedSidecars) > 0 {
 			// If IncludeSidecars is enabled, auto-include all suspected sidecars
-			if r.CliParams.IncludeSidecars != "" {
+			if r.CliParams.IncludeSidecars {
 				targetDir := r.resolveSidecarTargetPath()
 				if err := os.MkdirAll(targetDir, 0755); err != nil {
 					log.Warn("could not create sidecar target directory", "error", err)
@@ -2318,6 +2313,7 @@ func (r *GithubRelease) Install() error {
 				Sidecars:                 r.CliParams.Sidecars,
 				SidecarSymlinkTo:         r.SidecarSymlinkTo,
 				IncludeSidecars:          r.CliParams.IncludeSidecars,
+				SidecarMode:              r.CliParams.SidecarMode,
 				InstalledSidecars:        r.InstalledSidecars,
 				FallbackReleases:         r.CliParams.FallbackReleases,
 				InsecureAllowUnsigned:    r.CliParams.InsecureAllowUnsigned,

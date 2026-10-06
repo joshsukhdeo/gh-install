@@ -77,63 +77,99 @@ type CLI struct {
 // CliParams is an alias for CLI.
 type CliParams = CLI
 
+// ResolutionFlags controls version, asset matching, and selection rules.
+type ResolutionFlags struct {
+	ReleaseVersion                                string   `default:"latest" short:"v" help:"Repository release tag (version) to install."`
+	ReleaseAsset                                  string   `optional:"" short:"a" help:"Name of repository release asset to download."`
+	ReleaseAssetRegexp                            string   `optional:"" short:"A" help:"Regular expression matching release asset to download."`
+	ReleaseAssetRegexps                           []string `kong:"-"`
+	Type                                          []string `default:"${install_types}" short:"T" name:"format" env:"GH_PT_TYPE" help:"Comma-separated list of types to match and prioritize."`
+	All                                           bool     `default:"false" help:"Install all matched assets instead of just the first one."`
+	OnlyFirstMatch                                bool     `name:"only-first-match" help:"Only install the first matched binary instead of all unique binaries."`
+	MaxExeInstalls                                int      `name:"max-exe-installs" default:"0" help:"Maximum number of executables to install (0 = all unique)."`
+	Prerelease                                    bool     `short:"P" help:"Include prereleases."`
+	Stable                                        bool     `help:"Include only stable releases."`
+	FallbackReleases                              int      `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
+	SearchForInstallInstructionsIfNoReleaseAssets bool     `env:"GH_PT_README_FALLBACK" help:"Extract alternative installation instructions from README if release asset matching fails."`
+	AvxLevel                                      string   `default:"auto" enum:"auto,none,avx,avx2,avx512" env:"GH_PT_AVX_LEVEL" help:"AVX instruction set preference: auto, none, avx, avx2, avx512."`
+}
+
+// TargetFlags controls binary extraction destinations and symlink behavior.
+type TargetFlags struct {
+	TargetPath       string            `default:"${install_path}" short:"p" type:"path" help:"Target installation directory (default: ~/.local/bin or /usr/local/bin if --global)."`
+	Global           bool              `short:"g" help:"Install globally (e.g. /usr/local/bin) instead of user bin."`
+	Rename           map[string]string `optional:"" short:"t" help:"Rename binaries installed at target path."`
+	KeepSuffixes     bool              `short:"k" help:"Keep OS/hardware suffixes on extracted binaries."`
+	TargetPathCreate bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist."`
+	Overwrite        bool              `default:"false" short:"f" name:"force" aliases:"overwrite" env:"GH_PT_FORCE" help:"Overwrite target binaries."`
+	Symlink          bool              `env:"GH_PT_SYMLINK" help:"Extract entire release to package store and symlink executables."`
+}
+
+// DependencyFlags controls automatic and prompted package dependency resolution.
+type DependencyFlags struct {
+	ResolveDeps bool `short:"y" name:"resolve-deps" help:"Automatically resolve and install dependencies without prompting."`
+	PromptDeps  bool `name:"prompt-deps" help:"Prompt before installing dependencies."`
+	NoDeps      bool `short:"n" help:"Do not install dependencies."`
+}
+
+// VerificationFlags controls cryptographic, hash, and security sandbox verifications.
+type VerificationFlags struct {
+	VerifyChecksum        bool `default:"true" help:"Verify asset checksums."`
+	InsecureAllowUnsigned bool `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
+	SkipVtSandbox         bool `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	AI                    bool `help:"Use AI to scan and analyze releases."`
+}
+
+// SidecarFlags controls non-binary companion assets, plugins, and runtime data.
+type SidecarFlags struct {
+	Sidecars           string   `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
+	SidecarSymlinkTo   []string `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
+	IncludeSidecars    bool     `name:"include-sidecars" short:"s" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
+	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto, same_dest, xdg_data_home, bin, local-map, or custom-path:/path/to/ (default: auto)."`
+	EnvInject          []string `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
+	WarnUnmappedAssets bool     `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
+	AISetupSidecars    bool     `help:"Use AI to analyze sidecars and generate post-install setup commands."`
+}
+
+// ExecutionFlags controls interactive runtime behavior and compatibility switches.
+type ExecutionFlags struct {
+	Interactive          bool     `default:"false" short:"i" help:"Use interactive installation."`
+	DisablePrompts       bool     `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
+	NoSaveState          bool     `env:"GH_PT_NO_SAVE_STATE" help:"Do not save installation to state."`
+	Wine                 string   `default:"off" enum:"force,priority,allow,off" env:"GH_PT_WINE" help:"Wine mode."`
+	AllowForeignArch     bool     `env:"GH_PT_ALLOW_FOREIGN_ARCH" help:"Allow installing assets with foreign architectures."`
+	AllowRootUserInstall bool     `help:"Allow installation to user-local paths when running as root."`
+	Extractor            string   `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	AllowDowngrade       bool     `help:"Allow downgrades when updating or installing."`
+	SelfInflictedDebt    bool     `name:"self-inflicted-technical-debt" help:"Allow downgrades (alias for allow-downgrade)."`
+	LeRetrogrouch        bool     `name:"LE-RETROGROUCH" help:"Exclusively downgrade and save unpinned with Le_RetroGrouch flag."`
+	RetrogradeStopgap    bool     `name:"retrograde-stopgap" help:"Exclusively downgrade, unpin, and pin the resultant version."`
+	Barbarous            bool     `name:"BARBAROUS" help:"Bypass VT security, skip hashes, allow wine, foreign arch, downgrades."`
+	PinInstall           bool     `name:"pin-install" default:"false" help:"Pin this installation to the current version."`
+	DryRun               bool     `default:"false" help:"Show what would be downloaded."`
+	NoCompletionSetup    bool     `name:"no-completion-setup" help:"Do not automatically install shell autocompletion scripts for extracted binaries."`
+	AssetBinaries        []string `optional:"" short:"b" help:"If release asset is an archive - names of a binaries in the archive to install."`
+	AssetBinariesRegexp  string   `optional:"" short:"B" help:"If release asset is an archive - regular expression matching binaries in the archive to install."`
+	IsUpgradeCmd         bool     `kong:"-"`
+	SpecificallyTargeted bool     `kong:"-"`
+}
+
+// OutputFlags controls UI progress display, styling, and colorization.
+type OutputFlags struct {
+	ProgressBar string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	NoColor     bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
+	NoEmojis    bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
+}
+
 // Shared flags across commands
 type CommonInstallFlags struct {
-	Interactive                                   bool              `default:"false" short:"i" help:"Use interactive installation."`
-	ReleaseVersion                                string            `default:"latest" short:"v" help:"Repository release tag (version) to install."`
-	ReleaseAsset                                  string            `optional:"" short:"a" help:"Name of repository release asset to download."`
-	ReleaseAssetRegexp                            string            `optional:"" short:"A" help:"Regular expression matching release asset to download."`
-	ReleaseAssetRegexps                           []string          `kong:"-"`
-	Type                                          []string          `default:"${install_types}" short:"T" name:"format" env:"GH_PT_TYPE" help:"Comma-separated list of types to match and prioritize."`
-	All                                           bool              `default:"false" help:"Install all matched assets instead of just the first one."`
-	AssetBinaries                                 []string          `optional:"" short:"b" help:"If release asset is an archive - names of a binaries in the archive to install."`
-	AssetBinariesRegexp                           string            `optional:"" short:"B" help:"If release asset is an archive - regular expression matching binaries in the archive to install."`
-	TargetPath                                    string            `default:"${install_path}" short:"p" type:"path" help:"Target installation directory (default: ~/.local/bin or /usr/local/bin if --global)."`
-	Global                                        bool              `short:"g" help:"Install globally (e.g. /usr/local/bin) instead of user bin."`
-	ResolveDeps                                   bool              `short:"y" name:"resolve-deps" help:"Automatically resolve and install dependencies without prompting."`
-	PromptDeps                                    bool              `name:"prompt-deps" help:"Prompt before installing dependencies."`
-	NoDeps                                        bool              `short:"n" help:"Do not install dependencies."`
-	Rename                                        map[string]string `optional:"" short:"t" help:"Rename binaries installed at target path."`
-	KeepSuffixes                                  bool              `short:"k" help:"Keep OS/hardware suffixes on extracted binaries."`
-	DisablePrompts                                bool              `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
-	NoSaveState                                   bool              `env:"GH_PT_NO_SAVE_STATE" help:"Do not save installation to state."`
-	Wine                                          string            `default:"off" enum:"force,priority,allow,off" env:"GH_PT_WINE" help:"Wine mode."`
-	AllowForeignArch                              bool              `env:"GH_PT_ALLOW_FOREIGN_ARCH" help:"Allow installing assets with foreign architectures."`
-	AllowRootUserInstall                          bool              `help:"Allow installation to user-local paths when running as root."`
-	Extractor                                     string            `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
-	TargetPathCreate                              bool              `default:"true" negatable:"" help:"Create target installation directory if it does not exist."`
-	Overwrite                                     bool              `default:"false" short:"f" name:"force" aliases:"overwrite" env:"GH_PT_FORCE" help:"Overwrite target binaries."`
-	Symlink                                       bool              `env:"GH_PT_SYMLINK" help:"Extract entire release to ~/src/apps and symlink executables."`
-	AllowDowngrade                                bool              `help:"Allow downgrades when updating or installing."`
-	SelfInflictedDebt                             bool              `name:"self-inflicted-technical-debt" help:"Allow downgrades (alias for allow-downgrade)."`
-	LeRetrogrouch                                 bool              `name:"LE-RETROGROUCH" help:"Exclusively downgrade and save unpinned with Le_RetroGrouch flag."`
-	RetrogradeStopgap                             bool              `name:"retrograde-stopgap" help:"Exclusively downgrade, unpin, and pin the resultant version."`
-	Barbarous                                     bool              `name:"BARBAROUS" help:"Bypass VT security, skip hashes, allow wine, foreign arch, downgrades."`
-	PinInstall                                    bool              `name:"pin-install" default:"false" help:"Pin this installation to the current version."`
-	DryRun                                        bool              `default:"false" help:"Show what would be downloaded."`
-	VerifyChecksum                                bool              `default:"true" help:"Verify asset checksums."`
-	InsecureAllowUnsigned                         bool              `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
-	SkipVtSandbox                                 bool              `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
-	Prerelease                                    bool              `short:"P" help:"Include prereleases."`
-	Stable                                        bool              `help:"Include only stable releases."`
-	AI                                            bool              `help:"Use AI to scan and analyze releases."`
-	IsUpgradeCmd                                  bool              `kong:"-"`
-	SpecificallyTargeted                          bool              `kong:"-"`
-	SearchForInstallInstructionsIfNoReleaseAssets bool              `env:"GH_PT_README_FALLBACK" help:"Extract alternative installation instructions from README if release asset matching fails."`
-	FallbackReleases                              int               `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
-	Sidecars                                      string            `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
-	SidecarSymlinkTo                              []string          `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
-	IncludeSidecars                               string            `optional:"" name:"include-sidecars" short:"s" help:"Include sidecars mode: same_dest, xdg_data_home, bin, local-map, or custom-path:/path/to/. Requires --symlink."`
-	EnvInject                                     []string          `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
-	WarnUnmappedAssets                            bool              `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
-	AISetupSidecars                               bool              `help:"Use AI to analyze sidecars and generate post-install setup commands."`
-	ProgressBar                                   string            `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
-	NoColor                                       bool              `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
-	NoEmojis                                      bool              `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
-	NoCompletionSetup                             bool              `name:"no-completion-setup" help:"Do not automatically install shell autocompletion scripts for extracted binaries."`
-	OnlyFirstMatch                                bool              `name:"only-first-match" help:"Only install the first matched binary instead of all unique binaries."`
-	MaxExeInstalls                                int               `name:"max-exe-installs" default:"0" help:"Maximum number of executables to install (0 = all unique)."`
-	AvxLevel                                      string            `default:"auto" enum:"auto,none,avx,avx2,avx512" env:"GH_PT_AVX_LEVEL" help:"AVX instruction set preference: auto, none, avx, avx2, avx512."`
+	ResolutionFlags
+	TargetFlags
+	DependencyFlags
+	VerificationFlags
+	SidecarFlags
+	ExecutionFlags
+	OutputFlags
 }
 
 type InstallCmd struct {

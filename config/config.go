@@ -24,6 +24,7 @@ type PathsConfig struct {
 	SidecarPath   string `yaml:"sidecar_path"`
 	TargetBaseDir string `yaml:"target_base_dir"`
 	RepoDir       string `yaml:"repo_dir"`
+	PackagePath   string `yaml:"package_path"`
 }
 
 type AIConfig struct {
