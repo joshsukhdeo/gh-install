@@ -957,3 +957,192 @@ func TestShowInfo_Readme_RendersMarkdown(t *testing.T) {
 	assert.Contains(t, out, "Title")
 	assert.Contains(t, out, "bold")
 }
+
+func TestShowInfo_Assets_Visual4Categories(t *testing.T) {
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 200, TagName: "v1.0.0"},
+		},
+		assets: map[int64][]ReleaseAsset{
+			200: {
+				{ID: 1, Name: "mytool_linux_amd64.deb"},
+				{ID: 2, Name: "mytool_linux_amd64.rpm"},
+				{ID: 3, Name: "libhelper.so"},
+				{ID: 4, Name: "mytool_windows_amd64.exe"},
+				{ID: 5, Name: "mytool_android.apk"},
+				{ID: 6, Name: "mytool.sha256"},
+			},
+		},
+	}
+
+	r := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/mytool",
+			ShowAssets: 50,
+		},
+	}
+
+	out := captureOutput(func() {
+		err := showInfoWithClient(r, mock)
+		assert.NoError(t, err)
+	})
+
+	// 1. Categories present
+	assert.Contains(t, out, "--- 📂 ASSETS 📂 ---")
+	assert.Contains(t, out, "Will be installed by default")
+	assert.Contains(t, out, "Will be installed with -s (--include-sidecars)")
+	assert.Contains(t, out, "Can be installed but will not be")
+	assert.Contains(t, out, "Should not / cannot be installed")
+
+	// 2. Subcategories present
+	assert.Contains(t, out, "native [NAT]:")
+	assert.Contains(t, out, "sidecar [SIDE]:")
+	assert.Contains(t, out, "checksum/hash [SUM]:")
+	assert.Contains(t, out, "incompatible/unsupported [UNS]:")
+
+	// 3. Emojis present by default
+	assert.Contains(t, out, "🐧")
+	assert.Contains(t, out, "🤖")
+}
+
+func TestShowInfo_Assets_NoEmojisAndNoColor(t *testing.T) {
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 200, TagName: "v1.0.0"},
+		},
+		assets: map[int64][]ReleaseAsset{
+			200: {
+				{ID: 1, Name: "mytool_linux_amd64.deb"},
+				{ID: 2, Name: "mytool_windows_amd64.exe"},
+				{ID: 3, Name: "mytool_android.apk"},
+			},
+		},
+	}
+
+	// Test with NoEmojis: true
+	rNoEmojis := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/mytool",
+			ShowAssets: 50,
+			CommonInstallFlags: params.CommonInstallFlags{
+				NoEmojis: true,
+			},
+		},
+	}
+
+	outEmojis := captureOutput(func() {
+		err := showInfoWithClient(rNoEmojis, mock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, outEmojis, "--- ASSETS ---")
+	assert.Contains(t, outEmojis, "[linux] mytool_linux_amd64.deb")
+	assert.Contains(t, outEmojis, "[android] mytool_android.apk")
+	assert.NotContains(t, outEmojis, "🐧")
+	assert.NotContains(t, outEmojis, "🤖")
+
+	// Test with NoColor: true (which implies no emojis)
+	rNoColor := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/mytool",
+			ShowAssets: 50,
+			CommonInstallFlags: params.CommonInstallFlags{
+				NoColor: true,
+			},
+		},
+	}
+
+	outColor := captureOutput(func() {
+		err := showInfoWithClient(rNoColor, mock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, outColor, "[linux] mytool_linux_amd64.deb")
+	assert.NotContains(t, outColor, "🐧")
+}
+
+func TestShowInfo_Assets_EmptyCategoriesOmitted(t *testing.T) {
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 200, TagName: "v1.0.0"},
+		},
+		assets: map[int64][]ReleaseAsset{
+			200: {
+				{ID: 1, Name: "single_binary_linux_amd64.tar.gz"},
+			},
+		},
+	}
+
+	r := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/single",
+			ShowAssets: 50,
+		},
+	}
+
+	out := captureOutput(func() {
+		err := showInfoWithClient(r, mock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Will be installed by default")
+	assert.NotContains(t, out, "Will be installed with -s (--include-sidecars)", "empty sidecars category must be omitted")
+	assert.NotContains(t, out, "Should not / cannot be installed", "empty cannot install category must be omitted")
+}
+
+func TestShowInfo_Assets_ThoriumAndOpenVINO_Presentation(t *testing.T) {
+	thoriumMock := &mockGhClient{
+		releases: []Release{{ID: 300, TagName: "v1.0.0"}},
+		assets: map[int64][]ReleaseAsset{
+			300: {
+				{ID: 1, Name: "thorium-browser_154.0.8037.45_AVX2.deb"},
+				{ID: 2, Name: "thorium-browser_154.0.8037.45_arm64.deb"},
+				{ID: 3, Name: "SystemWebView_arm32.apk"},
+				{ID: 4, Name: "Thorium_MacOS_ARM64.dmg"},
+				{ID: 5, Name: "thorium_AVX2_mini_installer.exe"},
+			},
+		},
+	}
+
+	rThorium := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "gz83/thorium",
+			ShowAssets: 50,
+		},
+	}
+
+	outThorium := captureOutput(func() {
+		err := showInfoWithClient(rThorium, thoriumMock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, outThorium, "thorium-browser_154.0.8037.45_AVX2.deb")
+	assert.Contains(t, outThorium, "SystemWebView_arm32.apk")
+
+	ovmsMock := &mockGhClient{
+		releases: []Release{{ID: 400, TagName: "v2026.4.1"}},
+		assets: map[int64][]ReleaseAsset{
+			400: {
+				{ID: 1, Name: "ovms_ubuntu22_2026.4.1_python_on.tar.gz"},
+				{ID: 2, Name: "ovms_ubuntu22_2026.4.1_python_on.tar.gz.sha256"},
+				{ID: 3, Name: "ovms_windows_2026.4.1_python_on.zip"},
+			},
+		},
+	}
+
+	rOvms := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "openvinotoolkit/model_server",
+			ShowAssets: 50,
+		},
+	}
+
+	outOvms := captureOutput(func() {
+		err := showInfoWithClient(rOvms, ovmsMock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, outOvms, "ovms_ubuntu22_2026.4.1_python_on.tar.gz")
+	assert.Contains(t, outOvms, "checksum/hash [SUM]:")
+	assert.Contains(t, outOvms, "ovms_ubuntu22_2026.4.1_python_on.tar.gz.sha256")
+}

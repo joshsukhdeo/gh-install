@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/glamour"
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
@@ -264,10 +266,10 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 			r.NoColor = true
 		}
 	}
-	if r.DisableIcons || r.NoEmojis {
+	if r.DisableIcons || r.NoEmojis || r.NoColor {
 		disableIcons = true
 	}
-	if r.NoColor || os.Getenv("NO_COLOR") != "" {
+	if r.NoColor {
 		ApplyDisplayPreferences(true, false)
 	}
 
@@ -440,15 +442,65 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 				fmt.Println("--- 📂 ASSETS 📂 ---")
 			}
 			limit := len(assets)
+			truncated := false
 			if showAssetsLimit > -1 && limit > showAssetsLimit {
 				limit = showAssetsLimit
+				truncated = true
 			}
-			var assetItems []string
-			for j := 0; j < limit; j++ {
-				assetItems = append(assetItems, assets[j].Name)
+			slicedAssets := assets[:limit]
+
+			classifier := selector.NewAssetClassifier(runtime.GOOS, runtime.GOARCH, r.Wine, "")
+			var assetNames []string
+			var assetSizes []int64
+			for _, a := range slicedAssets {
+				assetNames = append(assetNames, a.Name)
+				assetSizes = append(assetSizes, a.Size)
 			}
-			printColumns(assetItems, 4)
-			if len(assets) > limit {
+
+			classifiedMap := classifier.ClassifyRelease(assetNames, assetSizes)
+
+			type categoryDef struct {
+				cat   selector.InstallCategory
+				title string
+			}
+			catDefs := []categoryDef{
+				{selector.CategoryDefaultInstall, "Will be installed by default"},
+				{selector.CategorySidecarInstall, "Will be installed with -s (--include-sidecars)"},
+				{selector.CategoryInstallableAlternative, "Can be installed but will not be"},
+				{selector.CategoryCannotInstall, "Should not / cannot be installed"},
+			}
+
+			for _, catDef := range catDefs {
+				items := classifiedMap[catDef.cat]
+				if len(items) == 0 {
+					continue
+				}
+
+				if disableIcons || r.NoColor {
+					fmt.Printf("• %s:\n", catDef.title)
+				} else {
+					fmt.Println(pterm.NewStyle(pterm.Bold, pterm.FgLightWhite).Sprintf("• %s:", catDef.title))
+				}
+
+				subcatMap := make(map[selector.ArchSubcategory][]selector.ClassifiedAsset)
+				for _, it := range items {
+					subcatMap[it.Subcat] = append(subcatMap[it.Subcat], it)
+				}
+
+				for _, subcat := range classifier.SubcategoryOrder() {
+					subItems := subcatMap[subcat]
+					if len(subItems) == 0 {
+						continue
+					}
+					fmt.Println(classifier.FormatSubcategoryHeader(subcat, r.NoColor))
+					for _, item := range subItems {
+						osIcon := classifier.FormatOS(item.OS, disableIcons)
+						fmt.Printf("    %s %s\n", osIcon, item.Name)
+					}
+				}
+			}
+
+			if truncated {
 				fmt.Println("...")
 			}
 		case "description":

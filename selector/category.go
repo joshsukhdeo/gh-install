@@ -2,8 +2,6 @@ package selector
 
 import (
 	"fmt"
-	"runtime"
-	"strings"
 )
 
 // AssetCategory represents one of the 3 major asset categories:
@@ -18,54 +16,23 @@ const (
 	CategoryChecksum   AssetCategory = "Checksum"
 )
 
-// CategorizeAsset classifies a release asset into Category and TUI Tag.
+// CategorizeAsset classifies a release asset into Category and TUI Tag using the universal classifier.
 func CategorizeAsset(name string) (AssetCategory, string) {
-	lower := strings.ToLower(name)
+	c := DefaultClassifier()
+	sub := c.DetectSubcategory(name)
 
-	// Category 3: Checksums & Signatures
-	if strings.Contains(lower, "checksum") ||
-		strings.Contains(lower, "sha256") ||
-		strings.Contains(lower, "sha512") ||
-		strings.Contains(lower, "sha1") ||
-		strings.Contains(lower, "md5") ||
-		strings.Contains(lower, "hashes") ||
-		strings.HasSuffix(lower, ".sig") ||
-		strings.HasSuffix(lower, ".asc") ||
-		strings.HasSuffix(lower, ".pem") {
+	switch sub {
+	case SubcatChecksum, SubcatSignature:
 		return CategoryChecksum, "[Checksum]"
-	}
-
-	// Category 2: Sidecars
-	if strings.HasSuffix(lower, ".so") ||
-		strings.Contains(lower, ".so.") ||
-		strings.HasSuffix(lower, ".pak") ||
-		strings.HasSuffix(lower, ".dylib") ||
-		strings.HasSuffix(lower, ".dll") ||
-		strings.HasSuffix(lower, ".h") ||
-		strings.HasSuffix(lower, ".hpp") {
+	case SubcatSidecar:
 		return CategorySidecar, "[Sidecar]"
-	}
-
-	// Category 1: Executables / Archives
-	// Wine / Windows
-	if runtime.GOOS != "windows" {
-		if strings.HasSuffix(lower, ".exe") ||
-			strings.HasSuffix(lower, ".msi") ||
-			strings.Contains(lower, "windows") ||
-			strings.Contains(lower, "win64") ||
-			strings.Contains(lower, "win32") {
-			return CategoryExecutable, "[Wine]"
-		}
-	}
-
-	// Foreign Architecture
-	foreignArchRegex := getForeignArchRegex(runtime.GOARCH)
-	if foreignArchRegex != nil && foreignArchRegex.MatchString(name) {
+	case SubcatWine:
+		return CategoryExecutable, "[Wine]"
+	case SubcatForeign, SubcatEmulated, SubcatUnsupported:
 		return CategoryExecutable, "[Foreign Arch]"
+	default:
+		return CategoryExecutable, "[Native]"
 	}
-
-	// Native
-	return CategoryExecutable, "[Native]"
 }
 
 // AssetCategoryPriority returns a sort rank for ordering categorized items.
