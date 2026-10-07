@@ -196,6 +196,87 @@ func formatGitHubError(err error, repo string) error {
 	return fmt.Errorf("GitHub API error for %q: %w", repo, err)
 }
 
+// needsGitHubAPI returns true if the command requires GitHub API access.
+func needsGitHubAPI(r *RootCLI) bool {
+	r.ensureCliParams()
+	// Commands that don't need GitHub API
+	if r.Ls != "" || r.Ll != "" {
+		return false
+	}
+	if r.EditSavedState {
+		return false
+	}
+	if r.RmSavedState != "" {
+		return false
+	}
+	if r.Rm != "" {
+		return false
+	}
+	if r.Purge != "" {
+		return false
+	}
+	if r.Pin != "" {
+		return false
+	}
+	// Clone/Fork/Show/CompileFromSource don't need GitHub API for release fetching
+	if r.Clone || r.Fork || r.CompileFromSource || r.Show || r.ShowAssets > -1 || r.ShowVersions > -1 || r.ShowDescription > -1 || r.ShowReadme > -1 {
+		return false
+	}
+	// Update/Upgrade/Install need GitHub API
+	return true
+}
+
+// validateGHCLI checks if gh CLI is installed and authenticated.
+// Returns a user-friendly error if not.
+func validateGHCLI() error {
+	// Check if gh is installed
+	ghPath, err := exec.LookPath("gh")
+	if err != nil {
+		return fmt.Errorf("GitHub CLI (gh) not found in PATH\n  → Install from https://cli.github.io/\n  → Or ensure 'gh' is in your PATH")
+	}
+
+	// Check gh version (need 2.0+ for API support)
+	verOut, err := exec.Command(ghPath, "--version").Output()
+	if err == nil {
+		verStr := strings.TrimSpace(string(verOut))
+		if strings.Contains(verStr, "gh version") {
+			// Extract version number
+			parts := strings.Fields(verStr)
+			for _, p := range parts {
+				if strings.HasPrefix(p, "v") || strings.Contains(p, ".") {
+					// Basic version check - gh 2.0+ required
+					if strings.HasPrefix(p, "v1.") {
+						return fmt.Errorf("GitHub CLI version too old (%s)\n  → gh-pt requires gh 2.0+\n  → Update: https://cli.github.io/", verStr)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Check authentication status
+	authOut, err := exec.Command(ghPath, "auth", "status").CombinedOutput()
+	if err != nil {
+		authErr := strings.TrimSpace(string(authOut))
+		if strings.Contains(authErr, "not logged in") || strings.Contains(authErr, "no auth") {
+			return fmt.Errorf("GitHub CLI not authenticated\n  → Run: gh auth login\n  → Or set GH_TOKEN environment variable with 'repo' scope")
+		}
+		return fmt.Errorf("failed to check gh auth status: %v\n  → Run 'gh auth status' to diagnose", err)
+	}
+
+	authStr := strings.TrimSpace(string(authOut))
+	if strings.Contains(authStr, "not logged in") || strings.Contains(authStr, "no auth") {
+		return fmt.Errorf("GitHub CLI not authenticated\n  → Run: gh auth login\n  → Or set GH_TOKEN environment variable with 'repo' scope")
+	}
+
+	// Check token has repo scope
+	if !strings.Contains(authStr, "repo") && !strings.Contains(authStr, "admin:repo_hook") {
+		return fmt.Errorf("GitHub CLI token missing 'repo' scope\n  → Run: gh auth refresh -h github.com -s repo\n  → Or re-authenticate with: gh auth login --scopes repo")
+	}
+
+	return nil
+}
+
 func (r *RootCLI) Validate() error {
 	r.ensureCliParams()
 	if r.Wine != "off" && r.Wine != "" {
@@ -455,6 +536,13 @@ func (r *RootCLI) RunInstall() error {
 	// Validate target path early (before any network calls)
 	if r.TargetPath != "" {
 		if err := validateTargetPath(r.TargetPath); err != nil {
+			return err
+		}
+	}
+
+	// Validate gh CLI is installed and authenticated (for commands needing GitHub API)
+	if needsGitHubAPI(r) {
+		if err := validateGHCLI(); err != nil {
 			return err
 		}
 	}
