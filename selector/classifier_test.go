@@ -1,6 +1,7 @@
 package selector
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ func TestAssetClassifier_FormatOS(t *testing.T) {
 	assert.Equal(t, "[android]", c.FormatOS(OSAndroid, true))
 	assert.Equal(t, "[ios]", c.FormatOS(OSIOS, true))
 	assert.Equal(t, "[raspberrypi]", c.FormatOS(OSRaspberryPi, true))
-	assert.Equal(t, "[multiplat] ", c.FormatOS(OSMultiplat, true))
+	assert.Equal(t, "[multiplat]", c.FormatOS(OSMultiplat, true))
 	assert.Equal(t, "[unknown]", c.FormatOS(OSUnknown, true))
 }
 
@@ -99,6 +100,53 @@ func TestAssetClassifier_WindowsHostSuppressesWine(t *testing.T) {
 	for _, sub := range order {
 		assert.NotEqual(t, SubcatWine, sub, "Windows host must not include Wine in subcategory order")
 	}
+}
+
+func TestAssetClassifier_WineDefaultDisallow(t *testing.T) {
+	// 1. Unsupported OS (windows, android) defaults to off
+	cWin := NewAssetClassifier("windows", "amd64", "", "avx2")
+	assert.Equal(t, "off", cWin.WineMode)
+
+	cAndroid := NewAssetClassifier("android", "arm64", "", "")
+	assert.Equal(t, "off", cAndroid.WineMode)
+
+	// 2. When Wine is not installed, Linux host defaults to off
+	origLookPath := lookPath
+	defer func() { lookPath = origLookPath }()
+
+	lookPath = func(file string) (string, error) {
+		return "", errors.New("wine not found")
+	}
+
+	cNoWine := NewAssetClassifier("linux", "amd64", "", "avx2")
+	assert.Equal(t, "off", cNoWine.WineMode)
+	assert.Equal(t, SubcatUnsupported, cNoWine.DetectSubcategory("tool-windows-x64.exe"))
+	item := cNoWine.ClassifyAsset("tool-windows-x64.exe", 0, nil, "")
+	assert.Equal(t, CategoryCannotInstall, item.InstallCategory)
+
+	for _, sub := range cNoWine.SubcategoryOrder() {
+		assert.NotEqual(t, SubcatWine, sub)
+	}
+
+	// 3. When Wine IS installed, Linux host defaults to allow
+	lookPath = func(file string) (string, error) {
+		return "/usr/bin/" + file, nil
+	}
+	cWithWine := NewAssetClassifier("linux", "amd64", "", "avx2")
+	assert.Equal(t, "allow", cWithWine.WineMode)
+	assert.Equal(t, SubcatWine, cWithWine.DetectSubcategory("tool-windows-x64.exe"))
+	itemWine := cWithWine.ClassifyAsset("tool-windows-x64.exe", 0, nil, "")
+	assert.Equal(t, CategoryInstallableAlternative, itemWine.InstallCategory)
+}
+
+func TestAssetClassifier_WineExplicitDisallow(t *testing.T) {
+	cOff := NewAssetClassifier("linux", "amd64", "off", "avx2")
+	assert.Equal(t, "off", cOff.WineMode)
+	assert.Equal(t, SubcatUnsupported, cOff.DetectSubcategory("tool-windows-x64.exe"))
+
+	cDisallow := NewAssetClassifier("linux", "amd64", "disallow", "avx2")
+	assert.Equal(t, "off", cDisallow.WineMode)
+	assert.Equal(t, SubcatUnsupported, cDisallow.DetectSubcategory("tool-windows-x64.exe"))
 }
 
 func TestAssetClassifier_ThoriumRelease(t *testing.T) {

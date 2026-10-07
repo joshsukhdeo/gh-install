@@ -25,6 +25,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/release"
 	"github.com/joshsukhdeo/gh-pt/resolver"
+	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/joshsukhdeo/gh-pt/ui"
 	"github.com/pterm/pterm"
@@ -58,9 +59,14 @@ const (
 
 func (r *RootCLI) Validate() error {
 	r.ensureCliParams()
-	if runtime.GOOS == "windows" && r.Wine != "off" && r.Wine != "" {
-		pterm.Warning.Println("Wine is not supported on Windows. Continuing with wine disabled.")
-		r.Wine = "off"
+	if r.Wine != "off" && r.Wine != "" {
+		if !selector.IsWineSupportedOS(runtime.GOOS) {
+			pterm.Warning.Printf("Wine is not supported on %s. Continuing with wine disabled.\n", runtime.GOOS)
+			r.Wine = "off"
+		} else if !selector.IsWineInstalled() {
+			pterm.Warning.Println("Wine is not installed. Continuing with wine disabled.")
+			r.Wine = "off"
+		}
 	}
 
 	if !r.Update && !r.UpdateAll && r.Ls == "" && r.Ll == "" && !r.EditSavedState && r.RmSavedState == "" && r.Rm == "" && r.Purge == "" && r.Pin == "" {

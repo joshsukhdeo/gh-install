@@ -268,3 +268,16 @@ func TestRootCLI_Verbose_TerminalLoggingAndRegexTruncation(t *testing.T) {
 	assert.Contains(t, out, strings.Repeat("z", 200)+"...")
 	assert.Contains(t, out, "target=/usr/local/bin")
 }
+
+func TestRootCLI_Validate_WinePlatformAndAvailabilityCheck(t *testing.T) {
+	r := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/repo",
+			Wine:       "allow",
+		},
+	}
+	_ = r.Validate()
+	if runtime.GOOS == "windows" {
+		assert.Equal(t, "off", r.Wine, "Wine must be disabled on Windows")
+	}
+}

@@ -2,6 +2,7 @@ package selector
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -64,6 +65,35 @@ type AssetClassifier struct {
 	HostAVXLevel string
 }
 
+var (
+	lookPath = exec.LookPath
+)
+
+// IsWineSupportedOS reports whether the given OS can run Wine.
+func IsWineSupportedOS(os string) bool {
+	switch strings.ToLower(os) {
+	case "linux", "darwin", "freebsd":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsWineInstalled reports whether wine or wine64 executable is installed in PATH.
+func IsWineInstalled() bool {
+	_, errWine := lookPath("wine")
+	_, errWine64 := lookPath("wine64")
+	return errWine == nil || errWine64 == nil
+}
+
+// CanUseWine reports whether Wine can be used on the target host OS and environment.
+func CanUseWine(hostOS string) bool {
+	if !IsWineSupportedOS(hostOS) {
+		return false
+	}
+	return IsWineInstalled()
+}
+
 func NewAssetClassifier(hostOS, hostArch, wineMode, hostAVX string) *AssetClassifier {
 	if hostOS == "" {
 		hostOS = runtime.GOOS
@@ -74,6 +104,25 @@ func NewAssetClassifier(hostOS, hostArch, wineMode, hostAVX string) *AssetClassi
 	if hostAVX == "" || hostAVX == "auto" {
 		hostAVX = DetectHostAVXLevel()
 	}
+
+	// Resolve Wine mode:
+	// For default behavior (empty, "auto", or unconfigured), check if wine can be used
+	// and default to disallow ("off") for unsupported platforms or if wine is not installed.
+	if wineMode == "" || wineMode == "auto" {
+		if CanUseWine(hostOS) {
+			wineMode = "allow"
+		} else {
+			wineMode = "off"
+		}
+	} else if wineMode == "disallow" {
+		wineMode = "off"
+	} else if wineMode != "off" {
+		// If wine was explicitly requested, check if the platform supports it
+		if !IsWineSupportedOS(hostOS) {
+			wineMode = "off"
+		}
+	}
+
 	return &AssetClassifier{
 		HostOS:       hostOS,
 		HostArch:     hostArch,
@@ -82,7 +131,7 @@ func NewAssetClassifier(hostOS, hostArch, wineMode, hostAVX string) *AssetClassi
 	}
 }
 
-var defaultClassifier = NewAssetClassifier("", "", "allow", "")
+var defaultClassifier = NewAssetClassifier("", "", "", "")
 
 func DefaultClassifier() *AssetClassifier {
 	return defaultClassifier
@@ -90,7 +139,7 @@ func DefaultClassifier() *AssetClassifier {
 
 // SubcategoryOrder returns the strict subcategory evaluation/display order for the host OS.
 func (c *AssetClassifier) SubcategoryOrder() []ArchSubcategory {
-	if c.HostOS == "windows" {
+	if c.HostOS == "windows" || c.WineMode == "off" || c.WineMode == "disallow" {
 		return []ArchSubcategory{
 			SubcatNative,
 			SubcatEmulated,
@@ -281,7 +330,7 @@ func (c *AssetClassifier) FormatOS(os AssetOS, noIcons bool) string {
 		case OSRaspberryPi:
 			return "[raspberrypi]"
 		case OSMultiplat:
-			return "[multiplat] "
+			return "[multiplat]"
 		case OSUnknown:
 			return "[unknown]"
 		default:
@@ -432,7 +481,10 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 
 	// Wine check: Windows binary on non-Windows host
 	if c.HostOS != "windows" && os == OSWindows {
-		return SubcatWine
+		if c.WineMode != "off" && c.WineMode != "disallow" {
+			return SubcatWine
+		}
+		return SubcatUnsupported
 	}
 
 	// Check if this is an incompatible target operating system
@@ -526,16 +578,19 @@ func (c *AssetClassifier) ClassifyAsset(name string, size int64, allAssets []str
 	os := c.DetectOS(name)
 	subcat := c.DetectSubcategory(name)
 
+	// If this is the primary default asset chosen for installation, it cannot be a sidecar
+	if primaryDefaultAsset != "" && name == primaryDefaultAsset && subcat == SubcatSidecar {
+		subcat = SubcatNative
+	}
+
 	var installCat InstallCategory
 
-	if subcat == SubcatChecksum || subcat == SubcatSignature || subcat == SubcatMetadata || subcat == SubcatUnsupported || subcat == SubcatUnknown {
-		installCat = CategoryCannotInstall
-	} else if subcat == SubcatForeign {
+	if primaryDefaultAsset != "" && name == primaryDefaultAsset {
+		installCat = CategoryDefaultInstall
+	} else if subcat == SubcatChecksum || subcat == SubcatSignature || subcat == SubcatMetadata || subcat == SubcatUnsupported || subcat == SubcatUnknown || subcat == SubcatForeign {
 		installCat = CategoryCannotInstall
 	} else if subcat == SubcatSidecar {
 		installCat = CategorySidecarInstall
-	} else if primaryDefaultAsset != "" && name == primaryDefaultAsset {
-		installCat = CategoryDefaultInstall
 	} else {
 		// Valid runnable alternative (alternative instruction set, package format, Wine, or emulated)
 		installCat = CategoryInstallableAlternative
