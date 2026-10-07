@@ -253,7 +253,8 @@ func (c *AssetClassifier) DetectOS(name string) AssetOS {
 		strings.Contains(lower, "multiplatform") ||
 		strings.Contains(lower, "multiplat") ||
 		strings.Contains(lower, "all-platforms") ||
-		strings.Contains(lower, "py3-none-any") {
+		strings.Contains(lower, "py3-none-any") ||
+		c.IsChecksum(name) || c.IsSignature(name) || c.IsMetadata(name) {
 		return OSMultiplat
 	}
 
@@ -355,12 +356,34 @@ func (c *AssetClassifier) IsMetadata(name string) bool {
 	return false
 }
 
+// IsLicense reports whether the asset is a license file.
+func (c *AssetClassifier) IsLicense(name string) bool {
+	lower := strings.ToLower(name)
+	base := strings.ToLower(filepath.Base(name))
+	return strings.HasPrefix(lower, "license") ||
+		strings.HasPrefix(lower, "licence") ||
+		strings.HasPrefix(lower, "copying") ||
+		strings.HasPrefix(base, "license") ||
+		strings.HasPrefix(base, "licence") ||
+		strings.HasPrefix(base, "copying") ||
+		strings.Contains(base, "license") ||
+		strings.Contains(base, "licence")
+}
+
 // IsSidecar reports whether the asset is a companion library, pack, or data resource.
 func (c *AssetClassifier) IsSidecar(name string) bool {
-	if c.IsChecksum(name) || c.IsSignature(name) || c.IsMetadata(name) {
+	if c.IsLicense(name) || c.IsChecksum(name) || c.IsSignature(name) || c.IsMetadata(name) {
 		return false
 	}
 	lower := strings.ToLower(name)
+
+	// Filter out source code bundles
+	if strings.Contains(lower, "source") && (strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")) {
+		return false
+	}
+	if strings.HasSuffix(lower, "-src.zip") || strings.HasSuffix(lower, "-src.tar.gz") || strings.HasSuffix(lower, ".src.tar.gz") {
+		return false
+	}
 
 	// Filter out complete executables/installers
 	for _, ext := range []string{".exe", ".dmg", ".pkg", ".msi", ".apk", ".deb", ".rpm", ".appimage"} {
@@ -372,6 +395,7 @@ func (c *AssetClassifier) IsSidecar(name string) bool {
 	if strings.HasSuffix(lower, ".so") ||
 		strings.Contains(lower, ".so.") ||
 		strings.HasSuffix(lower, ".pak") ||
+		strings.HasSuffix(lower, ".bin") ||
 		strings.HasSuffix(lower, ".dylib") ||
 		strings.HasSuffix(lower, ".dll") ||
 		strings.HasSuffix(lower, ".h") ||
@@ -381,7 +405,7 @@ func (c *AssetClassifier) IsSidecar(name string) bool {
 	}
 
 	for _, kw := range []string{"plugin", "data", "model", "asset"} {
-		if strings.Contains(lower, kw) && !strings.HasSuffix(lower, ".tar.gz") && !strings.HasSuffix(lower, ".zip") {
+		if strings.Contains(lower, kw) {
 			return true
 		}
 	}
@@ -528,11 +552,40 @@ func (c *AssetClassifier) ClassifyAsset(name string, size int64, allAssets []str
 
 // PickPrimaryDefaultAsset identifies which asset from the release gh-pt will select by default.
 func (c *AssetClassifier) PickPrimaryDefaultAsset(assets []string) string {
+	return c.PickPrimaryDefaultAssetWithContext("", assets, nil)
+}
+
+// PickPrimaryDefaultAssetWithContext executes the core Selector engine with regex matchers
+// and repository context, ensuring exact parity with gh-pt install / update asset selection.
+func (c *AssetClassifier) PickPrimaryDefaultAssetWithContext(repo string, assets []string, regexMatchers []string) string {
 	if len(assets) == 0 {
 		return ""
 	}
 
-	// 1. Check for AVX-matched native Linux/Darwin/Windows package
+	// 1. If regex matchers are provided, execute the core Selector engine
+	if len(regexMatchers) > 0 {
+		var selectorItems []*SelectorItem
+		for _, a := range assets {
+			selectorItems = append(selectorItems, &SelectorItem{
+				Name: a,
+			})
+		}
+		sel := &Selector{
+			Kind:             Asset,
+			Items:            selectorItems,
+			RegexpMatchers:   regexMatchers,
+			Repository:       repo,
+			Single:           true,
+			OnlyFirstMatch:   true,
+			AllowForeignArch: false,
+			AvxLevel:         c.HostAVXLevel,
+		}
+		if matches, err := sel.Run(); err == nil && len(matches) > 0 {
+			return matches[0].Name
+		}
+	}
+
+	// 2. Fallback heuristic: Check for AVX-matched native Linux/Darwin/Windows package
 	effectiveAVX := c.HostAVXLevel
 	if effectiveAVX == "" {
 		effectiveAVX = "avx"
@@ -563,7 +616,6 @@ func (c *AssetClassifier) PickPrimaryDefaultAsset(assets []string) string {
 	for _, cand := range candidates {
 		lower := strings.ToLower(cand)
 		if strings.Contains(lower, strings.ToLower(effectiveAVX)) {
-			// Prefer native package format (deb on debian/ubuntu, etc.)
 			return cand
 		}
 	}
@@ -582,7 +634,13 @@ func (c *AssetClassifier) PickPrimaryDefaultAsset(assets []string) string {
 // ClassifyRelease takes a full list of asset names and sizes, classifies them,
 // and returns them grouped by the 4 top-level categories.
 func (c *AssetClassifier) ClassifyRelease(names []string, sizes []int64) map[InstallCategory][]ClassifiedAsset {
-	primaryDefault := c.PickPrimaryDefaultAsset(names)
+	return c.ClassifyReleaseWithContext("", names, sizes, nil)
+}
+
+// ClassifyReleaseWithContext takes repository context and regex matchers to ensure
+// exact parity with gh-pt install / update asset selection.
+func (c *AssetClassifier) ClassifyReleaseWithContext(repo string, names []string, sizes []int64, regexMatchers []string) map[InstallCategory][]ClassifiedAsset {
+	primaryDefault := c.PickPrimaryDefaultAssetWithContext(repo, names, regexMatchers)
 	result := make(map[InstallCategory][]ClassifiedAsset)
 
 	for i, name := range names {

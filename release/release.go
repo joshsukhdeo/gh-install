@@ -225,77 +225,11 @@ func (r *GithubRelease) resolveSidecarTargetPath() string {
 }
 
 func isLicenseFileName(path string) bool {
-	base := strings.ToLower(filepath.Base(path))
-	return strings.HasPrefix(base, "license") ||
-		strings.HasPrefix(base, "licence") ||
-		strings.HasPrefix(base, "copying") ||
-		strings.Contains(base, "license") ||
-		strings.Contains(base, "licence")
+	return selector.DefaultClassifier().IsLicense(path)
 }
 
 func isSuspectedRemoteSidecar(name string) bool {
-	if isLicenseFileName(name) {
-		return false
-	}
-	lower := strings.ToLower(name)
-
-	// Filter out source code bundles
-	if strings.Contains(lower, "source") && (strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")) {
-		return false
-	}
-	if strings.HasSuffix(lower, "-src.zip") || strings.HasSuffix(lower, "-src.tar.gz") || strings.HasSuffix(lower, ".src.tar.gz") {
-		return false
-	}
-
-	// Filter out checksums
-	if isChecksumFileName(lower) {
-		return false
-	}
-
-	// Filter out foreign OS installers (.exe, .dmg, .pkg, .msi, .apk, .deb, .rpm)
-	installerExts := []string{".exe", ".dmg", ".pkg", ".msi", ".apk", ".deb", ".rpm"}
-	for _, ext := range installerExts {
-		if strings.HasSuffix(lower, ext) {
-			return false
-		}
-	}
-
-	// Flag assets containing keywords (plugin, data, model, asset) or extensions (.pak, .bin, .red, .so)
-	keywords := []string{"plugin", "data", "model", "asset"}
-	for _, kw := range keywords {
-		if strings.Contains(lower, kw) {
-			return true
-		}
-	}
-
-	sidecarExts := []string{".pak", ".bin", ".red", ".so"}
-	for _, ext := range sidecarExts {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isChecksumFileName(lower string) bool {
-	checksumPatterns := []string{
-		`(?i)checksums?\.txt$`,
-		`(?i)sha256sums?\.txt$`,
-		`(?i)sha512sums?\.txt$`,
-		`(?i)checksums?$`,
-		`(?i)\.sha256$`,
-		`(?i)\.sha512$`,
-		`(?i)\.md5$`,
-		`(?i)\.sig$`,
-		`(?i)\.asc$`,
-	}
-	for _, pat := range checksumPatterns {
-		if matched, _ := regexp.MatchString(pat, lower); matched {
-			return true
-		}
-	}
-	return false
+	return selector.DefaultClassifier().IsSidecar(name)
 }
 
 func isSuspectedLocalSidecar(relPath string, fileName string) bool {

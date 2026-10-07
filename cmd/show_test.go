@@ -1146,3 +1146,36 @@ func TestShowInfo_Assets_ThoriumAndOpenVINO_Presentation(t *testing.T) {
 	assert.Contains(t, outOvms, "checksum/hash [SUM]:")
 	assert.Contains(t, outOvms, "ovms_ubuntu22_2026.4.1_python_on.tar.gz.sha256")
 }
+
+func TestShowInfo_Assets_TruncationPreservesClassification(t *testing.T) {
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 500, TagName: "v1.0.0"},
+		},
+		assets: map[int64][]ReleaseAsset{
+			500: {
+				{ID: 1, Name: "readme.txt"},
+				{ID: 2, Name: "source.zip"},
+				{ID: 3, Name: "mytool_linux_amd64.tar.gz"},
+				{ID: 4, Name: "mytool_windows_amd64.zip"},
+				{ID: 5, Name: "checksums.txt"},
+			},
+		},
+	}
+
+	r := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "owner/mytool",
+			ShowAssets: 2,
+		},
+	}
+
+	out := captureOutput(func() {
+		err := showInfoWithClient(r, mock)
+		assert.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Will be installed by default")
+	assert.Contains(t, out, "mytool_linux_amd64.tar.gz")
+	assert.Contains(t, out, "...")
+}

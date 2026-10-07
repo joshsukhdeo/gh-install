@@ -34,6 +34,9 @@ func TestAssetClassifier_DetectOS(t *testing.T) {
 		{"Raspberry Pi raspbian", "kernel-raspbian.img", OSRaspberryPi},
 		{"Multiplatform jar", "application.jar", OSMultiplat},
 		{"Multiplatform universal", "bundle-all-platforms.zip", OSMultiplat},
+		{"Multiplatform checksum", "SHA256SUMS", OSMultiplat},
+		{"Multiplatform signature", "release.sig", OSMultiplat},
+		{"Multiplatform source zip", "source.zip", OSMultiplat},
 		{"Unknown asset", "unknown_format.xyz", OSUnknown},
 	}
 
@@ -231,4 +234,13 @@ func TestAssetClassifier_OpenVINOModelServerRelease(t *testing.T) {
 	// Alternatives (other tarballs + Windows zips via Wine)
 	alternatives := classified[CategoryInstallableAlternative]
 	assert.Len(t, alternatives, 7)
+
+	// Test PickPrimaryDefaultAssetWithContext with Ubuntu matchers
+	ubuntuMatchers := []string{"(?i)ubuntu.*amd64|(?i)ubuntu.*x86_64|(?i)ubuntu"}
+	primary := c.PickPrimaryDefaultAssetWithContext("openvinotoolkit/model_server", ovmsAssets, ubuntuMatchers)
+	assert.Contains(t, primary, "ubuntu", "should pick ubuntu asset when ubuntu regex matcher is provided")
+
+	classifiedWithContext := c.ClassifyReleaseWithContext("openvinotoolkit/model_server", ovmsAssets, nil, ubuntuMatchers)
+	require.Len(t, classifiedWithContext[CategoryDefaultInstall], 1)
+	assert.Contains(t, classifiedWithContext[CategoryDefaultInstall][0].Name, "ubuntu")
 }

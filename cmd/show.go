@@ -441,23 +441,24 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 			} else {
 				fmt.Println("--- 📂 ASSETS 📂 ---")
 			}
-			limit := len(assets)
-			truncated := false
-			if showAssetsLimit > -1 && limit > showAssetsLimit {
-				limit = showAssetsLimit
-				truncated = true
-			}
-			slicedAssets := assets[:limit]
-
 			classifier := selector.NewAssetClassifier(runtime.GOOS, runtime.GOARCH, r.Wine, "")
 			var assetNames []string
 			var assetSizes []int64
-			for _, a := range slicedAssets {
+			for _, a := range assets {
 				assetNames = append(assetNames, a.Name)
 				assetSizes = append(assetSizes, a.Size)
 			}
 
-			classifiedMap := classifier.ClassifyRelease(assetNames, assetSizes)
+			regexps := r.ReleaseAssetRegexps
+			if len(regexps) == 0 {
+				if r.ReleaseAssetRegexp != "" {
+					regexps = []string{r.ReleaseAssetRegexp}
+				} else {
+					regexps = buildRegexFromTypes(r.Type, r.Wine)
+				}
+			}
+
+			classifiedMap := classifier.ClassifyReleaseWithContext(repo, assetNames, assetSizes, regexps)
 
 			type categoryDef struct {
 				cat   selector.InstallCategory
@@ -470,16 +471,18 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 				{selector.CategoryCannotInstall, "Should not / cannot be installed"},
 			}
 
+			printedCount := 0
+			truncated := false
+
 			for _, catDef := range catDefs {
 				items := classifiedMap[catDef.cat]
 				if len(items) == 0 {
 					continue
 				}
 
-				if disableIcons || r.NoColor {
-					fmt.Printf("• %s:\n", catDef.title)
-				} else {
-					fmt.Println(pterm.NewStyle(pterm.Bold, pterm.FgLightWhite).Sprintf("• %s:", catDef.title))
+				if showAssetsLimit > -1 && printedCount >= showAssetsLimit {
+					truncated = true
+					break
 				}
 
 				subcatMap := make(map[selector.ArchSubcategory][]selector.ClassifiedAsset)
@@ -487,20 +490,41 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 					subcatMap[it.Subcat] = append(subcatMap[it.Subcat], it)
 				}
 
+				catHeaderPrinted := false
+
 				for _, subcat := range classifier.SubcategoryOrder() {
 					subItems := subcatMap[subcat]
 					if len(subItems) == 0 {
 						continue
 					}
+					if showAssetsLimit > -1 && printedCount >= showAssetsLimit {
+						truncated = true
+						break
+					}
+
+					if !catHeaderPrinted {
+						if disableIcons || r.NoColor {
+							fmt.Printf("• %s:\n", catDef.title)
+						} else {
+							fmt.Println(pterm.NewStyle(pterm.Bold, pterm.FgLightWhite).Sprintf("• %s:", catDef.title))
+						}
+						catHeaderPrinted = true
+					}
+
 					fmt.Println(classifier.FormatSubcategoryHeader(subcat, r.NoColor))
 					for _, item := range subItems {
+						if showAssetsLimit > -1 && printedCount >= showAssetsLimit {
+							truncated = true
+							break
+						}
 						osIcon := classifier.FormatOS(item.OS, disableIcons)
 						fmt.Printf("    %s %s\n", osIcon, item.Name)
+						printedCount++
 					}
 				}
 			}
 
-			if truncated {
+			if truncated || (showAssetsLimit > -1 && len(assets) > showAssetsLimit) {
 				fmt.Println("...")
 			}
 		case "description":
