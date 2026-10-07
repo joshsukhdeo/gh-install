@@ -20,6 +20,8 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
 	"github.com/cli/go-gh/v2"
+	"github.com/pterm/pterm"
+	"golang.org/x/term"
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/resolver"
@@ -29,9 +31,60 @@ import (
 	"github.com/joshsukhdeo/gh-pt/status"
 	"github.com/joshsukhdeo/gh-pt/ui"
 	"github.com/joshsukhdeo/gh-pt/verification"
-	"github.com/pterm/pterm"
-	"golang.org/x/term"
 )
+
+// formatGitHubError converts raw GitHub API errors into user-friendly messages.
+func formatGitHubError(err error, repo string) error {
+	if err == nil {
+		return nil
+	}
+
+	errStr := err.Error()
+	errLower := strings.ToLower(errStr)
+
+	// Network/connection errors
+	if strings.Contains(errLower, "no internet") || strings.Contains(errLower, "connection refused") ||
+		strings.Contains(errLower, "network is unreachable") || strings.Contains(errLower, "timeout") ||
+		strings.Contains(errLower, "dial tcp") || strings.Contains(errLower, "i/o timeout") {
+		return fmt.Errorf("cannot connect to GitHub: %w\n  → Check your internet connection and try again", err)
+	}
+
+	// 404 - repo not found
+	if strings.Contains(errLower, "404") || strings.Contains(errLower, "not found") {
+		return fmt.Errorf("repository %q not found on GitHub\n  → Verify the repository name (format: owner/repo) and that it exists", repo)
+	}
+
+	// 403 - rate limited or private repo
+	if strings.Contains(errLower, "403") || strings.Contains(errLower, "forbidden") {
+		if strings.Contains(errLower, "rate limit") || strings.Contains(errLower, "rate limit exceeded") {
+			return fmt.Errorf("GitHub API rate limit exceeded\n  → Authenticate with 'gh auth login' to increase limits, or wait and retry")
+		}
+		return fmt.Errorf("access denied to repository %q\n  → Repository may be private. Authenticate with 'gh auth login' or check permissions", repo)
+	}
+
+	// 401 - auth required
+	if strings.Contains(errLower, "401") || strings.Contains(errLower, "unauthorized") || strings.Contains(errLower, "bad credentials") {
+		return fmt.Errorf("GitHub authentication required\n  → Run 'gh auth login' to authenticate, or check your token has 'repo' scope")
+	}
+
+	// 5xx - GitHub server errors
+	if strings.Contains(errLower, "500") || strings.Contains(errLower, "502") || strings.Contains(errLower, "503") || strings.Contains(errLower, "504") {
+		return fmt.Errorf("GitHub API server error (%s)\n  → GitHub may be experiencing issues. Check status.github.com and retry", errStr)
+	}
+
+	// DNS errors
+	if strings.Contains(errLower, "no such host") || strings.Contains(errLower, "dns") {
+		return fmt.Errorf("cannot resolve GitHub hostname\n  → Check your DNS settings and internet connection")
+	}
+
+	// TLS/SSL errors
+	if strings.Contains(errLower, "tls") || strings.Contains(errLower, "ssl") || strings.Contains(errLower, "certificate") {
+		return fmt.Errorf("TLS/SSL error connecting to GitHub\n  → Check your system certificates or try updating ca-certificates")
+	}
+
+	// Generic fallback
+	return fmt.Errorf("GitHub API error for %q: %w", repo, err)
+}
 
 var (
 	execCommand      = exec.Command
@@ -1494,11 +1547,11 @@ func (r *GithubRelease) GetLatestRelease() (*selector.SelectorItem, error) {
 	}
 	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive, prerelease, stable)
 	if err != nil {
-		return nil, err
+		return nil, formatGitHubError(err, r.CliParams.Repository)
 	}
 	releases, err := releaseSelector.Run()
 	if err != nil {
-		return nil, err
+		return nil, formatGitHubError(err, r.CliParams.Repository)
 	}
 	return releases[0], nil
 }
@@ -1586,13 +1639,11 @@ func (r *GithubRelease) Install() error {
 	}
 	releaseSelector, err := selector.ReleaseSelector(r.Client, r.CliParams.Repository, r.CliParams.ReleaseVersion, r.CliParams.Interactive, prerelease, stable)
 	if err != nil {
-		log.Error("could not create release selector", "repository", r.CliParams.Repository, "release version", r.CliParams.ReleaseVersion, "error", err)
-		return err
+		return formatGitHubError(err, r.CliParams.Repository)
 	}
 	releases, err := releaseSelector.Run()
 	if err != nil {
-		log.Error("could not select a release", "repository", r.CliParams.Repository, "release version", r.CliParams.ReleaseVersion, "error", err)
-		return err
+		return formatGitHubError(err, r.CliParams.Repository)
 	}
 
 	// Try each release up to FallbackReleases times if no assets found

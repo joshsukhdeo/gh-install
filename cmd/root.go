@@ -2,17 +2,21 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/alecthomas/kong"
@@ -56,7 +60,141 @@ const (
 	GH_INSTALL_PREFIX_ENV           = "GH_INSTALL_ENV_PREFIX"
 	GH_INSTALL_DEFAULT_PREFIX       = "GH_INSTALL"
 	GH_INSTALL_CHECKSUM_ASSET_REGEX = ".*(?:checksum|txt)+.*$"
+	GH_PT_DEFAULT_GITHUB_TIMEOUT    = 30 * time.Second
+	GH_PT_DEFAULT_CONNECT_TIMEOUT   = 10 * time.Second
 )
+
+// newGitHubRESTClient creates a GitHub REST client with proper timeouts and error handling.
+func newGitHubRESTClient() (*api.RESTClient, error) {
+	// Check for internet connectivity first with a quick dial
+	if !isInternetReachable() {
+		return nil, fmt.Errorf("no internet connection: cannot reach GitHub API. Please check your network connection")
+	}
+
+	httpClient := &http.Client{
+		Timeout: GH_PT_DEFAULT_GITHUB_TIMEOUT,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   GH_PT_DEFAULT_CONNECT_TIMEOUT,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConns:          10,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+
+	ghClient, err := api.NewRESTClient(api.ClientOptions{
+		Timeout: GH_PT_DEFAULT_GITHUB_TIMEOUT,
+		Transport: httpClient.Transport,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GitHub REST client: %w", err)
+	}
+
+	return ghClient, nil
+}
+
+// isInternetReachable performs a quick connectivity check to GitHub.
+func isInternetReachable() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", "api.github.com:443")
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// validateTargetPath checks if the target installation path is writable.
+func validateTargetPath(targetPath string) error {
+	if targetPath == "" {
+		return fmt.Errorf("target path is empty")
+	}
+
+	// Try to create the directory if it doesn't exist
+	info, err := os.Stat(targetPath)
+	if os.IsNotExist(err) {
+		// Try to create it
+		if err := os.MkdirAll(targetPath, 0755); err != nil {
+			return fmt.Errorf("cannot create target directory %q: %w (check permissions)", targetPath, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot access target directory %q: %w", targetPath, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("target path %q exists but is not a directory", targetPath)
+	}
+
+	// Test write permission by creating a temp file
+	testFile := filepath.Join(targetPath, ".gh-pt-write-test")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		return fmt.Errorf("target directory %q is not writable: %w (run with appropriate permissions or use --target with a writable path)", targetPath, err)
+	}
+	_ = os.Remove(testFile)
+	return nil
+}
+
+// formatGitHubError converts raw GitHub API errors into user-friendly messages.
+func formatGitHubError(err error, repo string) error {
+	if err == nil {
+		return nil
+	}
+
+	errStr := err.Error()
+	errLower := strings.ToLower(errStr)
+
+	// Network/connection errors
+	if strings.Contains(errLower, "no internet") || strings.Contains(errLower, "connection refused") ||
+		strings.Contains(errLower, "network is unreachable") || strings.Contains(errLower, "timeout") ||
+		strings.Contains(errLower, "dial tcp") || strings.Contains(errLower, "i/o timeout") {
+		return fmt.Errorf("cannot connect to GitHub: %w\n  → Check your internet connection and try again", err)
+	}
+
+	// 404 - repo not found
+	if strings.Contains(errLower, "404") || strings.Contains(errLower, "not found") {
+		return fmt.Errorf("repository %q not found on GitHub\n  → Verify the repository name (format: owner/repo) and that it exists", repo)
+	}
+
+	// 403 - rate limited or private repo
+	if strings.Contains(errLower, "403") || strings.Contains(errLower, "forbidden") {
+		if strings.Contains(errLower, "rate limit") || strings.Contains(errLower, "rate limit exceeded") {
+			return fmt.Errorf("GitHub API rate limit exceeded\n  → Authenticate with 'gh auth login' to increase limits, or wait and retry")
+		}
+		return fmt.Errorf("access denied to repository %q\n  → Repository may be private. Authenticate with 'gh auth login' or check permissions", repo)
+	}
+
+	// 401 - auth required
+	if strings.Contains(errLower, "401") || strings.Contains(errLower, "unauthorized") || strings.Contains(errLower, "bad credentials") {
+		return fmt.Errorf("GitHub authentication required\n  → Run 'gh auth login' to authenticate, or check your token has 'repo' scope")
+	}
+
+	// 5xx - GitHub server errors
+	if strings.Contains(errLower, "500") || strings.Contains(errLower, "502") || strings.Contains(errLower, "503") || strings.Contains(errLower, "504") {
+		return fmt.Errorf("GitHub API server error (%s)\n  → GitHub may be experiencing issues. Check status.github.com and retry", errStr)
+	}
+
+	// DNS errors
+	if strings.Contains(errLower, "no such host") || strings.Contains(errLower, "dns") {
+		return fmt.Errorf("cannot resolve GitHub hostname\n  → Check your DNS settings and internet connection")
+	}
+
+	// TLS/SSL errors
+	if strings.Contains(errLower, "tls") || strings.Contains(errLower, "ssl") || strings.Contains(errLower, "certificate") {
+		return fmt.Errorf("TLS/SSL error connecting to GitHub\n  → Check your system certificates or try updating ca-certificates")
+	}
+
+	// Generic fallback
+	return fmt.Errorf("GitHub API error for %q: %w", repo, err)
+}
 
 func (r *RootCLI) Validate() error {
 	r.ensureCliParams()
@@ -314,10 +452,17 @@ func (r *RootCLI) RunInstall() error {
 		}
 	}
 
-	ghClient, err := api.DefaultRESTClient()
+	// Validate target path early (before any network calls)
+	if r.TargetPath != "" {
+		if err := validateTargetPath(r.TargetPath); err != nil {
+			return err
+		}
+	}
+
+	// Create GitHub client with timeout and proper error handling
+	ghClient, err := newGitHubRESTClient()
 	if err != nil {
-		log.Error("could not init Gihub REST client", "error", err)
-		return err
+		return formatGitHubError(err, r.Repository)
 	}
 
 	if r.Ls != "" || r.Ll != "" {
