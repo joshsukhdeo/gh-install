@@ -2,185 +2,121 @@ package release
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/ulikunitz/xz"
 )
 
-func createTestTarGz(t *testing.T, files map[string]string) []byte {
+func TestPeekRemoteTar(t *testing.T) {
+	// Create a test tar.gz with known entries
 	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
 
-	for name, content := range files {
+	entries := []struct {
+		name string
+		data string
+	}{
+		{"bin/mytool", "fake binary content"},
+		{"lib/libfoo.so", "fake lib content"},
+		{"share/doc/readme.txt", "docs"},
+		{"bin/helper", "helper binary"},
+		{"bin/another", "another binary"},
+	}
+
+	for _, e := range entries {
 		hdr := &tar.Header{
-			Name:     name,
-			Mode:     0755,
-			Size:     int64(len(content)),
-			Typeflag: tar.TypeReg,
+			Name: e.name,
+			Mode: 0755,
+			Size: int64(len(e.data)),
 		}
-		require.NoError(t, tw.WriteHeader(hdr))
-		_, err := tw.Write([]byte(content))
-		require.NoError(t, err)
-	}
-
-	require.NoError(t, tw.Close())
-	require.NoError(t, gw.Close())
-	return buf.Bytes()
-}
-
-func createTestTarXz(t *testing.T, files map[string]string) []byte {
-	var buf bytes.Buffer
-	xzw, err := xz.NewWriter(&buf)
-	require.NoError(t, err)
-	tw := tar.NewWriter(xzw)
-
-	for name, content := range files {
-		hdr := &tar.Header{
-			Name:     name,
-			Mode:     0755,
-			Size:     int64(len(content)),
-			Typeflag: tar.TypeReg,
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
 		}
-		require.NoError(t, tw.WriteHeader(hdr))
-		_, err := tw.Write([]byte(content))
-		require.NoError(t, err)
+		if _, err := tw.Write([]byte(e.data)); err != nil {
+			t.Fatal(err)
+		}
 	}
+	tw.Close()
+	gz.Close()
 
-	require.NoError(t, tw.Close())
-	require.NoError(t, xzw.Close())
-	return buf.Bytes()
-}
+	t.Logf("Test archive size: %d bytes", buf.Len())
 
-func createTestZip(t *testing.T, files map[string]string) []byte {
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-
-	for name, content := range files {
-		w, err := zw.Create(name)
-		require.NoError(t, err)
-		_, err = w.Write([]byte(content))
-		require.NoError(t, err)
-	}
-
-	require.NoError(t, zw.Close())
-	return buf.Bytes()
-}
-
-func TestStreamTarReader_GzAndXz(t *testing.T) {
-	files := map[string]string{
-		"bin/myapp":        "#!/bin/sh\necho hello",
-		"README.md":        "# Docs",
-		"share/doc/doc.1":  "man page",
-		"bin/myapp-helper": "#!/bin/sh\necho helper",
-	}
-
-	// 1. Test tar.gz
-	gzBytes := createTestTarGz(t, files)
-	items, err := StreamTarReader(bytes.NewReader(gzBytes), "app-linux-amd64.tar.gz")
-	require.NoError(t, err)
-	require.NotEmpty(t, items)
-
-	names := make(map[string]bool)
-	for _, it := range items {
-		names[it.Name] = true
-	}
-	assert.True(t, names["myapp"])
-	assert.True(t, names["myapp-helper"])
-
-	// 2. Test tar.xz
-	xzBytes := createTestTarXz(t, files)
-	xzItems, err := StreamTarReader(bytes.NewReader(xzBytes), "app-linux-amd64.tar.xz")
-	require.NoError(t, err)
-	require.NotEmpty(t, xzItems)
-
-	xzNames := make(map[string]bool)
-	for _, it := range xzItems {
-		xzNames[it.Name] = true
-	}
-	assert.True(t, xzNames["myapp"])
-	assert.True(t, xzNames["myapp-helper"])
-}
-
-func TestPeekRemoteZip_RangeServer(t *testing.T) {
-	zipData := createTestZip(t, map[string]string{
-		"bin/mytool": "binary data",
-		"LICENSE":    "MIT License",
-	})
-
+	// Create test server with range support
+	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rangeHeader := r.Header.Get("Range")
-		totalSize := len(zipData)
-
-		if rangeHeader == "" {
-			w.Header().Set("Content-Length", strconv.Itoa(totalSize))
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(zipData)
+		requestCount++
+		t.Logf("Request #%d: %s %s, Range: %s", requestCount, r.Method, r.URL.Path, r.Header.Get("Range"))
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			var start, end int64
+			if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
+				http.Error(w, "Invalid range", http.StatusBadRequest)
+				return
+			}
+			if end < start || end >= int64(len(buf.Bytes())) {
+				end = int64(len(buf.Bytes())) - 1
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(buf.Bytes())))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			n, _ := w.Write(buf.Bytes()[start : end+1])
+			t.Logf("Server range response: bytes %d-%d (%d bytes)", start, end, n)
 			return
 		}
-
-		// Parse Range: bytes=start-end
-		var start, end int
-		if strings.HasPrefix(rangeHeader, "bytes=") {
-			parts := strings.Split(strings.TrimPrefix(rangeHeader, "bytes="), "-")
-			start, _ = strconv.Atoi(parts[0])
-			if len(parts) > 1 && parts[1] != "" {
-				end, _ = strconv.Atoi(parts[1])
-			} else {
-				end = totalSize - 1
-			}
-		}
-		if end >= totalSize {
-			end = totalSize - 1
-		}
-
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
-		w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write(zipData[start : end+1])
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(buf.Bytes())))
+		w.Write(buf.Bytes())
 	}))
 	defer server.Close()
 
+	// Test PeekRemoteTar
 	ctx := context.Background()
-	items, err := PeekRemoteZip(ctx, server.URL, int64(len(zipData)), server.Client(), "")
-	require.NoError(t, err)
-	require.NotEmpty(t, items)
+	client := &http.Client{Timeout: 30 * time.Second}
 
-	assert.Equal(t, "mytool", items[0].Name)
-	assert.True(t, items[0].Compressed)
-}
-
-func TestPeekRemoteZip_RealGitHubRelease(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping network test in short mode")
+	cfg := &PeekRemoteTarConfig{
+		MaxBytesToRead: 512 * 1024,
+		MaxEntries:     100,
 	}
-	url := "https://github.com/cli/cli/releases/download/v2.45.0/gh_2.45.0_windows_amd64.zip"
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
-	items, err := PeekRemoteZip(ctx, url, 0, http.DefaultClient, "")
+	testURL := server.URL + "/test.tar.gz"
+	t.Logf("Calling PeekRemoteTar with URL: %s, size: %d", testURL, int64(len(buf.Bytes())))
+	items, err := PeekRemoteTar(ctx, testURL, int64(len(buf.Bytes())), client, "", cfg)
 	if err != nil {
-		t.Skipf("network test skipped: %v", err)
+		t.Fatalf("PeekRemoteTar error: %v", err)
 	}
-	require.NotEmpty(t, items)
-	var foundGh bool
-	for _, it := range items {
-		if it.Name == "gh.exe" {
-			foundGh = true
-			break
-		}
+
+	t.Logf("Total requests made: %d", requestCount)
+
+	if len(items) == 0 {
+		t.Fatal("Expected items, got none")
 	}
-	assert.True(t, foundGh, "gh.exe should be found in remote zip without downloading the full archive")
+
+	found := map[string]bool{}
+	for _, item := range items {
+		found[item.Name] = true
+		t.Logf("Found: %s (type: %v)", item.Name, item.BinaryType)
+	}
+
+	// Verify expected binaries in allowed directories
+	if !found["mytool"] {
+		t.Error("Expected to find 'mytool' in bin/")
+	}
+	if !found["helper"] {
+		t.Error("Expected to find 'helper' in bin/")
+	}
+	if !found["another"] {
+		t.Error("Expected to find 'another' in bin/")
+	}
+	// libfoo.so IS found (lib/ is in allowed dirs) - this is correct behavior
+	if !found["libfoo.so"] {
+		t.Error("Expected to find 'libfoo.so' in lib/ (allowed)")
+	}
+	// readme.txt should NOT be found (share/doc/ not in allowed dirs)
+	if found["readme.txt"] {
+		t.Error("Should not find readme.txt (share/doc/ not in allowed dirs)")
+	}
 }

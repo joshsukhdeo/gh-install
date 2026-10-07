@@ -1923,9 +1923,9 @@ func (r *GithubRelease) Install() error {
 				}
 				binaries = zipItems
 			} else if strings.Contains(lower, "tar") || strings.HasSuffix(lower, ".tgz") {
-				tarItems, err := r.StreamRemoteTar(releases[0].Name, asset.Name)
+				tarItems, err := r.PeekRemoteTar(asset, releases[0].Name, nil)
 				if err != nil {
-					log.Warn("streaming tar inspection encountered error, falling back", "error", err)
+					log.Warn("remote tar peeking encountered error, falling back", "error", err)
 				}
 				binaries = tarItems
 			} else {
