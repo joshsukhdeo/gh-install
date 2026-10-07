@@ -292,3 +292,49 @@ func TestAssetClassifier_OpenVINOModelServerRelease(t *testing.T) {
 	require.Len(t, classifiedWithContext[CategoryDefaultInstall], 1)
 	assert.Contains(t, classifiedWithContext[CategoryDefaultInstall][0].Name, "ubuntu")
 }
+
+func TestAssetClassifier_SidecarPlatformScopingAndKeywordCollision(t *testing.T) {
+	c := NewAssetClassifier("linux", "amd64", "off", "avx2")
+
+	// 1. Incompatible OS sidecar (macOS dylib on Linux) must be Unsupported, not Sidecar
+	assert.Equal(t, SubcatUnsupported, c.DetectSubcategory("libplugin_darwin.dylib"))
+	itemDylib := c.ClassifyAsset("libplugin_darwin.dylib", 0, nil, "")
+	assert.Equal(t, CategoryCannotInstall, itemDylib.InstallCategory)
+
+	// 2. Foreign architecture sidecar (arm64 so on amd64 host) must be Foreign, not Sidecar
+	assert.Equal(t, SubcatForeign, c.DetectSubcategory("libplugin_linux_arm64.so"))
+	itemArm := c.ClassifyAsset("libplugin_linux_arm64.so", 0, nil, "")
+	assert.Equal(t, CategoryCannotInstall, itemArm.InstallCategory)
+
+	// 3. Native / compatible sidecar on Linux amd64 must be Sidecar
+	assert.Equal(t, SubcatSidecar, c.DetectSubcategory("libplugin_linux_amd64.so"))
+	assert.Equal(t, SubcatSidecar, c.DetectSubcategory("game_data.pak"))
+	assert.Equal(t, SubcatSidecar, c.DetectSubcategory("plugins.zip"))
+	itemNative := c.ClassifyAsset("libplugin_linux_amd64.so", 0, nil, "")
+	assert.Equal(t, CategorySidecarInstall, itemNative.InstallCategory)
+
+	// 4. Tool name with sidecar keyword (data, model, asset) in full compiled distribution archive
+	// must NOT be classified as Sidecar
+	assert.Equal(t, SubcatNative, c.DetectSubcategory("data-importer_1.0.0_linux_amd64.tar.gz"))
+	itemData := c.ClassifyAsset("data-importer_1.0.0_linux_amd64.tar.gz", 0, nil, "")
+	assert.Equal(t, CategoryInstallableAlternative, itemData.InstallCategory)
+
+	assert.Equal(t, SubcatUnsupported, c.DetectSubcategory("model-explorer_1.0.0_darwin_arm64.tar.gz"))
+	itemModel := c.ClassifyAsset("model-explorer_1.0.0_darwin_arm64.tar.gz", 0, nil, "")
+	assert.Equal(t, CategoryCannotInstall, itemModel.InstallCategory)
+}
+
+func TestAssetClassifier_AVXHardwareCompatibility(t *testing.T) {
+	cAVX2 := NewAssetClassifier("linux", "amd64", "allow", "avx2")
+
+	// AVX512 on AVX2 host is Unsupported (prevent SIGILL crash)
+	assert.Equal(t, SubcatUnsupported, cAVX2.DetectSubcategory("thorium-browser_154.0.8037.45_AVX512.deb"))
+	itemAVX512 := cAVX2.ClassifyAsset("thorium-browser_154.0.8037.45_AVX512.deb", 0, nil, "")
+	assert.Equal(t, CategoryCannotInstall, itemAVX512.InstallCategory)
+
+	// AVX2 on AVX2 host is Native
+	assert.Equal(t, SubcatNative, cAVX2.DetectSubcategory("thorium-browser_154.0.8037.45_AVX2.deb"))
+
+	// AVX on AVX2 host is Native
+	assert.Equal(t, SubcatNative, cAVX2.DetectSubcategory("thorium-browser_154.0.8037.45_AVX.deb"))
+}

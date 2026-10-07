@@ -419,6 +419,21 @@ func (c *AssetClassifier) IsLicense(name string) bool {
 		strings.Contains(base, "licence")
 }
 
+// hasCompiledPlatformTokens reports whether the asset name specifies both a target OS and CPU architecture,
+// indicating it is a compiled software distribution archive rather than a companion data/asset pack.
+func hasCompiledPlatformTokens(lower string) bool {
+	hasOS := strings.Contains(lower, "linux") || strings.Contains(lower, "darwin") ||
+		strings.Contains(lower, "windows") || strings.Contains(lower, "ubuntu") ||
+		strings.Contains(lower, "debian") || strings.Contains(lower, "macos") ||
+		strings.Contains(lower, "freebsd") || strings.Contains(lower, "apple")
+	hasArch := strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") ||
+		strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") ||
+		strings.Contains(lower, "x64") || strings.Contains(lower, "armhf") ||
+		strings.Contains(lower, "i386") || strings.Contains(lower, "386") ||
+		strings.Contains(lower, "riscv")
+	return hasOS && hasArch
+}
+
 // IsSidecar reports whether the asset is a companion library, pack, or data resource.
 func (c *AssetClassifier) IsSidecar(name string) bool {
 	if c.IsLicense(name) || c.IsChecksum(name) || c.IsSignature(name) || c.IsMetadata(name) {
@@ -453,6 +468,11 @@ func (c *AssetClassifier) IsSidecar(name string) bool {
 		return true
 	}
 
+	// Archives with both OS and Arch tokens are compiled app distributions, not companion packs
+	if hasCompiledPlatformTokens(lower) {
+		return false
+	}
+
 	for _, kw := range []string{"plugin", "data", "model", "asset"} {
 		if strings.Contains(lower, kw) {
 			return true
@@ -473,15 +493,15 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 	if c.IsMetadata(name) {
 		return SubcatMetadata
 	}
-	if c.IsSidecar(name) {
-		return SubcatSidecar
-	}
 
 	os := c.DetectOS(name)
 
 	// Wine check: Windows binary on non-Windows host
 	if c.HostOS != "windows" && os == OSWindows {
 		if c.WineMode != "off" && c.WineMode != "disallow" {
+			if c.IsSidecar(name) {
+				return SubcatSidecar
+			}
 			return SubcatWine
 		}
 		return SubcatUnsupported
@@ -514,14 +534,11 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 
 	switch c.HostArch {
 	case "amd64":
-		// Native AMD64 / x86_64
-		if strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") || strings.Contains(lower, "x64") {
-			return SubcatNative
+		// Hardware vector extension check (AVX)
+		if !IsAVXCompatible(name, c.HostAVXLevel) {
+			return SubcatUnsupported
 		}
-		// Emulated on amd64: 32-bit x86 (i386 / 386 / win32)
-		if strings.Contains(lower, "386") || strings.Contains(lower, "i386") || strings.Contains(lower, "win32") {
-			return SubcatEmulated
-		}
+
 		// Foreign: ARM / AArch64 / MIPS / RISC-V / PowerPC / S390
 		if strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") ||
 			strings.Contains(lower, "arm") || strings.Contains(lower, "armhf") ||
@@ -530,11 +547,36 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 			return SubcatForeign
 		}
 
-	case "arm64":
-		// Native ARM64 / AArch64
-		if strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") {
+		// Emulated on amd64: 32-bit x86 (i386 / 386 / win32)
+		if strings.Contains(lower, "386") || strings.Contains(lower, "i386") || strings.Contains(lower, "win32") {
+			return SubcatEmulated
+		}
+
+		// Native AMD64 / x86_64
+		if strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") || strings.Contains(lower, "x64") {
+			if c.IsSidecar(name) {
+				return SubcatSidecar
+			}
 			return SubcatNative
 		}
+
+	case "arm64":
+		// Foreign: x86_64 on Linux ARM64 without explicit emulation, RISC-V, etc.
+		if c.HostOS == "linux" && (strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") || strings.Contains(lower, "x64")) {
+			return SubcatForeign
+		}
+		if strings.Contains(lower, "riscv") || strings.Contains(lower, "s390x") || strings.Contains(lower, "ppc64") {
+			return SubcatForeign
+		}
+
+		// Native ARM64 / AArch64
+		if strings.Contains(lower, "arm64") || strings.Contains(lower, "aarch64") {
+			if c.IsSidecar(name) {
+				return SubcatSidecar
+			}
+			return SubcatNative
+		}
+
 		// Emulated on ARM64:
 		// Darwin arm64 runs x86_64 via Rosetta 2
 		if c.HostOS == "darwin" && (strings.Contains(lower, "x86_64") || strings.Contains(lower, "amd64") || strings.Contains(lower, "x64")) {
@@ -548,12 +590,11 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 		if strings.Contains(lower, "armhf") || strings.Contains(lower, "armv7") || strings.Contains(lower, "arm32") {
 			return SubcatEmulated
 		}
-		// Foreign: x86_64 on Linux ARM64 without explicit emulation
-		if strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") || strings.Contains(lower, "x64") ||
-			strings.Contains(lower, "386") || strings.Contains(lower, "riscv") ||
-			strings.Contains(lower, "s390x") || strings.Contains(lower, "ppc64") {
-			return SubcatForeign
-		}
+	}
+
+	// Sidecar check for architecture-agnostic or compatible files
+	if c.IsSidecar(name) {
+		return SubcatSidecar
 	}
 
 	// If no foreign token matched and OS is compatible, default to native
