@@ -1633,6 +1633,15 @@ func GetDefaultInstallTypes() string {
 	}
 }
 func buildRegexFromTypes(types []string, wine string) []string {
+	if len(types) == 0 {
+		typesStr := GetDefaultInstallTypes()
+		for _, t := range strings.Split(typesStr, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				types = append(types, t)
+			}
+		}
+	}
 	archRegex := runtime.GOARCH
 	switch runtime.GOARCH {
 	case "amd64":

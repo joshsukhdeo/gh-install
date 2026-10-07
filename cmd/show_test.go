@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1178,4 +1180,43 @@ func TestShowInfo_Assets_TruncationPreservesClassification(t *testing.T) {
 	assert.Contains(t, out, "Will be installed by default")
 	assert.Contains(t, out, "mytool_linux_amd64.tar.gz")
 	assert.Contains(t, out, "...")
+}
+
+func TestShowInfo_Assets_DebPrioritizedOverAppImage(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Debian/Ubuntu package manager test")
+	}
+
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 600, TagName: "v0.1.2"},
+		},
+		assets: map[int64][]ReleaseAsset{
+			600: {
+				{ID: 1, Name: "SideX_0.1.2_amd64.AppImage"},
+				{ID: 2, Name: "SideX_0.1.2_amd64.deb"},
+				{ID: 3, Name: "SideX_0.1.2_x64-setup.exe"},
+			},
+		},
+	}
+
+	r := &RootCLI{
+		ExecContext: params.ExecContext{
+			Repository: "sidenai/sidex",
+			ShowAssets: 50,
+		},
+	}
+
+	out := captureOutput(func() {
+		err := showInfoWithClient(r, mock)
+		assert.NoError(t, err)
+	})
+
+	if _, err := exec.LookPath("dpkg"); err == nil {
+		defaultSection := out
+		if idx := strings.Index(out, "Can be installed but will not be"); idx != -1 {
+			defaultSection = out[:idx]
+		}
+		assert.Contains(t, defaultSection, "SideX_0.1.2_amd64.deb", "deb must be prioritized over AppImage on dpkg systems")
+	}
 }

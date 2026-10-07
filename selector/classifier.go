@@ -716,11 +716,49 @@ func (c *AssetClassifier) PickPrimaryDefaultAssetWithContext(repo string, assets
 		}
 	}
 
-	// Prefer standard binary/package formats over general archives
-	for _, cand := range candidates {
-		ext := strings.ToLower(filepath.Ext(cand))
-		if ext == ".deb" || ext == ".appimage" || ext == ".dmg" || ext == ".msi" || ext == ".exe" {
-			return cand
+	// Prefer standard binary/package formats over general archives, respecting host package manager
+	switch c.HostOS {
+	case "linux":
+		hasDpkg := false
+		hasRpm := false
+		if _, err := lookPath("dpkg"); err == nil {
+			hasDpkg = true
+		}
+		if _, err := lookPath("rpm"); err == nil {
+			hasRpm = true
+		}
+		var preferredExts []string
+		if hasDpkg && !hasRpm {
+			preferredExts = []string{".deb", ".snap", ".flatpak", ".appimage"}
+		} else if hasRpm && !hasDpkg {
+			preferredExts = []string{".rpm", ".snap", ".flatpak", ".appimage"}
+		} else if hasDpkg && hasRpm {
+			preferredExts = []string{".deb", ".rpm", ".snap", ".flatpak", ".appimage"}
+		} else {
+			preferredExts = []string{".appimage", ".flatpak", ".snap"}
+		}
+		for _, pref := range preferredExts {
+			for _, cand := range candidates {
+				if strings.EqualFold(filepath.Ext(cand), pref) {
+					return cand
+				}
+			}
+		}
+	case "darwin":
+		for _, pref := range []string{".dmg", ".pkg"} {
+			for _, cand := range candidates {
+				if strings.EqualFold(filepath.Ext(cand), pref) {
+					return cand
+				}
+			}
+		}
+	case "windows":
+		for _, pref := range []string{".exe", ".msi"} {
+			for _, cand := range candidates {
+				if strings.EqualFold(filepath.Ext(cand), pref) {
+					return cand
+				}
+			}
 		}
 	}
 

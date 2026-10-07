@@ -449,12 +449,24 @@ func showInfoWithClient(r *RootCLI, client ghRestClient) error {
 				assetSizes = append(assetSizes, a.Size)
 			}
 
+			types := r.Type
+			if len(types) == 0 {
+				if cfg != nil && cfg.Core.InstallTypes != "" {
+					for _, t := range strings.Split(cfg.Core.InstallTypes, ",") {
+						t = strings.TrimSpace(t)
+						if t != "" {
+							types = append(types, t)
+						}
+					}
+				}
+			}
+
 			regexps := r.ReleaseAssetRegexps
 			if len(regexps) == 0 {
 				if r.ReleaseAssetRegexp != "" {
 					regexps = []string{r.ReleaseAssetRegexp}
 				} else {
-					regexps = buildRegexFromTypes(r.Type, r.Wine)
+					regexps = buildRegexFromTypes(types, r.Wine)
 				}
 			}
 
