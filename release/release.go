@@ -23,6 +23,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/resolver"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/joshsukhdeo/gh-pt/status"
@@ -310,6 +311,8 @@ func (r *GithubRelease) handleSuspectedSidecars(suspected []string, extractDir s
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		log.Warn("could not create sidecar target directory", "error", err)
 	}
+	// Mark directory as managed by gh-pt for safe removal later
+	_ = safety.WriteGhptManagedMarker(targetDir)
 
 	for _, item := range selected {
 		if isLicenseFileName(item) {
@@ -370,6 +373,8 @@ func (r *GithubRelease) extractExplicitSidecars(extractDir string, fsObj fs.FS) 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("failed to create sidecar target directory: %w", err)
 	}
+	// Mark directory as managed by gh-pt for safe removal later
+	_ = safety.WriteGhptManagedMarker(targetDir)
 
 	sidecarRegex := r.CliParams.Sidecars
 	if sidecarRegex == "" {
@@ -592,7 +597,10 @@ func (r *GithubRelease) resolveDestinationPath(binaryPath string) string {
 
 func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath string) error {
 	if r.CliParams.DryRun {
-		log.Infof("[dry-run] Would extract and install: %s", binaryPath)
+		destinationPath := r.resolveDestinationPath(binaryPath)
+		r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destinationPath))
+		r.InstalledFiles = append(r.InstalledFiles, destinationPath)
+		log.Infof("[dry-run] Would extract and install: %s to %s", binaryPath, destinationPath)
 		return nil
 	}
 
@@ -601,7 +609,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 		return err
 	}
 	defer func() {
-		_ = os.RemoveAll(tempExtractDir)
+		_ = safety.RemoveAll(tempExtractDir)
 	}()
 
 	if err := copyFS(fileSystem, tempExtractDir); err != nil {
@@ -1026,6 +1034,23 @@ func (r *GithubRelease) ensureSudo() error {
 
 // extractPackageName queries the package name from a local package file.
 func extractPackageName(binaryPath string, pkgType string) string {
+	base := filepath.Base(binaryPath)
+	fallbackName := func() string {
+		ext := filepath.Ext(base)
+		cleaned := strings.TrimSuffix(base, ext)
+		if idx := strings.Index(cleaned, "_"); idx > 0 {
+			return cleaned[:idx]
+		}
+		if idx := strings.Index(cleaned, "-"); idx > 0 {
+			return cleaned[:idx]
+		}
+		return cleaned
+	}
+
+	if safety.IsDryRun() {
+		return fallbackName()
+	}
+
 	var cmd *exec.Cmd
 	switch pkgType {
 	case "deb":
@@ -1052,8 +1077,112 @@ func extractPackageName(binaryPath string, pkgType string) string {
 	return name
 }
 
+// DebBinaryEntry represents a binary file found inside a .deb package.
+type DebBinaryEntry struct {
+	Path string // Path inside the package (e.g., "/usr/bin/mytool")
+	Name string // Basename of the binary (e.g., "mytool")
+}
+
+// ListDebContents uses dpkg-deb -c to list all files in a .deb package.
+// Returns a slice of file paths found inside the package.
+func ListDebContents(debPath string) ([]string, error) {
+	if safety.IsDryRun() {
+		return nil, nil
+	}
+	cmd := exec.Command("dpkg-deb", "-c", debPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("dpkg-deb -c failed: %w", err)
+	}
+	var files []string
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// dpkg-deb -c output format: "drwxr-xr-x root/root 0 2024-01-01 00:00 ./usr/bin/"
+		// or "-rwxr-xr-x root/root 12345 2024-01-01 00:00 ./usr/bin/mytool"
+		parts := strings.Fields(line)
+		if len(parts) >= 6 {
+			// The last field is the path
+			path := parts[len(parts)-1]
+			path = strings.TrimPrefix(path, "./")
+			files = append(files, path)
+		}
+	}
+	return files, nil
+}
+
+// ListDebBinaries returns all executable binary paths found in a .deb package.
+// It filters for files that look like binaries (in bin/, sbin/, libexec/ directories).
+func ListDebBinaries(debPath string) ([]DebBinaryEntry, error) {
+	files, err := ListDebContents(debPath)
+	if err != nil {
+		return nil, err
+	}
+	var binaries []DebBinaryEntry
+	binaryDirs := []string{"/bin/", "/sbin/", "/libexec/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/"}
+	for _, f := range files {
+		for _, d := range binaryDirs {
+			if strings.HasPrefix(f, d) {
+				name := filepath.Base(f)
+				binaries = append(binaries, DebBinaryEntry{Path: f, Name: name})
+				break
+			}
+		}
+	}
+	return binaries, nil
+}
+
+// CheckDebBinaryCollision checks if a .deb package contains binaries that would
+// collide with standalone binaries from the same release.
+// Returns a map of colliding binary names and their paths in the deb.
+func CheckDebBinaryCollision(debPath string, standaloneBinaries []string) (map[string]string, error) {
+	debBinaries, err := ListDebBinaries(debPath)
+	if err != nil {
+		return nil, err
+	}
+	collisions := make(map[string]string)
+	standaloneMap := make(map[string]bool)
+	for _, b := range standaloneBinaries {
+		standaloneMap[strings.ToLower(filepath.Base(b))] = true
+	}
+	for _, db := range debBinaries {
+		if standaloneMap[strings.ToLower(db.Name)] {
+			collisions[db.Name] = db.Path
+		}
+	}
+	return collisions, nil
+}
+
+// getStandaloneBinariesForDeb returns the list of standalone binary names that would be
+// installed alongside the given deb package. It filters the pending binaries for the same release.
+func (r *GithubRelease) getStandaloneBinariesForDeb(debPath string) []string {
+	var binaries []string
+	for _, binary := range r.InstalledBinaries {
+		if binary != "" && !strings.HasSuffix(binary, ".deb") {
+			binaries = append(binaries, filepath.Base(binary))
+		}
+	}
+	// Also check pending debs/rpms for binaries
+	for _, p := range r.PendingDebs {
+		if p != debPath {
+			binaries = append(binaries, filepath.Base(p))
+		}
+	}
+	for _, p := range r.PendingRpms {
+		binaries = append(binaries, filepath.Base(p))
+	}
+	return binaries
+}
+
 func (r *GithubRelease) installDeb(binaryPath string) error {
 	if r.CliParams.DryRun {
+		pkgName := extractPackageName(binaryPath, "deb")
+		if pkgName != "" {
+			r.InstalledPackageNames = append(r.InstalledPackageNames, pkgName)
+		}
 		log.Infof("[dry-run] Would queue deb for batch install: %s", filepath.Base(binaryPath))
 		return nil
 	}
@@ -1064,6 +1193,10 @@ func (r *GithubRelease) installDeb(binaryPath string) error {
 
 func (r *GithubRelease) installRpm(binaryPath string) error {
 	if r.CliParams.DryRun {
+		pkgName := extractPackageName(binaryPath, "rpm")
+		if pkgName != "" {
+			r.InstalledPackageNames = append(r.InstalledPackageNames, pkgName)
+		}
 		log.Infof("[dry-run] Would queue rpm for batch install: %s", filepath.Base(binaryPath))
 		return nil
 	}
@@ -1693,8 +1826,10 @@ func (r *GithubRelease) Install() error {
 		log.Error("could not create temporary download directory", "error", err)
 		return err
 	}
+	safety.SetScopedTempDir(downloadDir)
 	defer func() {
-		err = errors.Join(err, os.RemoveAll(downloadDir))
+		safety.SetScopedTempDir("")
+		err = errors.Join(err, safety.RemoveAll(downloadDir))
 	}()
 
 	// Find and download checksum file if available
@@ -1724,107 +1859,167 @@ func (r *GithubRelease) Install() error {
 	}
 
 	for _, asset := range assets {
-		startUI()
-		if r.CliParams.Interactive {
-			if pUI != nil {
-				pUI.Update(3, "", "", "", "", "")
-			}
-		}
+		var binaries []*selector.SelectorItem
+		var execErr error
 
-		stdOut, stdErr, execErr := ghExec("release", "download", releases[0].Name,
-			"--repo", r.CliParams.Repository, "--pattern", asset.Name, "--dir", downloadDir)
-		if execErr != nil {
-			execErr = fmt.Errorf("failed to run gh command: %s", stdErr.String())
-			log.Error("could not download release asset", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "download directory", downloadDir, "error", execErr)
+		if r.CliParams.DryRun {
+			log.Infof("[dry-run] Inspecting asset %s without writing to disk", asset.Name)
+			lower := strings.ToLower(asset.Name)
+			if strings.HasSuffix(lower, ".zip") {
+				zipItems, err := r.PeekRemoteZip(asset, releases[0].Name)
+				if err != nil {
+					log.Warn("remote zip peeking encountered error, falling back", "error", err)
+				}
+				binaries = zipItems
+			} else if strings.Contains(lower, "tar") || strings.HasSuffix(lower, ".tgz") {
+				tarItems, err := r.StreamRemoteTar(releases[0].Name, asset.Name)
+				if err != nil {
+					log.Warn("streaming tar inspection encountered error, falling back", "error", err)
+				}
+				binaries = tarItems
+			} else {
+				binaries = []*selector.SelectorItem{
+					{
+						Name:         asset.Name,
+						DownloadPath: filepath.Join(downloadDir, asset.Name),
+						Compressed:   false,
+						BinaryType:   selector.BinaryTypeFromPath(asset.Name),
+					},
+				}
+			}
+
+			// If archive inspection found candidate items inside, filter them via binary selector
+			if len(binaries) > 0 && (strings.HasSuffix(lower, ".zip") || strings.Contains(lower, "tar") || strings.HasSuffix(lower, ".tgz")) {
+				sel := &selector.Selector{
+					Kind:           selector.Binary,
+					Items:          binaries,
+					NamesMatcher:   r.CliParams.AssetBinaries,
+					RegexpMatchers: []string{r.CliParams.AssetBinariesRegexp},
+					Single:         r.CliParams.OnlyFirstMatch,
+					Repository:     r.CliParams.Repository,
+					OnlyFirstMatch: r.CliParams.OnlyFirstMatch,
+					MaxExeInstalls: r.CliParams.MaxExeInstalls,
+				}
+				filteredBinaries, selErr := sel.Run()
+				if selErr == nil && len(filteredBinaries) > 0 {
+					binaries = filteredBinaries
+				}
+				r.ContainingArchive = asset.Name
+			} else if len(binaries) == 0 {
+				cleanName := GenerateCleanName(asset.Name, r.CliParams.Repository, releases[0].Name)
+				binaries = []*selector.SelectorItem{
+					{
+						Name:         cleanName,
+						DownloadPath: filepath.Join(downloadDir, cleanName),
+						Compressed:   false,
+						BinaryType:   selector.BinaryTypeFromPath(asset.Name),
+					},
+				}
+			}
+		} else {
+			startUI()
 			if r.CliParams.Interactive {
 				if pUI != nil {
-					pUI.Stop()
-					fmt.Printf("\nFailed - '%s' failed\n", stdErr.String())
+					pUI.Update(3, "", "", "", "", "")
 				}
 			}
-			return execErr
-		}
 
-		if r.CliParams.Interactive {
-			if pUI != nil {
-				pUI.Update(4, "", "", "", "", "")
-			}
-		}
-
-		log.Info("downloaded release asset", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "download directory", downloadDir, "output", stdOut.String())
-
-		// Verify checksum if available
-		downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
-		if checksumFilePath != "" && r.CliParams.VerifyChecksum {
-			if err := r.verifyChecksum(downloadedAssetPath, checksumFilePath); err != nil {
-				log.Error("checksum verification failed", "error", err, "asset", asset.Name)
-				return fmt.Errorf("checksum verification failed for %s: %w", asset.Name, err)
-			}
-		} else if r.CliParams.IsUpgradeCmd {
-			data, readErr := os.ReadFile(downloadedAssetPath)
-			if readErr != nil {
-				return fmt.Errorf("failed to read downloaded asset %s: %w", asset.Name, readErr)
-			}
-			forceBypass := r.CliParams.Overwrite && r.CliParams.InsecureAllowUnsigned && r.CliParams.SpecificallyTargeted
-			var repoName, oldCommit, newCommit string
-			repoName = r.CliParams.Repository
-			if st, _ := state.LoadState(); st != nil && st.Apps != nil {
-				if app, ok := st.Apps[repoName]; ok {
-					if app.CommitHash != "" {
-						oldCommit = app.CommitHash
-					} else {
-						oldCommit = app.Version
+			stdOut, stdErr, ghErr := ghExec("release", "download", releases[0].Name,
+				"--repo", r.CliParams.Repository, "--pattern", asset.Name, "--dir", downloadDir)
+			if ghErr != nil {
+				execErr = fmt.Errorf("failed to run gh command: %s", stdErr.String())
+				log.Error("could not download release asset", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "download directory", downloadDir, "error", execErr)
+				if r.CliParams.Interactive {
+					if pUI != nil {
+						pUI.Stop()
+						fmt.Printf("\nFailed - '%s' failed\n", stdErr.String())
 					}
 				}
+				return execErr
 			}
-			newCommit = r.ResolvedVersion
-			v := verification.NewVerifier(r.CliParams.InsecureAllowUnsigned)
-			if err := v.Verify(verification.ArtifactContext{
-				Data:                data,
-				Repo:                repoName,
-				OldCommit:           oldCommit,
-				NewCommit:           newCommit,
-				GlobalAllowUnsigned: r.CliParams.InsecureAllowUnsigned,
-				ItemAllowsUnsigned:  r.CliParams.InsecureAllowUnsigned,
-				ForceBypass:         forceBypass,
-			}); err != nil {
-				log.Error("verification failed for unsigned artifact", "error", err, "asset", asset.Name)
-				return fmt.Errorf("artifact verification failed for %s: %w", asset.Name, err)
+
+			if r.CliParams.Interactive {
+				if pUI != nil {
+					pUI.Update(4, "", "", "", "", "")
+				}
 			}
-			r.VerifiedSigned = false
-			r.VerificationMethod = "commit_lineage"
+
+			log.Info("downloaded release asset", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "download directory", downloadDir, "output", stdOut.String())
+
+			// Verify checksum if available
+			downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
+			if checksumFilePath != "" && r.CliParams.VerifyChecksum {
+				if err := r.verifyChecksum(downloadedAssetPath, checksumFilePath); err != nil {
+					log.Error("checksum verification failed", "error", err, "asset", asset.Name)
+					return fmt.Errorf("checksum verification failed for %s: %w", asset.Name, err)
+				}
+			} else if r.CliParams.IsUpgradeCmd {
+				data, readErr := os.ReadFile(downloadedAssetPath)
+				if readErr != nil {
+					return fmt.Errorf("failed to read downloaded asset %s: %w", asset.Name, readErr)
+				}
+				forceBypass := r.CliParams.Overwrite && r.CliParams.InsecureAllowUnsigned && r.CliParams.SpecificallyTargeted
+				var repoName, oldCommit, newCommit string
+				repoName = r.CliParams.Repository
+				if st, _ := state.LoadState(); st != nil && st.Apps != nil {
+					if app, ok := st.Apps[repoName]; ok {
+						if app.CommitHash != "" {
+							oldCommit = app.CommitHash
+						} else {
+							oldCommit = app.Version
+						}
+					}
+				}
+				newCommit = r.ResolvedVersion
+				v := verification.NewVerifier(r.CliParams.InsecureAllowUnsigned)
+				if err := v.Verify(verification.ArtifactContext{
+					Data:                data,
+					Repo:                repoName,
+					OldCommit:           oldCommit,
+					NewCommit:           newCommit,
+					GlobalAllowUnsigned: r.CliParams.InsecureAllowUnsigned,
+					ItemAllowsUnsigned:  r.CliParams.InsecureAllowUnsigned,
+					ForceBypass:         forceBypass,
+				}); err != nil {
+					log.Error("verification failed for unsigned artifact", "error", err, "asset", asset.Name)
+					return fmt.Errorf("artifact verification failed for %s: %w", asset.Name, err)
+				}
+				r.VerifiedSigned = false
+				r.VerificationMethod = "commit_lineage"
+			}
+
+			if r.CliParams.VTApiKey != "" {
+				vtHash, hashErr := CalculateSHA256(downloadedAssetPath)
+				if hashErr != nil {
+					return fmt.Errorf("failed to calculate SHA-256 for VirusTotal: %w", hashErr)
+				}
+				err := VerifyHashWithVirusTotal(vtHash, downloadedAssetPath, r.CliParams.VTApiKey, r.CliParams.Interactive && !r.CliParams.DisablePrompts, r.CliParams.SkipVtSandbox)
+				if err != nil {
+					return err
+				}
+			}
+
+			binarySelector, selErr := selector.BinarySelector(selector.BinaryMatchCriteria{
+				DownloadPath:   filepath.Join(downloadDir, asset.Name),
+				Names:          r.CliParams.AssetBinaries,
+				Matcher:        r.CliParams.AssetBinariesRegexp,
+				Interactive:    r.CliParams.Interactive,
+				Extractor:      r.CliParams.Extractor,
+				Repository:     r.CliParams.Repository,
+				OnlyFirstMatch: r.CliParams.OnlyFirstMatch,
+				MaxExeInstalls: r.CliParams.MaxExeInstalls,
+			})
+			if selErr != nil {
+				log.Error("could not create release asset binary selector", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", selErr)
+				return selErr
+			}
+			binaries, execErr = binarySelector.Run()
+			if execErr != nil {
+				log.Error("could not select release asset binary", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", execErr)
+				return execErr
+			}
 		}
 
-		if r.CliParams.VTApiKey != "" {
-			vtHash, hashErr := CalculateSHA256(downloadedAssetPath)
-			if hashErr != nil {
-				return fmt.Errorf("failed to calculate SHA-256 for VirusTotal: %w", hashErr)
-			}
-			err := VerifyHashWithVirusTotal(vtHash, downloadedAssetPath, r.CliParams.VTApiKey, r.CliParams.Interactive && !r.CliParams.DisablePrompts, r.CliParams.SkipVtSandbox)
-			if err != nil {
-				return err
-			}
-		}
-
-		binarySelector, execErr := selector.BinarySelector(selector.BinaryMatchCriteria{
-			DownloadPath:   filepath.Join(downloadDir, asset.Name),
-			Names:          r.CliParams.AssetBinaries,
-			Matcher:        r.CliParams.AssetBinariesRegexp,
-			Interactive:    r.CliParams.Interactive,
-			Extractor:      r.CliParams.Extractor,
-			Repository:     r.CliParams.Repository,
-			OnlyFirstMatch: r.CliParams.OnlyFirstMatch,
-			MaxExeInstalls: r.CliParams.MaxExeInstalls,
-		})
-		if execErr != nil {
-			log.Error("could not create release asset binary selector", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", execErr)
-			return execErr
-		}
-		binaries, execErr := binarySelector.Run()
-		if execErr != nil {
-			log.Error("could not select release asset binary", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "downloaded asset", filepath.Join(downloadDir, asset.Name), "asset binary name matchers", r.CliParams.AssetBinaries, "asset binary regexp matcher", params.TruncateRegex(r.CliParams.AssetBinariesRegexp, 200), "error", execErr)
-			return execErr
-		}
 		if r.CliParams.OnlyFirstMatch && len(binaries) > 1 {
 			binaries = binaries[:1]
 		}
@@ -2109,10 +2304,6 @@ func (r *GithubRelease) Install() error {
 				r.ContainingArchive = asset.Name
 			}
 		}
-
-		if !r.CliParams.All {
-			break
-		}
 	}
 
 	// Finish and stop progress UI before invoking package managers or interactive installers,
@@ -2127,9 +2318,22 @@ func (r *GithubRelease) Install() error {
 	}
 
 	if len(r.PendingDebs) > 0 {
-		if err := r.ensureSudo(); err != nil {
-			return err
+		// Check for binary collisions between .deb packages and standalone binaries
+		// Collect standalone binaries that would be installed alongside debs
+		for _, p := range r.PendingDebs {
+			// Check each deb for binary collisions with other pending binaries
+			collisions, err := CheckDebBinaryCollision(p, r.getStandaloneBinariesForDeb(p))
+			if err != nil {
+				log.Warnf("Failed to check deb contents for %s: %v", filepath.Base(p), err)
+			} else if len(collisions) > 0 {
+				log.Warnf("Binary collision detected in %s: %v", filepath.Base(p), collisions)
+				log.Warn("The following binaries exist in both the .deb package and as standalone releases. They will be installed twice (PATH shadowing may occur):")
+				for name, path := range collisions {
+					log.Warnf("  - %s (from deb: %s)", name, path)
+				}
+			}
 		}
+
 		for _, p := range r.PendingDebs {
 			if name := extractPackageName(p, "deb"); name != "" {
 				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
@@ -2148,29 +2352,35 @@ func (r *GithubRelease) Install() error {
 			args = append([]string{"apt-get", "install"}, baseDebs...)
 		}
 
-		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
-			if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-				return fmt.Errorf("user aborted batched .deb installation")
+		if r.CliParams.DryRun {
+			log.Infof("[dry-run] Would execute batched package install: sudo %s", strings.Join(args, " "))
+			r.InstalledPkgManager = args[0]
+			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
+		} else {
+			if err := r.ensureSudo(); err != nil {
+				return err
 			}
-		}
+			if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+					return fmt.Errorf("user aborted batched .deb installation")
+				}
+			}
 
-		cmd := execCommand("sudo", args...)
-		cmd.Dir = filepath.Dir(r.PendingDebs[0])
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("batched .deb installation failed: %w", err)
+			cmd := execCommand("sudo", args...)
+			cmd.Dir = filepath.Dir(r.PendingDebs[0])
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("batched .deb installation failed: %w", err)
+			}
+			r.InstalledPkgManager = args[0]
+			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		}
-		r.InstalledPkgManager = args[0]
-		r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 	}
 
 	if len(r.PendingRpms) > 0 {
-		if err := r.ensureSudo(); err != nil {
-			return err
-		}
 		for _, p := range r.PendingRpms {
 			if name := extractPackageName(p, "rpm"); name != "" {
 				r.InstalledPackageNames = append(r.InstalledPackageNames, name)
@@ -2189,23 +2399,32 @@ func (r *GithubRelease) Install() error {
 			args = append([]string{"dnf", "localinstall"}, baseRpms...)
 		}
 
-		if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
-			if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-				return fmt.Errorf("user aborted batched .rpm installation")
+		if r.CliParams.DryRun {
+			log.Infof("[dry-run] Would execute batched package install: sudo %s", strings.Join(args, " "))
+			r.InstalledPkgManager = args[0]
+			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
+		} else {
+			if err := r.ensureSudo(); err != nil {
+				return err
 			}
-		}
+			if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+					return fmt.Errorf("user aborted batched .rpm installation")
+				}
+			}
 
-		cmd := execCommand("sudo", args...)
-		cmd.Dir = filepath.Dir(r.PendingRpms[0])
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("batched .rpm installation failed: %w", err)
+			cmd := execCommand("sudo", args...)
+			cmd.Dir = filepath.Dir(r.PendingRpms[0])
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("batched .rpm installation failed: %w", err)
+			}
+			r.InstalledPkgManager = args[0]
+			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		}
-		r.InstalledPkgManager = args[0]
-		r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 	}
 
 	if pUI != nil {
@@ -2324,12 +2543,20 @@ func (r *GithubRelease) Install() error {
 
 	// Update final install state with actually installed assets, sidecars, and archive details
 	finalState := installState
-	if len(r.InstalledBinaries) > 0 {
+	if len(r.InstalledBinaries) > 0 && len(r.InstalledPackageNames) > 0 {
+		finalState.ExtractedAssets = append([]string{}, r.InstalledPackageNames...)
+		finalState.ExtractedAssets = append(finalState.ExtractedAssets, r.InstalledBinaries...)
+		finalState.Type = "deb+binary"
+	} else if len(r.InstalledBinaries) > 0 {
 		finalState.ExtractedAssets = r.InstalledBinaries
 	} else if len(r.InstalledPackageNames) > 0 {
 		finalState.ExtractedAssets = r.InstalledPackageNames
 	} else if len(r.InstalledAssetCleanNames) > 0 {
 		finalState.ExtractedAssets = r.InstalledAssetCleanNames
+	}
+
+	if len(r.InstalledAssetFullNames) > 1 {
+		finalState.AssetName = strings.Join(r.InstalledAssetFullNames, ", ")
 	}
 
 	if r.ContainingArchive != "" {
@@ -2385,6 +2612,29 @@ func (r *GithubRelease) Install() error {
 			fmt.Printf("\nInstalled %s successfully!\n", repoName)
 		} else {
 			fmt.Printf("\n\033[1;32mInstalled %s successfully!\033[0m\n", repoName)
+		}
+	}
+
+	if r.CliParams != nil && r.CliParams.Verbose {
+		fmt.Printf("\n--- 📦 INSTALLED ASSETS & FILES ---\n")
+		if len(r.InstalledAssetFullNames) > 0 {
+			fmt.Printf("Assets used:\n")
+			for _, a := range r.InstalledAssetFullNames {
+				fmt.Printf("  • %s\n", a)
+			}
+		}
+		if len(r.InstalledBinaries) > 0 {
+			fmt.Printf("Installed binaries:\n")
+			for _, b := range r.InstalledBinaries {
+				target := filepath.Join(r.CliParams.TargetPath, b)
+				fmt.Printf("  • %s (%s)\n", b, target)
+			}
+		}
+		if len(r.InstalledPackageNames) > 0 {
+			fmt.Printf("Installed system packages:\n")
+			for _, p := range r.InstalledPackageNames {
+				fmt.Printf("  • %s\n", p)
+			}
 		}
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/mattn/go-runewidth"
 	"github.com/pterm/pterm"
@@ -270,36 +271,7 @@ func findTargetApps(st *state.State, target string) []string {
 }
 
 func safeDeletePath(baseDir, name string) (string, error) {
-	if name == "" {
-		return "", fmt.Errorf("empty target name")
-	}
-	if filepath.IsAbs(name) || name == "." || name == ".." {
-		return "", fmt.Errorf("unsafe delete target %q", name)
-	}
-	cleanName := filepath.Clean(name)
-	if cleanName == "." || cleanName == ".." || cleanName == string(filepath.Separator) {
-		return "", fmt.Errorf("unsafe delete target %q", name)
-	}
-	if filepath.Base(cleanName) != cleanName {
-		return "", fmt.Errorf("refusing to delete path with traversal %q", name)
-	}
-	fullPath := filepath.Join(baseDir, cleanName)
-	absBase, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", err
-	}
-	absFull, err := filepath.Abs(fullPath)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(absBase, absFull)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("refusing to delete outside target path %q", name)
-	}
-	return fullPath, nil
+	return safety.SafeDeletePath(baseDir, name)
 }
 
 func RmStateOnly(target string) error {
@@ -456,9 +428,18 @@ func RemoveApp(target string, purge bool) error {
 		}
 
 		if app.SymlinkDir != "" {
-			if _, err := os.Lstat(app.SymlinkDir); err == nil {
-				if err := os.RemoveAll(app.SymlinkDir); err != nil {
-					log.Warn(fmt.Sprintf("Failed to purge package directory %s", app.SymlinkDir), "error", err)
+			cleanSym := filepath.Clean(app.SymlinkDir)
+			if (app.TargetPath != "" && cleanSym == filepath.Clean(app.TargetPath)) || safety.IsVitalOrProtected(cleanSym) {
+				log.Warn(fmt.Sprintf("Refusing to purge protected or target directory %s as package directory", app.SymlinkDir))
+			} else if err := safety.AssertSafeToRemoveAll(app.SymlinkDir); err != nil {
+				log.Warn(fmt.Sprintf("Refusing to purge package directory %s", app.SymlinkDir), "error", err)
+			} else if _, err := os.Lstat(app.SymlinkDir); err == nil {
+				if err := safety.RemoveAllManaged(app.SymlinkDir); err != nil {
+					if strings.Contains(err.Error(), ".gh-pt-managed") {
+						log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", app.SymlinkDir))
+					} else {
+						log.Warn(fmt.Sprintf("Failed to purge package directory %s", app.SymlinkDir), "error", err)
+					}
 				} else {
 					log.Infof("Purged package directory %s", app.SymlinkDir)
 				}
@@ -472,9 +453,15 @@ func RemoveApp(target string, purge bool) error {
 			}
 			if repo != "" {
 				canonicalSidecarDir := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", repo)
-				if _, err := os.Lstat(canonicalSidecarDir); err == nil {
-					if err := os.RemoveAll(canonicalSidecarDir); err != nil {
-						log.Warn(fmt.Sprintf("Failed to remove sidecar directory %s", canonicalSidecarDir), "error", err)
+				if err := safety.AssertSafeToRemoveAll(canonicalSidecarDir); err != nil {
+					log.Warn(fmt.Sprintf("Refusing to remove sidecar directory %s", canonicalSidecarDir), "error", err)
+				} else if _, err := os.Lstat(canonicalSidecarDir); err == nil {
+					if err := safety.RemoveAllManaged(canonicalSidecarDir); err != nil {
+						if strings.Contains(err.Error(), ".gh-pt-managed") {
+							log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", canonicalSidecarDir))
+						} else {
+							log.Warn(fmt.Sprintf("Failed to remove sidecar directory %s", canonicalSidecarDir), "error", err)
+						}
 					} else {
 						log.Infof("Purged sidecar directory %s", canonicalSidecarDir)
 					}
@@ -484,9 +471,15 @@ func RemoveApp(target string, purge bool) error {
 
 		if app.Clone || app.Fork {
 			if purge && app.TargetPath != "" {
-				if _, err := os.Lstat(app.TargetPath); err == nil {
-					if err := os.RemoveAll(app.TargetPath); err != nil {
-						log.Warn(fmt.Sprintf("Failed to purge repository directory %s", app.TargetPath), "error", err)
+				if err := safety.AssertSafeToRemoveAll(app.TargetPath); err != nil {
+					log.Warn(fmt.Sprintf("Refusing to purge protected directory %s as clone/fork target", app.TargetPath), "error", err)
+				} else if _, err := os.Lstat(app.TargetPath); err == nil {
+					if err := safety.RemoveAllManaged(app.TargetPath); err != nil {
+						if strings.Contains(err.Error(), ".gh-pt-managed") {
+							log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", app.TargetPath))
+						} else {
+							log.Warn(fmt.Sprintf("Failed to purge repository directory %s", app.TargetPath), "error", err)
+						}
 					} else {
 						log.Infof("Purged cloned/forked repository at %s", app.TargetPath)
 					}
@@ -498,7 +491,7 @@ func RemoveApp(target string, purge bool) error {
 
 		if app.CompileScript != "" {
 			if _, err := os.Lstat(app.CompileScript); err == nil {
-				if err := os.Remove(app.CompileScript); err != nil && !os.IsNotExist(err) {
+				if err := safety.Remove(app.CompileScript); err != nil && !os.IsNotExist(err) {
 					log.Warn(fmt.Sprintf("Failed to remove compile script %s", app.CompileScript), "error", err)
 				} else if err == nil {
 					if purge {
@@ -511,8 +504,17 @@ func RemoveApp(target string, purge bool) error {
 
 			repoParts := strings.Split(r, "/")
 			if len(repoParts) == 2 {
-				srcPath := filepath.Join(os.TempDir(), "gh-pt-src-"+repoParts[1])
-				_ = os.RemoveAll(srcPath)
+				srcPattern := "gh-pt-src-" + repoParts[1] + "-*"
+				matches, _ := filepath.Glob(filepath.Join(os.TempDir(), srcPattern))
+				for _, srcPath := range matches {
+					if fi, err := os.Lstat(srcPath); err == nil {
+						if fi.Mode()&os.ModeSymlink != 0 {
+							_ = safety.Remove(srcPath)
+						} else if fi.IsDir() {
+							_ = safety.RemoveAllManaged(srcPath)
+						}
+					}
+				}
 			}
 		}
 
@@ -780,26 +782,9 @@ func getPruneStopDirs() []string {
 // pruneEmptyParentDirs ascends the directory tree starting from startDir and removes
 // empty directories until it encounters a non-empty directory or a directory in stopDirs.
 func pruneEmptyParentDirs(startDir string, stopDirs []string) {
-	stopMap := make(map[string]bool)
-	for _, s := range stopDirs {
-		if s != "" {
-			stopMap[filepath.Clean(s)] = true
-		}
-	}
+	safety.PruneEmptyParentDirs(startDir, stopDirs)
+}
 
-	for curr := filepath.Clean(startDir); curr != "." && curr != string(filepath.Separator) && curr != filepath.VolumeName(curr)+string(filepath.Separator); curr = filepath.Dir(curr) {
-		if stopMap[curr] {
-			break
-		}
-
-		entries, err := os.ReadDir(curr)
-		if err != nil || len(entries) > 0 {
-			break
-		}
-
-		if err := os.Remove(curr); err != nil {
-			break
-		}
-		log.Infof("Pruned empty parent directory %s", curr)
-	}
+func isSystemOrProtectedDir(dir string) bool {
+	return safety.IsVitalOrProtected(dir)
 }

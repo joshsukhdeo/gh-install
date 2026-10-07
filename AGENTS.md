@@ -10,12 +10,14 @@ make fmt && make lint   # Format and lint code
 ```
 
 ## Context Routing
-→ cmd: cmd/CLAUDE.md
-→ params: params/CLAUDE.md
-→ release: release/CLAUDE.md
-→ selector: selector/CLAUDE.md
-→ state: state/CLAUDE.md
-→ config: config/CLAUDE.md
+
+Agents and subagents MUST read only the context file relevant to their active path:
+→ cmd: cmd/AGENTS.md
+→ params: params/AGENTS.md
+→ release: release/AGENTS.md
+→ selector: selector/AGENTS.md
+→ state: state/AGENTS.md
+→ config: config/AGENTS.md
 → memory: .memory/ (decisions.md, patterns.md, inbox.md)
 
 ## Core Invariants

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/joshsukhdeo/gh-pt/params"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/pterm/pterm"
 )
@@ -93,6 +94,11 @@ func (r *RootCLI) handleHook() error {
 
 // executeHookScript writes a hook script to a temp file, marks it executable, executes it, and cleans it up.
 func executeHookScript(event, repo, script string) error {
+	if safety.IsDryRun() {
+		pterm.Info.Printf("[dry-run] Would execute %s hook for %s\n", event, repo)
+		return nil
+	}
+
 	tmpFile, err := os.CreateTemp("", fmt.Sprintf("gh-pt-hook-%s-*.sh", event))
 	if err != nil {
 		return fmt.Errorf("failed to create temp file for %s hook: %w", event, err)

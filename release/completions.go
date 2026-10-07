@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 )
@@ -17,7 +18,7 @@ import (
 // SetupBinaryCompletions checks an installed binary for completion generation
 // or extracts completion scripts, saving them to $XDG_DATA_HOME/gh-pt/completions/.
 func SetupBinaryCompletions(binaryPath string, noCompletionSetup bool) error {
-	if noCompletionSetup || binaryPath == "" {
+	if safety.IsDryRun() || noCompletionSetup || binaryPath == "" {
 		return nil
 	}
 
@@ -44,7 +45,7 @@ func SetupBinaryCompletions(binaryPath string, noCompletionSetup bool) error {
 // ScanAndInstallArchiveCompletions sweeps an extracted directory for completion scripts
 // (e.g. complete.bash, <bin>.bash, <bin>.zsh, completions/*) and copies them to the completions store.
 func ScanAndInstallArchiveCompletions(archiveDir, binName string, noCompletionSetup bool) bool {
-	if noCompletionSetup || archiveDir == "" || binName == "" {
+	if safety.IsDryRun() || noCompletionSetup || archiveDir == "" || binName == "" {
 		return false
 	}
 

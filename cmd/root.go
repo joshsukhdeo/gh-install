@@ -25,6 +25,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/release"
 	"github.com/joshsukhdeo/gh-pt/resolver"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/joshsukhdeo/gh-pt/ui"
@@ -127,6 +128,8 @@ func (r *RootCLI) Validate() error {
 					log.Error(fmt.Sprintf("target installation path '%s' error", r.TargetPath), "error", err)
 					return err
 				}
+				// Mark directory as managed by gh-pt for safe removal later
+				_ = safety.WriteGhptManagedMarker(r.TargetPath)
 				return nil
 			} else {
 				log.Error(fmt.Sprintf("target installation path '%s' error", r.TargetPath), "error", err)
@@ -153,6 +156,8 @@ func PostBuild(k *kong.Kong) error {
 
 func (r *RootCLI) RunInstall() error {
 	r.ensureCliParams()
+	safety.SetDryRun(r.DryRun)
+	defer safety.SetDryRun(false)
 	if r.NoEmojis {
 		r.DisableIcons = true
 	}
@@ -365,7 +370,7 @@ func (r *RootCLI) RunInstall() error {
 		return DoUpdate(r, ghClient)
 	}
 
-	if r.Overwrite {
+	if r.Overwrite && !r.DryRun {
 		// If overwrite/force is used, attempt to purge any existing installation first
 		_ = RemoveApp(r.Repository, true)
 	}
@@ -1018,13 +1023,15 @@ func (r *RootCLI) moveDistWithSidecarDetection(srcDir, dstDir string) ([]string,
 	}
 
 	// Clean up empty directories in srcDir
-	_ = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() && path != srcDir {
-			_ = os.Remove(path)
-		}
-		return nil
-	})
-	_ = os.Remove(srcDir)
+	if err := safety.AssertSafeToRemoveAll(srcDir); err == nil {
+		_ = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() && path != srcDir {
+				_ = safety.Remove(path)
+			}
+			return nil
+		})
+		_ = safety.Remove(srcDir)
+	}
 
 	return installedSidecars, nil
 }
@@ -1136,6 +1143,11 @@ func (r *RootCLI) resolveCompileDependencies(dependencies []ai.Dependency, repoD
 }
 
 func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
+	if r.DryRun {
+		log.Info(fmt.Sprintf("[dry-run] Would initiate AI safety scan for %s", r.Repository))
+		return nil
+	}
+
 	aiCmdTemplate := r.AICmd
 	if cfg != nil && cfg.AI.AICmd != "" && (r.AICmd == "" || r.AICmd == "agy -p \"%s\"") {
 		aiCmdTemplate = cfg.AI.AICmd
@@ -1164,14 +1176,17 @@ func (r *RootCLI) handleAISafetyScan(cfg *config.Config) error {
 }
 
 func forceRemoveAll(path string) error {
-	err := os.RemoveAll(path)
+	if err := safety.AssertSafeToRemoveAll(path); err != nil {
+		return err
+	}
+	err := safety.RemoveAll(path)
 	if err != nil {
 		if runtime.GOOS != "windows" {
 			_ = exec.Command("rm", "-rf", path).Run()
 		} else {
 			_ = exec.Command("cmd", "/C", "rmdir", "/s", "/q", path).Run()
 		}
-		return os.RemoveAll(path)
+		return safety.RemoveAll(path)
 	}
 	return nil
 }
@@ -1204,9 +1219,23 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			repoID = parts[0]
 		}
 		symlinkDir = filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+	}
+
+	if r.DryRun {
+		if symlinkDir != "" {
+			log.Info(fmt.Sprintf("[dry-run] Would clone %s to %s, generate build script at %s, compile/install to %s, and symlink to %s", r.Repository, repoDir, scriptPath, symlinkDir, targetPath))
+		} else {
+			log.Info(fmt.Sprintf("[dry-run] Would clone %s to %s, generate build script at %s, and execute compilation", r.Repository, repoDir, scriptPath))
+		}
+		return nil
+	}
+
+	if r.Symlink {
 		if err := os.MkdirAll(symlinkDir, 0755); err != nil {
 			return fmt.Errorf("failed to create symlink apps directory: %w", err)
 		}
+		// Mark directory as managed by gh-pt for safe removal later
+		_ = safety.WriteGhptManagedMarker(symlinkDir)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(repoDir), 0755); err != nil {
@@ -1228,15 +1257,6 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		"target_path", targetPath,
 		"symlink_dir", symlinkDir,
 	)
-
-	if r.DryRun {
-		if symlinkDir != "" {
-			log.Info(fmt.Sprintf("[dry-run] Would clone %s to %s, generate build script at %s, compile/install to %s, and symlink to %s", r.Repository, repoDir, scriptPath, symlinkDir, targetPath))
-		} else {
-			log.Info(fmt.Sprintf("[dry-run] Would clone %s to %s, generate build script at %s, and execute compilation", r.Repository, repoDir, scriptPath))
-		}
-		return nil
-	}
 
 	// 1. Clone repo into builds directory
 	cloneArgs := []string{"repo", "clone", r.Repository, repoDir}

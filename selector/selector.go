@@ -86,6 +86,37 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 		}
 	}
 
+	if s.Kind == Asset && len(s.NamesMatcher) == 0 {
+		classifier := DefaultClassifier()
+		if s.AvxLevel != "" && s.AvxLevel != "auto" {
+			classifier.HostAVXLevel = s.AvxLevel
+		}
+		var assetNames []string
+		for _, it := range s.Items {
+			assetNames = append(assetNames, it.Name)
+		}
+		defaultAssets := classifier.PickDefaultAssetsWithContext(s.Repository, assetNames, s.RegexpMatchers)
+		if len(defaultAssets) > 0 {
+			var matchedItems []*SelectorItem
+			defaultMap := make(map[string]bool)
+			for _, da := range defaultAssets {
+				defaultMap[da] = true
+			}
+			for _, it := range s.Items {
+				if defaultMap[it.Name] {
+					it.Selected = true
+					matchedItems = append(matchedItems, it)
+				}
+			}
+			if len(matchedItems) > 0 {
+				if s.OnlyFirstMatch && len(matchedItems) > 1 {
+					matchedItems = matchedItems[:1]
+				}
+				return matchedItems, nil
+			}
+		}
+	}
+
 	if len(s.NamesMatcher) > 0 {
 		for _, item := range s.Items {
 			for _, name := range s.NamesMatcher {

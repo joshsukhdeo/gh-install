@@ -12,6 +12,7 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
 	"github.com/joshsukhdeo/gh-pt/config"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/selector"
 	"github.com/joshsukhdeo/gh-pt/state"
 )
@@ -222,9 +223,23 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 
 	symlinkDir := r.resolvePackageDir(ownerID, repoID)
 
+	if r.CliParams.DryRun {
+		for _, binary := range binaries {
+			destPath := r.resolveDestinationPath(binary.Name)
+			srcPath := filepath.Join(symlinkDir, binary.Name)
+			r.InstalledBinaries = append(r.InstalledBinaries, filepath.Base(destPath))
+			r.InstalledFiles = append(r.InstalledFiles, srcPath)
+			r.InstalledSymlinks = append(r.InstalledSymlinks, destPath)
+			log.Infof("[dry-run] Would symlink %s -> %s", destPath, srcPath)
+		}
+		return symlinkDir, nil
+	}
+
 	if err := os.MkdirAll(symlinkDir, 0755); err != nil {
 		return "", err
 	}
+	// Mark directory as managed by gh-pt for safe removal later
+	_ = safety.WriteGhptManagedMarker(symlinkDir)
 
 	// Copy all files to symlinkDir
 	if binaries[0].ExtractDir != "" {
@@ -380,6 +395,8 @@ func (r *GithubRelease) symlinkSidecarsToDest(symlinkDir, sidecarDest string) er
 	if err := os.MkdirAll(sidecarDest, 0755); err != nil {
 		return err
 	}
+	// Mark directory as managed by gh-pt for safe removal later
+	_ = safety.WriteGhptManagedMarker(sidecarDest)
 
 	sidecarRegex := ""
 	if r.CliParams != nil {

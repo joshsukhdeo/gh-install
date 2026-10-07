@@ -59,4 +59,6 @@ type SelectorItem struct {
 	FsPath       string
 	Fs           fs.FS
 	Prerelease   bool
+	Size         int64
+	URL          string
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/adrg/xdg"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/joshsukhdeo/gh-pt/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,6 +118,8 @@ func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
 	// Create package directory (SymlinkDir) with contents
 	symlinkDir := filepath.Join(tmpDir, "packages", "test-repo3")
 	require.NoError(t, os.MkdirAll(symlinkDir, 0755))
+	// Add gh-pt managed marker for safe removal
+	require.NoError(t, safety.WriteGhptManagedMarker(symlinkDir))
 	targetBinary := filepath.Join(symlinkDir, "binary3")
 	require.NoError(t, os.WriteFile(targetBinary, []byte("pkg binary data"), 0755))
 	extraFile := filepath.Join(symlinkDir, "extra.txt")
@@ -139,6 +142,8 @@ func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
 	// Create canonical sidecar directory $XDG_DATA_HOME/gh-pt/sidecars/{repo}
 	canonicalSidecarDir := filepath.Join(xdg.DataHome, "gh-pt", "sidecars", "test/repo3")
 	require.NoError(t, os.MkdirAll(canonicalSidecarDir, 0755))
+	// Add gh-pt managed marker for safe removal
+	require.NoError(t, safety.WriteGhptManagedMarker(canonicalSidecarDir))
 	canonicalFile := filepath.Join(canonicalSidecarDir, "canonical.cfg")
 	require.NoError(t, os.WriteFile(canonicalFile, []byte("cfg"), 0644))
 
@@ -223,4 +228,62 @@ func TestRemoveApp_PrunesEmptyParentDirectories(t *testing.T) {
 	assert.FileExists(t, siblingFile)
 	// tmpDir (XDG_DATA_HOME stop-dir) must remain intact
 	assert.DirExists(t, tmpDir)
+}
+
+func TestIsSystemOrProtectedDir(t *testing.T) {
+	assert.True(t, isSystemOrProtectedDir(""))
+	assert.True(t, isSystemOrProtectedDir("/"))
+	assert.True(t, isSystemOrProtectedDir("."))
+	assert.True(t, isSystemOrProtectedDir("/usr"))
+	assert.True(t, isSystemOrProtectedDir("/usr/bin"))
+	assert.True(t, isSystemOrProtectedDir("/usr/local"))
+	assert.True(t, isSystemOrProtectedDir("/usr/local/bin"))
+	assert.True(t, isSystemOrProtectedDir("/etc"))
+	assert.True(t, isSystemOrProtectedDir("/var"))
+	assert.True(t, isSystemOrProtectedDir("/opt"))
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		assert.True(t, isSystemOrProtectedDir(home))
+		assert.True(t, isSystemOrProtectedDir(filepath.Join(home, ".local")))
+		assert.True(t, isSystemOrProtectedDir(filepath.Join(home, ".local", "bin")))
+		assert.True(t, isSystemOrProtectedDir(filepath.Join(home, "bin")))
+	}
+
+	// Safe application package directory should NOT be protected
+	tmpDir := t.TempDir()
+	appPkgDir := filepath.Join(tmpDir, "gh-pt", "packages", "owner", "repo")
+	assert.False(t, isSystemOrProtectedDir(appPkgDir))
+}
+
+func TestRemoveApp_ProtectsSystemAndTargetDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	origXdg := os.Getenv("XDG_DATA_HOME")
+	os.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+	defer func() {
+		os.Setenv("XDG_DATA_HOME", origXdg)
+		xdg.Reload()
+	}()
+
+	// Simulate dangerous state where SymlinkDir points to TargetPath
+	targetDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	keepFile := filepath.Join(targetDir, "important_binary")
+	require.NoError(t, os.WriteFile(keepFile, []byte("preserve me"), 0755))
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "danger/app",
+		TargetPath: targetDir,
+		SymlinkDir: targetDir, // Accidentally identical to TargetPath
+	}))
+
+	err = RemoveApp("danger/app", true)
+	require.NoError(t, err)
+
+	// TargetDir and files inside it MUST NOT be wiped
+	assert.DirExists(t, targetDir)
+	assert.FileExists(t, keepFile)
 }

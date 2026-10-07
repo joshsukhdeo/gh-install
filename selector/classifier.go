@@ -1,9 +1,13 @@
 package selector
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -253,7 +257,10 @@ func (c *AssetClassifier) DetectOS(name string) AssetOS {
 		strings.Contains(lower, "darwin") ||
 		strings.Contains(lower, "macos") ||
 		strings.Contains(lower, "osx") ||
-		strings.Contains(lower, "apple") {
+		strings.Contains(lower, "apple") ||
+		strings.Contains(lower, ".app.tar.gz") ||
+		strings.Contains(lower, ".app.zip") ||
+		strings.HasSuffix(lower, ".app") {
 		return OSDarwin
 	}
 
@@ -646,6 +653,364 @@ func (c *AssetClassifier) ClassifyAsset(name string, size int64, allAssets []str
 	}
 }
 
+func isPackageFormat(name string) bool {
+	lower := strings.ToLower(name)
+	for _, ext := range []string{".deb", ".rpm", ".appimage", ".flatpak", ".snap", ".apk", ".pkg.tar.zst", ".pkg.tar.xz", ".dmg", ".pkg", ".msi"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// BinaryMagic represents the magic header signature of an executable binary format.
+type BinaryMagic int
+
+const (
+	BinaryMagicUnknown BinaryMagic = iota
+	BinaryMagicELF      // Linux/Unix executable (\x7fELF)
+	BinaryMagicMachO32  // macOS 32-bit (\xfe\xed\xfa\xce)
+	BinaryMagicMachO64  // macOS 64-bit (\xfe\xed\xfa\xcf)
+	BinaryMagicPE       // Windows PE/COFF (MZ)
+	BinaryMagicWasm     // WebAssembly (\x00asm)
+)
+
+// DetectBinaryMagic reads the first few bytes of a file to identify its executable format.
+func DetectBinaryMagic(path string) BinaryMagic {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 4 {
+		return BinaryMagicUnknown
+	}
+
+	// Check for ELF (\x7fELF)
+	if bytes.HasPrefix(data, []byte{0x7f, 'E', 'L', 'F'}) {
+		return BinaryMagicELF
+	}
+
+	// Check for Mach-O 32-bit (\xfe\xed\xfa\xce) and 64-bit (\xfe\xed\xfa\xcf)
+	if bytes.HasPrefix(data, []byte{0xfe, 0xed, 0xfa, 0xce}) {
+		return BinaryMagicMachO32
+	}
+	if bytes.HasPrefix(data, []byte{0xfe, 0xed, 0xfa, 0xcf}) {
+		return BinaryMagicMachO64
+	}
+
+	// Check for PE/COFF (MZ)
+	if bytes.HasPrefix(data, []byte{'M', 'Z'}) {
+		return BinaryMagicPE
+	}
+
+	// Check for WebAssembly (\x00asm)
+	if bytes.HasPrefix(data, []byte{0x00, 'a', 's', 'm'}) {
+		return BinaryMagicWasm
+	}
+
+	return BinaryMagicUnknown
+}
+
+// IsVerifiedBinary checks if a file at path is a verified executable binary by magic header.
+// Returns true only for ELF, Mach-O, PE, or Wasm binaries.
+func IsVerifiedBinary(path string) bool {
+	magic := DetectBinaryMagic(path)
+	return magic != BinaryMagicUnknown
+}
+
+// IsVerifiedBinaryStream checks if an io.Reader stream starts with a verified binary magic header.
+// Reads only the first 4 bytes without consuming the entire stream.
+func IsVerifiedBinaryStream(r io.Reader) (bool, error) {
+	header := make([]byte, 4)
+	n, err := io.ReadFull(r, header)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return false, err
+	}
+	if n < 4 {
+		return false, nil
+	}
+
+	if bytes.HasPrefix(header, []byte{0x7f, 'E', 'L', 'F'}) {
+		return true, nil
+	}
+	if bytes.HasPrefix(header, []byte{0xfe, 0xed, 0xfa, 0xce}) || bytes.HasPrefix(header, []byte{0xfe, 0xed, 0xfa, 0xcf}) {
+		return true, nil
+	}
+	if bytes.HasPrefix(header, []byte{'M', 'Z'}) {
+		return true, nil
+	}
+	if bytes.HasPrefix(header, []byte{0x00, 'a', 's', 'm'}) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+var osReadFile = os.ReadFile
+
+func extractPackageBase(name string) string {
+	base := filepath.Base(name)
+	ext := filepath.Ext(base)
+	base = strings.TrimSuffix(base, ext)
+	if idx := strings.Index(base, "_"); idx > 0 {
+		return strings.ToLower(base[:idx])
+	}
+	if idx := strings.Index(base, "-"); idx > 0 {
+		return strings.ToLower(base[:idx])
+	}
+	return strings.ToLower(base)
+}
+
+// PickDefaultAssetsWithContext identifies all assets that should be installed by default.
+// Packages compete only amongst themselves for precedence (e.g. .deb > .appimage > .rpm on dpkg).
+// Binaries found (standalone executable or companion CLI) are installed alongside the package by default,
+// unless the binary is clearly a sidecar, checksum, or leftover dev byproduct.
+func (c *AssetClassifier) PickDefaultAssetsWithContext(repo string, assets []string, regexMatchers []string) []string {
+	if len(assets) == 0 {
+		return nil
+	}
+
+	effectiveAVX := c.HostAVXLevel
+	if effectiveAVX == "" {
+		effectiveAVX = "avx"
+	}
+
+	var candidates []string
+	for _, a := range assets {
+		subcat := c.DetectSubcategory(a)
+		if subcat == SubcatNative {
+			candidates = append(candidates, a)
+		}
+	}
+
+	if len(candidates) == 0 {
+		for _, a := range assets {
+			subcat := c.DetectSubcategory(a)
+			if subcat == SubcatEmulated || (c.WineMode != "off" && c.WineMode != "disallow" && subcat == SubcatWine) {
+				candidates = append(candidates, a)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Filter out sidecars, checksums, signatures, metadata, licenses, sources, and dev byproducts
+	var validCandidates []string
+	for _, cand := range candidates {
+		lower := strings.ToLower(cand)
+		if c.IsSidecar(cand) || c.IsChecksum(cand) || c.IsSignature(cand) || c.IsMetadata(cand) || c.IsLicense(cand) {
+			continue
+		}
+		if strings.Contains(lower, "source") && (strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz")) {
+			continue
+		}
+		if strings.HasSuffix(lower, "-src.zip") || strings.HasSuffix(lower, "-src.tar.gz") || strings.HasSuffix(lower, ".src.tar.gz") {
+			continue
+		}
+		validCandidates = append(validCandidates, cand)
+	}
+
+	if len(validCandidates) == 0 {
+		validCandidates = candidates
+	}
+
+	// Partition into packages and binaries
+	var packageCandidates []string
+	var binaryCandidates []string
+
+	for _, cand := range validCandidates {
+		if isPackageFormat(cand) {
+			packageCandidates = append(packageCandidates, cand)
+		} else {
+			binaryCandidates = append(binaryCandidates, cand)
+		}
+	}
+
+	// If regex matchers are provided, filter candidates according to the regexes
+	if len(regexMatchers) > 0 {
+		var matchedPkgs []string
+		for _, rx := range regexMatchers {
+			compiled, err := regexp.Compile(rx)
+			if err != nil {
+				continue
+			}
+			for _, cand := range packageCandidates {
+				if compiled.MatchString(cand) {
+					matchedPkgs = append(matchedPkgs, cand)
+				}
+			}
+			if len(matchedPkgs) > 0 {
+				packageCandidates = matchedPkgs
+				break
+			}
+		}
+
+		var matchedBins []string
+		for _, rx := range regexMatchers {
+			compiled, err := regexp.Compile(rx)
+			if err != nil {
+				continue
+			}
+			for _, cand := range binaryCandidates {
+				if compiled.MatchString(cand) {
+					matchedBins = append(matchedBins, cand)
+				}
+			}
+			if len(matchedBins) > 0 {
+				binaryCandidates = matchedBins
+				break
+			}
+		}
+	}
+
+	// 1. Pick the best package candidate (packages compete only amongst themselves)
+	var bestPackage string
+	if len(packageCandidates) > 0 {
+		for _, cand := range packageCandidates {
+			if strings.Contains(strings.ToLower(cand), strings.ToLower(effectiveAVX)) {
+				bestPackage = cand
+				break
+			}
+		}
+		if bestPackage == "" {
+			switch c.HostOS {
+			case "linux":
+				hasDpkg := false
+				hasRpm := false
+				if _, err := lookPath("dpkg"); err == nil {
+					hasDpkg = true
+				}
+				if _, err := lookPath("rpm"); err == nil {
+					hasRpm = true
+				}
+				var preferredExts []string
+				if hasDpkg && !hasRpm {
+					preferredExts = []string{".deb", ".snap", ".flatpak", ".appimage"}
+				} else if hasRpm && !hasDpkg {
+					preferredExts = []string{".rpm", ".snap", ".flatpak", ".appimage"}
+				} else if hasDpkg && hasRpm {
+					preferredExts = []string{".deb", ".rpm", ".snap", ".flatpak", ".appimage"}
+				} else {
+					preferredExts = []string{".appimage", ".flatpak", ".snap"}
+				}
+				for _, pref := range preferredExts {
+					for _, cand := range packageCandidates {
+						if strings.EqualFold(filepath.Ext(cand), pref) {
+							bestPackage = cand
+							break
+						}
+					}
+					if bestPackage != "" {
+						break
+					}
+				}
+			case "darwin":
+				for _, pref := range []string{".dmg", ".pkg"} {
+					for _, cand := range packageCandidates {
+						if strings.EqualFold(filepath.Ext(cand), pref) {
+							bestPackage = cand
+							break
+						}
+					}
+					if bestPackage != "" {
+						break
+					}
+				}
+			case "windows":
+				for _, pref := range []string{".msi", ".exe"} {
+					for _, cand := range packageCandidates {
+						if strings.EqualFold(filepath.Ext(cand), pref) {
+							bestPackage = cand
+							break
+						}
+					}
+					if bestPackage != "" {
+						break
+					}
+				}
+			}
+			if bestPackage == "" {
+				bestPackage = packageCandidates[0]
+			}
+		}
+	}
+
+	// 2. Pick the best binary candidate (if any)
+	var bestBinary string
+	if len(binaryCandidates) > 0 {
+		for _, cand := range binaryCandidates {
+			if strings.Contains(strings.ToLower(cand), strings.ToLower(effectiveAVX)) {
+				bestBinary = cand
+				break
+			}
+		}
+		if bestBinary == "" {
+			// If a package is also present, only choose a binary if it is a standalone executable
+			// or clearly a distinct CLI/tool (to avoid duplicate archives of the same program)
+			if bestPackage != "" {
+				pkgBase := extractPackageBase(bestPackage)
+				for _, cand := range binaryCandidates {
+					lowerCand := strings.ToLower(cand)
+					ext := filepath.Ext(cand)
+					// Only choose binary if it is a distinct companion CLI/tool (e.g. app-cli)
+					// to avoid duplicate binary collision between package and standalone binary of the same app.
+					isCompanion := strings.Contains(lowerCand, "cli") ||
+						strings.Contains(lowerCand, "daemon") ||
+						strings.Contains(lowerCand, "server") ||
+						strings.Contains(lowerCand, "agent") ||
+						strings.Contains(lowerCand, "tool")
+					if !isCompanion {
+						candBase := extractPackageBase(cand)
+						if candBase == pkgBase {
+							// Redundant duplicate binary of the same program
+							continue
+						}
+					}
+					// Standalone executable (extensionless or .exe on Windows) or companion tool
+					if ext == "" || (c.HostOS == "windows" && strings.EqualFold(ext, ".exe")) || isCompanion {
+						if !strings.Contains(lowerCand, "musl") {
+							bestBinary = cand
+							break
+						} else if bestBinary == "" {
+							bestBinary = cand
+						}
+					}
+				}
+			} else {
+				// No package is present: pick standard binary/archive
+				for _, cand := range binaryCandidates {
+					lowerCand := strings.ToLower(cand)
+					if !strings.Contains(lowerCand, "musl") {
+						bestBinary = cand
+						break
+					}
+				}
+				if bestBinary == "" {
+					bestBinary = binaryCandidates[0]
+				}
+			}
+		}
+	}
+
+	var results []string
+	if bestPackage != "" {
+		results = append(results, bestPackage)
+	}
+	if bestBinary != "" {
+		results = append(results, bestBinary)
+	}
+
+	if len(results) > 0 {
+		return results
+	}
+
+	// Fallback to legacy single asset selector
+	primary := c.PickPrimaryDefaultAssetWithContext(repo, assets, regexMatchers)
+	if primary != "" {
+		return []string{primary}
+	}
+	return nil
+}
+
 // PickPrimaryDefaultAsset identifies which asset from the release gh-pt will select by default.
 func (c *AssetClassifier) PickPrimaryDefaultAsset(assets []string) string {
 	return c.PickPrimaryDefaultAssetWithContext("", assets, nil)
@@ -774,7 +1139,12 @@ func (c *AssetClassifier) ClassifyRelease(names []string, sizes []int64) map[Ins
 // ClassifyReleaseWithContext takes repository context and regex matchers to ensure
 // exact parity with gh-pt install / update asset selection.
 func (c *AssetClassifier) ClassifyReleaseWithContext(repo string, names []string, sizes []int64, regexMatchers []string) map[InstallCategory][]ClassifiedAsset {
-	primaryDefault := c.PickPrimaryDefaultAssetWithContext(repo, names, regexMatchers)
+	defaultAssets := c.PickDefaultAssetsWithContext(repo, names, regexMatchers)
+	defaultMap := make(map[string]bool)
+	for _, da := range defaultAssets {
+		defaultMap[da] = true
+	}
+
 	result := make(map[InstallCategory][]ClassifiedAsset)
 
 	for i, name := range names {
@@ -782,7 +1152,10 @@ func (c *AssetClassifier) ClassifyReleaseWithContext(repo string, names []string
 		if i < len(sizes) {
 			sz = sizes[i]
 		}
-		item := c.ClassifyAsset(name, sz, names, primaryDefault)
+		item := c.ClassifyAsset(name, sz, names, "")
+		if defaultMap[name] {
+			item.InstallCategory = CategoryDefaultInstall
+		}
 		result[item.InstallCategory] = append(result[item.InstallCategory], item)
 	}
 

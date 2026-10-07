@@ -200,7 +200,12 @@ func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriter
 		}
 
 		decoder := json.NewDecoder(response.Body)
-		responseData := []struct{ Name string }{}
+		responseData := []struct {
+			Name               string `json:"name"`
+			Size               int64  `json:"size"`
+			BrowserDownloadUrl string `json:"browser_download_url"`
+			URL                string `json:"url"`
+		}{}
 		err = decoder.Decode(&responseData)
 		if err != nil {
 			return nil, err
@@ -210,8 +215,16 @@ func AssetSelector(ghClient GithubClient, repo string, criteria AssetMatchCriter
 		}
 
 		for index, val := range responseData {
-
-			items = append(items, &SelectorItem{Name: val.Name, Id: index})
+			downloadURL := val.BrowserDownloadUrl
+			if downloadURL == "" {
+				downloadURL = val.URL
+			}
+			items = append(items, &SelectorItem{
+				Name: val.Name,
+				Id:   index,
+				Size: val.Size,
+				URL:  downloadURL,
+			})
 			log.Debug("got release asset", "repository", repo, "release id", criteria.ReleaseId, "asset name", val.Name, "asset index (id)", index)
 		}
 
