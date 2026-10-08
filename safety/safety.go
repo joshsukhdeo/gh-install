@@ -678,13 +678,19 @@ func SafeDeletePath(baseDir, name string) (string, error) {
 
 // PruneEmptyParentDirs ascends the directory tree starting from startDir and removes
 // empty directories until it encounters a non-empty directory, a directory in stopDirs,
-// or a vital/protected directory.
+// or a vital/protected directory. It also enforces that pruning does not escape the gh-pt data namespace.
 func PruneEmptyParentDirs(startDir string, stopDirs []string) {
 	stopMap := make(map[string]bool)
 	for _, s := range stopDirs {
 		if s != "" {
 			stopMap[filepath.Clean(s)] = true
 		}
+	}
+
+	if xdg.DataHome != "" {
+		ghptData := filepath.Join(filepath.Clean(xdg.DataHome), "gh-pt")
+		stopMap[ghptData] = true
+		stopMap[filepath.Join(ghptData, "packages")] = true
 	}
 
 	for curr := filepath.Clean(startDir); curr != "." && curr != string(filepath.Separator) && curr != filepath.VolumeName(curr)+string(filepath.Separator); curr = filepath.Dir(curr) {
@@ -742,6 +748,24 @@ func RemoveAllManaged(path string) error {
 		return err
 	}
 	return os.RemoveAll(path)
+}
+
+// RemoveLegacySafe attempts to remove a directory safely. It first checks for the
+// .gh-pt-managed marker using RemoveAllManaged. If it fails specifically due to the
+// missing marker, it falls back to AssertSafeToRemoveAll to ensure the path is safely
+// within the gh-pt namespace before deleting it.
+func RemoveLegacySafe(path string) error {
+	err := RemoveAllManaged(path)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrPathOutsideAllowed) && strings.Contains(err.Error(), "missing "+GhptManagedMarker) {
+		if assertErr := AssertSafeToRemoveAll(path); assertErr != nil {
+			return assertErr
+		}
+		return os.RemoveAll(path)
+	}
+	return err
 }
 
 // SafeMkdirTemp creates a temporary directory safely, verifying that the parent directory

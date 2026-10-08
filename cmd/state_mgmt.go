@@ -18,6 +18,7 @@ import (
 )
 
 var execCommand = exec.Command
+var execLookPath = exec.LookPath
 
 func fixEmojiPadding(data pterm.TableData) pterm.TableData {
 	for i, row := range data {
@@ -293,7 +294,7 @@ func RmStateOnly(target string) error {
 	}
 	return st.Save()
 }
-func RemoveApp(target string, purge bool) error {
+func RemoveApp(target string, purge bool, unsafeSkipDirFlagCheck bool) error {
 	st, err := state.LoadState()
 	if err != nil {
 		return err
@@ -324,14 +325,18 @@ func RemoveApp(target string, purge bool) error {
 			for _, pkgName := range app.PackageNames {
 				log.Infof("Uninstalling package %s...", pkgName)
 				var cmd *exec.Cmd
-				if _, err := exec.LookPath("dpkg"); err == nil {
-					cmd = execCommand("sudo", "dpkg", "-r", pkgName)
-				} else if _, err := exec.LookPath("rpm"); err == nil {
-					cmd = execCommand("sudo", "rpm", "-e", pkgName)
-				} else if _, err := exec.LookPath("pacman"); err == nil {
-					cmd = execCommand("sudo", "pacman", "-R", "--noconfirm", pkgName)
-				} else if _, err := exec.LookPath("pkg"); err == nil {
-					cmd = execCommand("sudo", "pkg", "delete", "-y", pkgName)
+				if _, err := execLookPath("dpkg"); err == nil {
+					script := fmt.Sprintf(`if command -v apt-get >/dev/null 2>&1; then sudo apt-get remove -y "%s"; else sudo dpkg -r "%s"; fi`, pkgName, pkgName)
+					cmd = execCommand("sh", "-c", script)
+				} else if _, err := execLookPath("rpm"); err == nil {
+					script := fmt.Sprintf(`if command -v dnf >/dev/null 2>&1; then sudo dnf remove -y "%s"; elif command -v yum >/dev/null 2>&1; then sudo yum remove -y "%s"; else sudo rpm -e "%s"; fi`, pkgName, pkgName, pkgName)
+					cmd = execCommand("sh", "-c", script)
+				} else if _, err := execLookPath("pacman"); err == nil {
+					script := fmt.Sprintf(`sudo pacman -Rs --noconfirm "%s"`, pkgName)
+					cmd = execCommand("sh", "-c", script)
+				} else if _, err := execLookPath("pkg"); err == nil {
+					script := fmt.Sprintf(`sudo pkg delete -y "%s"`, pkgName)
+					cmd = execCommand("sh", "-c", script)
 				}
 
 				if cmd != nil {
@@ -466,7 +471,12 @@ func RemoveApp(target string, purge bool) error {
 			} else if err := safety.AssertSafeToRemoveAll(app.SymlinkDir); err != nil {
 				log.Warn(fmt.Sprintf("Refusing to purge package directory %s", app.SymlinkDir), "error", err)
 			} else if _, err := os.Lstat(app.SymlinkDir); err == nil {
-				if err := safety.RemoveAllManaged(app.SymlinkDir); err != nil {
+				if err := func() error {
+					if unsafeSkipDirFlagCheck {
+						return safety.RemoveLegacySafe(app.SymlinkDir)
+					}
+					return safety.RemoveAllManaged(app.SymlinkDir)
+				}(); err != nil {
 					if strings.Contains(err.Error(), ".gh-pt-managed") {
 						log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", app.SymlinkDir))
 					} else {
@@ -488,7 +498,12 @@ func RemoveApp(target string, purge bool) error {
 				if err := safety.AssertSafeToRemoveAll(canonicalSidecarDir); err != nil {
 					log.Warn(fmt.Sprintf("Refusing to remove sidecar directory %s", canonicalSidecarDir), "error", err)
 				} else if _, err := os.Lstat(canonicalSidecarDir); err == nil {
-					if err := safety.RemoveAllManaged(canonicalSidecarDir); err != nil {
+					if err := func() error {
+						if unsafeSkipDirFlagCheck {
+							return safety.RemoveLegacySafe(canonicalSidecarDir)
+						}
+						return safety.RemoveAllManaged(canonicalSidecarDir)
+					}(); err != nil {
 						if strings.Contains(err.Error(), ".gh-pt-managed") {
 							log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", canonicalSidecarDir))
 						} else {
@@ -506,7 +521,12 @@ func RemoveApp(target string, purge bool) error {
 				if err := safety.AssertSafeToRemoveAll(app.TargetPath); err != nil {
 					log.Warn(fmt.Sprintf("Refusing to purge protected directory %s as clone/fork target", app.TargetPath), "error", err)
 				} else if _, err := os.Lstat(app.TargetPath); err == nil {
-					if err := safety.RemoveAllManaged(app.TargetPath); err != nil {
+					if err := func() error {
+						if unsafeSkipDirFlagCheck {
+							return safety.RemoveLegacySafe(app.TargetPath)
+						}
+						return safety.RemoveAllManaged(app.TargetPath)
+					}(); err != nil {
 						if strings.Contains(err.Error(), ".gh-pt-managed") {
 							log.Warn(fmt.Sprintf("Refusing to purge unmanaged directory %s", app.TargetPath))
 						} else {
@@ -543,7 +563,12 @@ func RemoveApp(target string, purge bool) error {
 						if fi.Mode()&os.ModeSymlink != 0 {
 							_ = safety.Remove(srcPath)
 						} else if fi.IsDir() {
-							_ = safety.RemoveAllManaged(srcPath)
+							_ = func() error {
+								if unsafeSkipDirFlagCheck {
+									return safety.RemoveLegacySafe(srcPath)
+								}
+								return safety.RemoveAllManaged(srcPath)
+							}()
 						}
 					}
 				}

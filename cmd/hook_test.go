@@ -202,7 +202,7 @@ func TestRemoveApp_ExecutesPreUninstallHook(t *testing.T) {
 	}
 	require.NoError(t, st.Save())
 
-	err = RemoveApp("owner/removable", false)
+	err = RemoveApp("owner/removable", false, false)
 	require.NoError(t, err)
 
 	// Verify pre-uninstall hook ran
@@ -237,7 +237,7 @@ func TestRemoveApp_PreUninstallHookFailureAbortsRemoval(t *testing.T) {
 	}
 	require.NoError(t, st.Save())
 
-	err = RemoveApp("owner/failremove", false)
+	err = RemoveApp("owner/failremove", false, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-uninstall hook failed")
 

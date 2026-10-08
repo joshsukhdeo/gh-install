@@ -268,10 +268,11 @@ type StateAddCmd struct {
 }
 
 type StateRmCmd struct {
-	Target    string `arg:"" predictor:"installed_apps" predict:"installed_apps" help:"Application or repository to remove."`
-	Force     bool   `short:"f" help:"Skip confirmation prompt."`
-	Purge     bool   `help:"Completely uninstall and purge."`
-	StateOnly bool   `help:"Remove from state only without uninstalling."`
+	Target                 string `arg:"" predictor:"installed_apps" predict:"installed_apps" help:"Application or repository to remove."`
+	Force                  bool   `short:"f" help:"Skip confirmation prompt."`
+	Purge                  bool   `help:"Completely uninstall and purge."`
+	StateOnly              bool   `help:"Remove from state only without uninstalling."`
+	UnsafeSkipDirFlagCheck bool   `name:"unsafe-skip-dir-flag-check" help:"Bypass .gh-pt-managed verification to force purge legacy directories."`
 }
 
 type StateUpdateCmd struct {

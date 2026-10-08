@@ -72,7 +72,7 @@ func TestRemoveApp(t *testing.T) {
 	execCommand = helperCommand
 	defer func() { execCommand = origExecCommand }()
 
-	err := RemoveApp("repo1", false)
+	err := RemoveApp("repo1", false, false)
 	require.NoError(t, err)
 
 	st, _ := state.LoadState()
@@ -87,7 +87,7 @@ func TestPurgeApp(t *testing.T) {
 	scriptPath := filepath.Join(tmpDir, "script.sh")
 	require.NoError(t, os.WriteFile(scriptPath, []byte("data"), 0755))
 
-	err := RemoveApp("repo2", true)
+	err := RemoveApp("repo2", true, false)
 	require.NoError(t, err)
 
 	st, _ := state.LoadState()
@@ -110,6 +110,93 @@ func TestListState(t *testing.T) {
 	setupState(t)
 	err := ListState()
 	assert.NoError(t, err)
+}
+
+func TestRemoveApp_NativePackages(t *testing.T) {
+	tests := []struct {
+		name      string
+		lookPath  func(string) (string, error)
+		expectCmd string
+	}{
+		{
+			name: "debian",
+			lookPath: func(s string) (string, error) {
+				if s == "dpkg" {
+					return "/usr/bin/dpkg", nil
+				}
+				return "", os.ErrNotExist
+			},
+			expectCmd: `if command -v apt-get >/dev/null 2>&1; then sudo apt-get remove -y "mypkg"; else sudo dpkg -r "mypkg"; fi`,
+		},
+		{
+			name: "redhat",
+			lookPath: func(s string) (string, error) {
+				if s == "rpm" {
+					return "/usr/bin/rpm", nil
+				}
+				return "", os.ErrNotExist
+			},
+			expectCmd: `if command -v dnf >/dev/null 2>&1; then sudo dnf remove -y "mypkg"; elif command -v yum >/dev/null 2>&1; then sudo yum remove -y "mypkg"; else sudo rpm -e "mypkg"; fi`,
+		},
+		{
+			name: "arch",
+			lookPath: func(s string) (string, error) {
+				if s == "pacman" {
+					return "/usr/bin/pacman", nil
+				}
+				return "", os.ErrNotExist
+			},
+			expectCmd: `sudo pacman -Rs --noconfirm "mypkg"`,
+		},
+		{
+			name: "freebsd",
+			lookPath: func(s string) (string, error) {
+				if s == "pkg" {
+					return "/usr/bin/pkg", nil
+				}
+				return "", os.ErrNotExist
+			},
+			expectCmd: `sudo pkg delete -y "mypkg"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := setupState(t)
+
+			origLookPath := execLookPath
+			execLookPath = tt.lookPath
+			defer func() { execLookPath = origLookPath }()
+
+			var runArgs [][]string
+			origExecCommand := execCommand
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				runArgs = append(runArgs, append([]string{name}, args...))
+				return helperCommand(name, args...)
+			}
+			defer func() { execCommand = origExecCommand }()
+
+			st, _ := state.LoadState()
+			st.AddApp(&state.InstalledApp{
+				Repository:   "test/pkgapp",
+				TargetPath:   tmpDir,
+				PackageNames: []string{"mypkg"},
+			})
+			st.Save()
+
+			err := RemoveApp("test/pkgapp", false, false)
+			require.NoError(t, err)
+
+			found := false
+			for _, arg := range runArgs {
+				if arg[0] == "sh" && arg[1] == "-c" && arg[2] == tt.expectCmd {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, "expected to find command %s in runArgs %v", tt.expectCmd, runArgs)
+		})
+	}
 }
 
 func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
@@ -161,7 +248,7 @@ func TestRemoveApp_CleansUpSidecarsAndSymlinkDir(t *testing.T) {
 	execCommand = helperCommand
 	defer func() { execCommand = origExecCommand }()
 
-	err = RemoveApp("test/repo3", true)
+	err = RemoveApp("test/repo3", true, false)
 	require.NoError(t, err)
 
 	// Assert that all sidecars are gone from disk
@@ -215,7 +302,7 @@ func TestRemoveApp_PrunesEmptyParentDirectories(t *testing.T) {
 		InstalledSidecars: []string{sidecarFile},
 	}))
 
-	err = RemoveApp("owner/myapp", false)
+	err = RemoveApp("owner/myapp", false, false)
 	require.NoError(t, err)
 
 	// Sidecar file must be deleted
@@ -280,7 +367,7 @@ func TestRemoveApp_ProtectsSystemAndTargetDirs(t *testing.T) {
 		SymlinkDir: targetDir, // Accidentally identical to TargetPath
 	}))
 
-	err = RemoveApp("danger/app", true)
+	err = RemoveApp("danger/app", true, false)
 	require.NoError(t, err)
 
 	// TargetDir and files inside it MUST NOT be wiped
@@ -318,7 +405,7 @@ func TestRemoveApp_CleansUpDriverManifests(t *testing.T) {
 		InstalledSidecars: []string{manifestFile},
 	}))
 
-	err = RemoveApp("intel/compute-runtime", true)
+	err = RemoveApp("intel/compute-runtime", true, false)
 	require.NoError(t, err)
 
 	// Manifest and package dir should be cleanly unlinked

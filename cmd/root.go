@@ -729,7 +729,7 @@ func (r *RootCLI) RunInstall() error {
 				return nil
 			}
 		}
-		return RemoveApp(r.Rm, false)
+		return RemoveApp(r.Rm, false, false)
 	}
 	if r.Purge != "" {
 		if !r.DisablePrompts && !r.Overwrite {
@@ -741,7 +741,7 @@ func (r *RootCLI) RunInstall() error {
 				return nil
 			}
 		}
-		return RemoveApp(r.Purge, true)
+		return RemoveApp(r.Purge, true, false)
 	}
 	if r.Pin != "" {
 		return PinAppState(r.Pin)
@@ -753,7 +753,7 @@ func (r *RootCLI) RunInstall() error {
 
 	if r.Overwrite && !r.DryRun {
 		// If overwrite/force is used, attempt to purge any existing installation first
-		_ = RemoveApp(r.Repository, true)
+		_ = RemoveApp(r.Repository, true, false)
 	}
 
 	if r.Repository == "" {

@@ -81,7 +81,7 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		if cli.Rm.StateOnly {
 			return RmStateOnly(cli.Rm.Target)
 		}
-		return RemoveApp(cli.Rm.Target, cli.Rm.Purge)
+		return RemoveApp(cli.Rm.Target, cli.Rm.Purge, cli.Rm.UnsafeSkipDirFlagCheck)
 	case "upgrade", "upgrade <repository>":
 		r.Repository = cli.Upgrade.Repository
 		r.SpecificallyTargeted = cli.Upgrade.Repository != ""
