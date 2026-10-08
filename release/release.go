@@ -20,8 +20,6 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
 	"github.com/cli/go-gh/v2"
-	"github.com/pterm/pterm"
-	"golang.org/x/term"
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/resolver"
@@ -31,6 +29,8 @@ import (
 	"github.com/joshsukhdeo/gh-pt/status"
 	"github.com/joshsukhdeo/gh-pt/ui"
 	"github.com/joshsukhdeo/gh-pt/verification"
+	"github.com/pterm/pterm"
+	"golang.org/x/term"
 )
 
 // formatGitHubError converts raw GitHub API errors into user-friendly messages.
@@ -545,15 +545,8 @@ func (r *GithubRelease) createSidecarSymlinks() {
 			sidecarName := filepath.Base(sidecarPath)
 			linkPath := filepath.Join(targetDir, sidecarName)
 
-			// Remove existing symlink if it exists
-			if _, err := os.Lstat(linkPath); err == nil {
-				if err := os.Remove(linkPath); err != nil {
-					log.Warn("failed to remove existing symlink", "error", err, "link", linkPath)
-					continue
-				}
-			}
-
-			if err := os.Symlink(sidecarPath, linkPath); err != nil {
+			// Use atomic symlink creation to avoid TOCTOU race condition
+			if err := createSymlinkAtomic(sidecarPath, linkPath); err != nil {
 				log.Warn("failed to create symlink", "error", err, "sidecar", sidecarPath, "link", linkPath)
 			} else {
 				log.Info("created symlink", "sidecar", sidecarName, "link", linkPath)
@@ -657,7 +650,7 @@ func (r *GithubRelease) installArchivedBinary(fileSystem fs.FS, binaryPath strin
 		return nil
 	}
 
-	tempExtractDir, err := os.MkdirTemp("", "gh-pt-extract-*")
+	tempExtractDir, err := safety.SafeMkdirTemp("", "gh-pt-extract-*")
 	if err != nil {
 		return err
 	}
@@ -1408,7 +1401,11 @@ func (r *GithubRelease) verifyChecksum(filePath, checksumFilePath string) error 
 	}
 
 	if expectedHash == "" {
-		log.Warn("no checksum entry found for file, skipping verification", "filename", targetFilename)
+		log.Warn("no checksum entry found for file", "filename", targetFilename)
+		// If verify-checksum is enabled, this is a failure - we can't verify the file
+		if r != nil && r.CliParams != nil && r.CliParams.VerifyChecksum {
+			return fmt.Errorf("checksum verification enabled but no checksum entry found for %s in %s", targetFilename, checksumFilePath)
+		}
 		return nil
 	}
 
@@ -1621,12 +1618,15 @@ func (r *GithubRelease) Install() error {
 		}
 	}()
 
-	// Auto-enable IncludeSidecars when any sidecar param is specified
+	// Auto-enable IncludeSidecars and Symlink when any sidecar, driver, or plugin param is specified
 	if !r.CliParams.IncludeSidecars {
-		if r.CliParams.Sidecars != "" || len(r.CliParams.SidecarSymlinkTo) > 0 || r.CliParams.AISetupSidecars || r.CliParams.SidecarMode != "" {
+		if r.CliParams.Sidecars != "" || len(r.CliParams.SidecarSymlinkTo) > 0 || r.CliParams.AISetupSidecars || r.CliParams.SidecarMode != "" || (r.CliParams.Driver != "" && r.CliParams.Driver != "none") || (r.CliParams.Plugin != "" && r.CliParams.Plugin != "none") {
 			r.CliParams.IncludeSidecars = true
-			log.Debug("auto-enabled --include-sidecars due to sidecar params")
+			log.Debug("auto-enabled --include-sidecars due to sidecar/driver/plugin params")
 		}
+	}
+	if (r.CliParams.Driver != "" && r.CliParams.Driver != "none") || (r.CliParams.Plugin != "" && r.CliParams.Plugin != "none") {
+		r.CliParams.Symlink = true
 	}
 	if r.CliParams.IncludeSidecars && r.CliParams.SidecarMode == "" {
 		r.CliParams.SidecarMode = "auto"
@@ -1872,7 +1872,7 @@ func (r *GithubRelease) Install() error {
 		}
 	}
 
-	downloadDir, err := os.MkdirTemp("", "*")
+	downloadDir, err := safety.SafeMkdirTemp("", "gh-pt-download-*")
 	if err != nil {
 		log.Error("could not create temporary download directory", "error", err)
 		return err
@@ -1997,8 +1997,22 @@ func (r *GithubRelease) Install() error {
 
 			log.Info("downloaded release asset", "repository", r.CliParams.Repository, "release id", releases[0].Id, "release name", releases[0].Name, "release asset name", asset.Name, "download directory", downloadDir, "output", stdOut.String())
 
-			// Verify checksum if available
 			downloadedAssetPath := filepath.Join(downloadDir, asset.Name)
+
+			// Content-type magic bytes verification (Assumption 4): verify file magic matches filename
+			headerBuf := make([]byte, 512)
+			if f, fErr := os.Open(downloadedAssetPath); fErr == nil {
+				n, _ := f.Read(headerBuf)
+				_ = f.Close()
+				if n >= 4 {
+					consistent, reason := selector.VerifyAssetContentConsistency(asset.Name, headerBuf[:n])
+					if !consistent {
+						log.Error("asset content-type magic mismatch (potential spoofing)", "asset", asset.Name, "reason", reason)
+						return fmt.Errorf("security error: asset %s content does not match extension: %s", asset.Name, reason)
+					}
+				}
+			}
+
 			if checksumFilePath != "" && r.CliParams.VerifyChecksum {
 				if err := r.verifyChecksum(downloadedAssetPath, checksumFilePath); err != nil {
 					log.Error("checksum verification failed", "error", err, "asset", asset.Name)
@@ -2518,6 +2532,8 @@ func (r *GithubRelease) Install() error {
 				SidecarSymlinkTo:         r.SidecarSymlinkTo,
 				IncludeSidecars:          r.CliParams.IncludeSidecars,
 				SidecarMode:              r.CliParams.SidecarMode,
+				Driver:                   r.CliParams.Driver,
+				Plugin:                   r.CliParams.Plugin,
 				InstalledSidecars:        r.InstalledSidecars,
 				FallbackReleases:         r.CliParams.FallbackReleases,
 				InsecureAllowUnsigned:    r.CliParams.InsecureAllowUnsigned,

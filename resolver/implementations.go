@@ -1,7 +1,10 @@
 package resolver
 
 import (
+	"fmt"
 	"os"
+	"strings"
+	"time"
 )
 
 // Compile-time interface checks
@@ -51,11 +54,69 @@ func (m *AptManager) Install(pkgs []string) error {
 		args = append([]string{bin}, args...)
 		bin = "sudo"
 	}
-	cmd := execCommand(bin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+
+	return m.runWithRetry(bin, args...)
+}
+
+func (m *AptManager) runWithRetry(bin string, args ...string) error {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		cmd := execCommand(bin, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		err := cmd.Run()
+
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check for dpkg lock
+		if m.isDpkgLocked(err) {
+			if attempt < maxRetries-1 {
+				waitTime := time.Duration(attempt+1) * 10 * time.Second
+				fmt.Fprintf(os.Stderr, "dpkg lock detected, waiting %v before retry (%d/%d)...\n", waitTime, attempt+1, maxRetries)
+				time.Sleep(waitTime)
+				continue
+			}
+			return fmt.Errorf("dpkg lock could not be acquired after %d attempts: %w", maxRetries, err)
+		}
+
+		// Check for broken packages
+		if m.isBrokenPackageError(err) {
+			return fmt.Errorf("broken package state detected, manual intervention required: %w", err)
+		}
+
+		// For other errors, retry with exponential backoff
+		if attempt < maxRetries-1 {
+			waitTime := time.Duration(1<<attempt) * 2 * time.Second
+			fmt.Fprintf(os.Stderr, "Install failed, retrying in %v (%d/%d): %v\n", waitTime, attempt+1, maxRetries, err)
+			time.Sleep(waitTime)
+			continue
+		}
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func (m *AptManager) isDpkgLocked(err error) bool {
+	errStr := err.Error()
+	return strings.Contains(errStr, "Could not get lock") ||
+		strings.Contains(errStr, "dpkg lock") ||
+		strings.Contains(errStr, "dpkg status database is locked") ||
+		strings.Contains(errStr, "waiting for lock") ||
+		strings.Contains(errStr, "apt lock")
+}
+
+func (m *AptManager) isBrokenPackageError(err error) bool {
+	errStr := err.Error()
+	return strings.Contains(errStr, "broken package") ||
+		strings.Contains(errStr, "unmet dependencies") ||
+		strings.Contains(errStr, "dpkg: error processing")
 }
 
 // DnfManager manages packages via dnf.
@@ -86,11 +147,55 @@ func (m *DnfManager) Install(pkgs []string) error {
 		args = append([]string{bin}, args...)
 		bin = "sudo"
 	}
-	cmd := execCommand(bin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+
+	return m.runWithRetry(bin, args...)
+}
+
+func (m *DnfManager) runWithRetry(bin string, args ...string) error {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		cmd := execCommand(bin, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		err := cmd.Run()
+
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check for dnf lock
+		if m.isDnfLocked(err) {
+			if attempt < maxRetries-1 {
+				waitTime := time.Duration(attempt+1) * 10 * time.Second
+				fmt.Fprintf(os.Stderr, "dnf lock detected, waiting %v before retry (%d/%d)...\n", waitTime, attempt+1, maxRetries)
+				time.Sleep(waitTime)
+				continue
+			}
+			return fmt.Errorf("dnf lock could not be acquired after %d attempts: %w", maxRetries, err)
+		}
+
+		// For other errors, retry with exponential backoff
+		if attempt < maxRetries-1 {
+			waitTime := time.Duration(1<<attempt) * 2 * time.Second
+			fmt.Fprintf(os.Stderr, "Install failed, retrying in %v (%d/%d): %v\n", waitTime, attempt+1, maxRetries, err)
+			time.Sleep(waitTime)
+			continue
+		}
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func (m *DnfManager) isDnfLocked(err error) bool {
+	errStr := err.Error()
+	return strings.Contains(errStr, "Another app is currently holding the lock") ||
+		strings.Contains(errStr, "Could not get lock") ||
+		strings.Contains(errStr, "dnf lock")
 }
 
 // PacmanManager manages packages via pacman.
@@ -121,11 +226,55 @@ func (m *PacmanManager) Install(pkgs []string) error {
 		args = append([]string{bin}, args...)
 		bin = "sudo"
 	}
-	cmd := execCommand(bin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+
+	return m.runWithRetry(bin, args...)
+}
+
+func (m *PacmanManager) runWithRetry(bin string, args ...string) error {
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		cmd := execCommand(bin, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+		err := cmd.Run()
+
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check for pacman lock
+		if m.isPacmanLocked(err) {
+			if attempt < maxRetries-1 {
+				waitTime := time.Duration(attempt+1) * 5 * time.Second
+				fmt.Fprintf(os.Stderr, "pacman lock detected, waiting %v before retry (%d/%d)...\n", waitTime, attempt+1, maxRetries)
+				time.Sleep(waitTime)
+				continue
+			}
+			return fmt.Errorf("pacman lock could not be acquired after %d attempts: %w", maxRetries, err)
+		}
+
+		// For other errors, retry with exponential backoff
+		if attempt < maxRetries-1 {
+			waitTime := time.Duration(1<<attempt) * 2 * time.Second
+			fmt.Fprintf(os.Stderr, "Install failed, retrying in %v (%d/%d): %v\n", waitTime, attempt+1, maxRetries, err)
+			time.Sleep(waitTime)
+			continue
+		}
+	}
+
+	return fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+func (m *PacmanManager) isPacmanLocked(err error) bool {
+	errStr := err.Error()
+	return strings.Contains(errStr, "unable to lock database") ||
+		strings.Contains(errStr, "pacman lock") ||
+		strings.Contains(errStr, "/var/lib/pacman/db.lck")
 }
 
 // MiseManager manages tools via mise.

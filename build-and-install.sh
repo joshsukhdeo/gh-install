@@ -17,7 +17,6 @@ YELLOW_DOT="${YELLOW}${BOLD}🟡${NC}"
 GREEN_TXT="${GREEN}${BOLD}"
 RED_TXT="${RED}${BOLD}"
 YELLOW_TXT="${YELLOW}${BOLD}"
-NC_TXT="${NC}"
 
 DIRECT=0
 FORCE=0
@@ -80,42 +79,26 @@ system_binary_exists() {
     [ -n "$active" ] && [[ "$active" == /usr/* ]]
 }
 
-# --- Set BIN_TARGET based on --global flag ---
+# --- Set BIN_TARGET and ALIAS_TARGET based on --global flag ---
 if [ "$GLOBAL" -eq 1 ]; then
-    BIN_TARGET="/usr/local/bin/gh-pt"
+    BIN_DIR="/usr/local/bin"
 else
-    BIN_TARGET="${HOME}/.local/bin/gh-pt"
+    BIN_DIR="${HOME}/.local/bin"
 fi
+BIN_TARGET="${BIN_DIR}/gh-pt"
+ALIAS_TARGET="${BIN_DIR}/ghpt"
 
-# --- If no --global, build status only ---
-if [ "$GLOBAL" -eq 0 ]; then
-    if active_is_new; then
-        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL${NC} (installed to user bin dir)"
-    else
-        echo -e "${RED_DOT} ${RED_TXT}BUILD SUCCESSFUL${NC} (inactive — user install overrides)"
-    fi
-    exit 0
-fi
-
-# Determine if we have an existing binary at target
+# Determine if we have existing binaries at targets
 target_exists=0
-target_is_symlink=0
-target_is_real=0
 if [ "$GLOBAL" -eq 1 ]; then
-    if sudo test -L "$BIN_TARGET" 2>/dev/null; then
-        target_exists=1
-        target_is_symlink=1
-    elif sudo test -e "$BIN_TARGET" 2>/dev/null; then
-        target_exists=1
-        target_is_real=1
+    if sudo test -e "$BIN_TARGET" 2>/dev/null || sudo test -L "$BIN_TARGET" 2>/dev/null; then
+        if sudo test -e "$ALIAS_TARGET" 2>/dev/null || sudo test -L "$ALIAS_TARGET" 2>/dev/null; then
+            target_exists=1
+        fi
     fi
 else
-    if [ -L "$BIN_TARGET" ]; then
+    if [[ -e "$BIN_TARGET" || -L "$BIN_TARGET" ]] && [[ -e "$ALIAS_TARGET" || -L "$ALIAS_TARGET" ]]; then
         target_exists=1
-        target_is_symlink=1
-    elif [ -e "$BIN_TARGET" ]; then
-        target_exists=1
-        target_is_real=1
     fi
 fi
 
@@ -125,72 +108,71 @@ if user_install_exists && ! active_is_new; then
     precedence_override=1
 fi
 
+# Helper: check if target on disk matches new build
+target_is_new() {
+    local t="$1"
+    if [ "$DIRECT" -eq 1 ]; then
+        cmp -s "$BUILT_BIN" "$t"
+    else
+        local resolved
+        resolved="$(readlink -f "$t" 2>/dev/null || realpath "$t" 2>/dev/null || echo "$t")"
+        [ "$resolved" = "$BUILT_BIN" ]
+    fi
+}
+
+targets_are_new() {
+    target_is_new "$BIN_TARGET" && target_is_new "$ALIAS_TARGET"
+}
+
 # ========== INSTALL LOGIC ==========
 if [ "$DIRECT" -eq 1 ]; then
     # --- Direct (hard copy) mode ---
-    if [ "$target_exists" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
-        if active_is_new; then
-            # Active is already the installed version (copy or symlink)
-            is_symlink=0
-            if [ "$GLOBAL" -eq 1 ]; then
-                sudo test -L "$BIN_TARGET" 2>/dev/null && is_symlink=1
-            else
-                [ -L "$BIN_TARGET" ] && is_symlink=1
-            fi
-            
-            if [ "$is_symlink" -eq 1 ]; then
-                echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL${NC} ${YELLOW_DOT} ${YELLOW_TXT}INSTALL WARNING: --direct requested but no copy made. Active binary is a symlink to the new build.${NC}"
-            else
-                echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL${NC} ${YELLOW_DOT} ${YELLOW_TXT}INSTALL WARNING: --direct requested but no copy made. Active binary is already the new build.${NC}"
-            fi
-            exit 0
-        else
-            # Active version is not the new one
-            echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL${NC} ${RED_DOT} ${RED_TXT}INSTALL FAILED: active version on path outdated${NC}"
-            exit 1
-        fi
+    if [ "$target_exists" -eq 1 ] && [ "$FORCE" -eq 0 ] && targets_are_new; then
+        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (binary up-to-date)${NC}"
+        exit 0
     fi
 
     # Force or no existing target - proceed with copy
     if [ "$GLOBAL" -eq 1 ]; then
-        sudo rm -f "$BIN_TARGET"
+        sudo rm -f "$BIN_TARGET" "$ALIAS_TARGET"
         sudo cp "$BUILT_BIN" "$BIN_TARGET"
+        sudo cp "$BUILT_BIN" "$ALIAS_TARGET"
     else
-        [ -e "$BIN_TARGET" ] || [ -L "$BIN_TARGET" ] && rm -f "$BIN_TARGET"
+        mkdir -p "$BIN_DIR"
+        rm -f "$BIN_TARGET" "$ALIAS_TARGET"
         cp "$BUILT_BIN" "$BIN_TARGET"
+        cp "$BUILT_BIN" "$ALIAS_TARGET"
     fi
 
-    if active_is_new; then
-        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (direct copy)${NC}"
+    if targets_are_new; then
+        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (direct copy: gh-pt, ghpt)${NC}"
     else
-        echo -e "${RED_DOT} ${RED_TXT}BUILD SUCCESSFUL — INSTALL FAILED: active binary on PATH is not the new version${NC}"
+        echo -e "${RED_DOT} ${RED_TXT}BUILD SUCCESSFUL — INSTALL FAILED: failed to copy to ${BIN_TARGET} or ${ALIAS_TARGET}${NC}"
         exit 1
     fi
 
 else
     # --- Symlink mode (default) ---
-    if [ "$target_exists" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
-        if active_is_new; then
-            echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (symlink up-to-date)${NC}"
-            exit 0
-        else
-            echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL${NC} ${RED_DOT} ${RED_TXT}INSTALL FAILED: active version on path outdated${NC}"
-            exit 1
-        fi
+    if [ "$target_exists" -eq 1 ] && [ "$FORCE" -eq 0 ] && targets_are_new; then
+        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (symlinks up-to-date)${NC}"
+        exit 0
     fi
 
     if [ "$GLOBAL" -eq 1 ]; then
-        sudo rm -f "$BIN_TARGET"
+        sudo rm -f "$BIN_TARGET" "$ALIAS_TARGET"
         sudo ln -s "$BUILT_BIN" "$BIN_TARGET"
+        sudo ln -s "$BUILT_BIN" "$ALIAS_TARGET"
     else
-        [ -e "$BIN_TARGET" ] || [ -L "$BIN_TARGET" ] && rm -f "$BIN_TARGET"
+        mkdir -p "$BIN_DIR"
+        rm -f "$BIN_TARGET" "$ALIAS_TARGET"
         ln -s "$BUILT_BIN" "$BIN_TARGET"
+        ln -s "$BUILT_BIN" "$ALIAS_TARGET"
     fi
 
-    if active_is_new; then
-        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY${NC}"
+    if targets_are_new; then
+        echo -e "${GREEN_DOT} ${GREEN_TXT}BUILD SUCCESSFUL — INSTALLED SUCCESSFULLY (gh-pt, ghpt)${NC}"
     else
-        echo -e "${RED_DOT} ${RED_TXT}BUILD SUCCESSFUL — INSTALL FAILED: active binary on PATH is not the new version${NC}"
+        echo -e "${RED_DOT} ${RED_TXT}BUILD SUCCESSFUL — INSTALL FAILED: failed to link ${BIN_TARGET} or ${ALIAS_TARGET}${NC}"
         exit 1
     fi
 fi

@@ -678,6 +678,16 @@ func helperRunCompileScript() error {
 		return fmt.Errorf("compile.sh not found: %w", err)
 	}
 
+	// Check if containerized execution is requested
+	if os.Getenv("GHPT_COMPILE_CONTAINER") == "1" {
+		return helperRunCompileScriptContainer(repoPath, scriptPath)
+	}
+
+	// Default: run directly with validation warning
+	fmt.Fprintf(os.Stderr, "WARNING: Running compile.sh directly without container sandbox.\n")
+	fmt.Fprintf(os.Stderr, "         Set GHPT_COMPILE_CONTAINER=1 to enable containerized execution.\n")
+	fmt.Fprintf(os.Stderr, "         Ensure compile.sh has been validated with 'ghpt helper --validate-compile-script'.\n")
+
 	cmd := exec.Command("bash", scriptPath)
 	cmd.Dir = repoPath
 	cmd.Stdout = os.Stdout
@@ -689,5 +699,55 @@ func helperRunCompileScript() error {
 	}
 
 	fmt.Println("compile.sh completed successfully")
+	return nil
+}
+
+// helperRunCompileScriptContainer runs the compile script in a container for isolation.
+// Requires podman or docker to be installed.
+func helperRunCompileScriptContainer(repoPath, scriptPath string) error {
+	// Check for container runtime
+	containerRuntime := ""
+	if _, err := exec.LookPath("podman"); err == nil {
+		containerRuntime = "podman"
+	} else if _, err := exec.LookPath("docker"); err == nil {
+		containerRuntime = "docker"
+	} else {
+		return fmt.Errorf("container runtime (podman or docker) not found; install podman or docker to use GHPT_COMPILE_CONTAINER=1")
+	}
+
+	// Build container command
+	// Mount repo as read-only except for build output directory
+	// Run as non-root user with restricted capabilities
+	args := []string{
+		"run",
+		"--rm",
+		"--user", "1000:1000", // Non-root user
+		"--cap-drop=ALL",                      // Drop all capabilities
+		"--security-opt", "no-new-privileges", // Prevent privilege escalation
+		"--read-only",                  // Read-only root filesystem
+		"--tmpfs", "/tmp:exec,size=1g", // Writable /tmp with exec
+		"--tmpfs", "/home/build:exec,size=2g", // Writable build directory
+		"-v", fmt.Sprintf("%s:/src:ro", repoPath), // Source as read-only
+		"-w", "/home/build", // Work in build directory
+		"--network", "none", // No network access
+		"ubuntu:22.04",                  // Base image
+		"bash", "/src/.ghpt/compile.sh", // Command
+	}
+
+	// For docker, use --read-only with --tmpfs (works)
+	// For podman, same flags work
+	cmd := exec.Command(containerRuntime, args...)
+	cmd.Dir = repoPath
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	fmt.Fprintf(os.Stderr, "Running compile.sh in %s container (isolated)...\n", containerRuntime)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("compile.sh failed in container: %w", err)
+	}
+
+	fmt.Println("compile.sh completed successfully in container")
 	return nil
 }

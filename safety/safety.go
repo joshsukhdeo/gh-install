@@ -743,3 +743,38 @@ func RemoveAllManaged(path string) error {
 	}
 	return os.RemoveAll(path)
 }
+
+// SafeMkdirTemp creates a temporary directory safely, verifying that the parent directory
+// is not a symlink to prevent symlink race and hijacking attacks.
+func SafeMkdirTemp(dir, pattern string) (string, error) {
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	cleanDir := filepath.Clean(dir)
+
+	// Check if parent directory is a symlink
+	lfi, err := os.Lstat(cleanDir)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to lstat temp parent directory: %w", err)
+	}
+	if err == nil && lfi.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("temp parent directory %s is a symlink (potential hijacking attack)", cleanDir)
+	}
+
+	// Verify parent directory does not resolve to an unexpected vital system directory
+	evalDir, err := filepath.EvalSymlinks(cleanDir)
+	if err == nil {
+		if evalDir == "/" || evalDir == "/etc" || evalDir == "/root" {
+			return "", fmt.Errorf("temp parent directory resolves to vital directory %s", evalDir)
+		}
+	}
+
+	tempPath, err := os.MkdirTemp(cleanDir, pattern)
+	if err != nil {
+		return "", err
+	}
+
+	_ = WriteGhptManagedMarker(tempPath)
+
+	return tempPath, nil
+}

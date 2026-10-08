@@ -87,7 +87,7 @@ func newGitHubRESTClient() (*api.RESTClient, error) {
 	}
 
 	ghClient, err := api.NewRESTClient(api.ClientOptions{
-		Timeout: GH_PT_DEFAULT_GITHUB_TIMEOUT,
+		Timeout:   GH_PT_DEFAULT_GITHUB_TIMEOUT,
 		Transport: httpClient.Transport,
 	})
 	if err != nil {
@@ -277,6 +277,124 @@ func validateGHCLI() error {
 	return nil
 }
 
+// isContainerEnvironment detects whether gh-pt is running inside a Docker, Podman, or container runtime.
+func isContainerEnvironment() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return true
+	}
+	if os.Getenv("container") != "" {
+		return true
+	}
+	// Check cgroups for container markers
+	for _, cgroupPath := range []string{"/proc/1/cgroup", "/proc/self/cgroup"} {
+		if data, err := os.ReadFile(cgroupPath); err == nil {
+			s := string(data)
+			if strings.Contains(s, "docker") || strings.Contains(s, "podman") ||
+				strings.Contains(s, "containerd") || strings.Contains(s, "kubepods") ||
+				strings.Contains(s, "lxc") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// validateInputs validates and sanitizes user inputs to prevent injection attacks
+// and ensure well-formed repository names, paths, and hook commands.
+func validateInputs(r *RootCLI) error {
+	r.ensureCliParams()
+	c := r.CliParams
+
+	// Validate repository name format (owner/repo)
+	if c.Repository != "" {
+		// Only allow alphanumeric, dash, underscore, dot in owner and repo names
+		// No shell metacharacters, no path traversal
+		repoRegex := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+		if !repoRegex.MatchString(c.Repository) {
+			return fmt.Errorf("invalid repository format: %q (must be owner/repo with alphanumeric, dash, underscore, dot only)", c.Repository)
+		}
+		// Prevent overly long names
+		if len(c.Repository) > 200 {
+			return fmt.Errorf("repository name too long (max 200 chars)")
+		}
+	}
+
+	// Validate target path - no path traversal, no shell metacharacters
+	if c.TargetPath != "" {
+		cleanPath := filepath.Clean(c.TargetPath)
+		if cleanPath != c.TargetPath {
+			return fmt.Errorf("target path contains path traversal sequences: %q", c.TargetPath)
+		}
+		// Check for shell metacharacters
+		if strings.ContainsAny(c.TargetPath, "`$&|;(){}[]<>") {
+			return fmt.Errorf("target path contains shell metacharacters: %q", c.TargetPath)
+		}
+	}
+
+	// Validate release asset/regexp - no shell metacharacters
+	if c.ReleaseAsset != "" && strings.ContainsAny(c.ReleaseAsset, "`$&|;(){}[]<>") {
+		return fmt.Errorf("release asset pattern contains shell metacharacters: %q", c.ReleaseAsset)
+	}
+	if c.ReleaseAssetRegexp != "" && strings.ContainsAny(c.ReleaseAssetRegexp, "`$&|;(){}[]<>") {
+		return fmt.Errorf("release asset regexp contains shell metacharacters: %q", c.ReleaseAssetRegexp)
+	}
+	if c.ReleaseVersion != "" && strings.ContainsAny(c.ReleaseVersion, "`$&|;(){}[]<>") {
+		return fmt.Errorf("release version contains shell metacharacters: %q", c.ReleaseVersion)
+	}
+
+	// Validate sidecar patterns - no shell metacharacters
+	if c.Sidecars != "" && strings.ContainsAny(c.Sidecars, "`$&|;(){}[]<>") {
+		return fmt.Errorf("sidecar pattern contains shell metacharacters: %q", c.Sidecars)
+	}
+
+	// Validate hook commands - hooks are passed via Hook field
+	if r.Hook.ScriptPath != "" {
+		cleanPath := filepath.Clean(r.Hook.ScriptPath)
+		if cleanPath != r.Hook.ScriptPath {
+			return fmt.Errorf("hook script path contains path traversal: %q", r.Hook.ScriptPath)
+		}
+		if strings.ContainsAny(r.Hook.ScriptPath, "`$&|;(){}[]<>\\") {
+			return fmt.Errorf("hook script path contains shell metacharacters: %q", r.Hook.ScriptPath)
+		}
+	}
+
+	// Validate sidecar symlink targets
+	for _, target := range c.SidecarSymlinkTo {
+		cleanPath := filepath.Clean(target)
+		if cleanPath != target {
+			return fmt.Errorf("sidecar symlink target contains path traversal: %q", target)
+		}
+		if strings.ContainsAny(target, "`$&|;(){}[]<>") {
+			return fmt.Errorf("sidecar symlink target contains shell metacharacters: %q", target)
+		}
+	}
+
+	// Validate rename map keys and values
+	for k, v := range c.Rename {
+		if strings.ContainsAny(k, "`$&|;(){}[]<>\\") || strings.ContainsAny(v, "`$&|;(){}[]<>\\") {
+			return fmt.Errorf("rename map contains shell metacharacters: %q -> %q", k, v)
+		}
+	}
+
+	// Validate asset binaries regexp
+	if c.AssetBinariesRegexp != "" && strings.ContainsAny(c.AssetBinariesRegexp, "`$&|;(){}[]<>") {
+		return fmt.Errorf("asset binaries regexp contains shell metacharacters: %q", c.AssetBinariesRegexp)
+	}
+
+	// Validate FallbackReleases - cap at 3
+	if c.FallbackReleases > 3 {
+		return fmt.Errorf("fallback-releases cannot exceed 3 (got %d)", c.FallbackReleases)
+	}
+	if c.FallbackReleases < 0 {
+		return fmt.Errorf("fallback-releases cannot be negative (got %d)", c.FallbackReleases)
+	}
+
+	return nil
+}
+
 func (r *RootCLI) Validate() error {
 	r.ensureCliParams()
 	if r.Wine != "off" && r.Wine != "" {
@@ -300,17 +418,47 @@ func (r *RootCLI) Validate() error {
 		return fmt.Errorf("--compile-from-source can only be used with --ai")
 	}
 
+	// Validate and sanitize inputs
+	if err := validateInputs(r); err != nil {
+		return err
+	}
+
 	if r.Clone || r.Fork || r.CompileFromSource || r.Show || r.ShowAssets > -1 || r.ShowVersions > -1 || r.ShowDescription > -1 || r.ShowReadme > -1 {
 		return nil
 	}
 
 	// Detect root user and handle global install path
+	// Root install policy:
+	// - Container detection: in containers (Docker, CI), running as root is standard; suppress warning
+	// - Host root: warning banner shown unless --force-root is provided
+	// - --global or --force-root or --allow-root-user-install permits operation
+	// - Audit log root operations for security
 	if os.Geteuid() == 0 {
-		if r.NoColor || os.Getenv("NO_COLOR") != "" {
-			fmt.Fprintf(os.Stderr, "*** running as root is *HIGHLY* discouraged ***\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "\033[33m*** running as root is *HIGHLY* discouraged ***\033[0m\n")
+		inContainer := isContainerEnvironment()
+		if r.Global {
+			r.ForceRoot = true
 		}
+
+		if !inContainer && !r.ForceRoot {
+			if r.NoColor || os.Getenv("NO_COLOR") != "" {
+				fmt.Fprintf(os.Stderr, "*** running as root is *HIGHLY* discouraged ***\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "\033[33m*** running as root is *HIGHLY* discouraged ***\033[0m\n")
+			}
+		} else if inContainer {
+			log.Info("running as root inside container environment (warning suppressed)")
+		}
+
+		log.Info("audit: privileged root operation",
+			"container", inContainer,
+			"global", r.Global,
+			"force_root", r.ForceRoot,
+			"allow_root_user_install", r.AllowRootUserInstall,
+			"pid", os.Getpid(),
+			"uid", os.Getuid(),
+			"euid", os.Geteuid(),
+		)
+
 		if r.Global {
 			if r.TargetPath == GetDefaultTargetPath() {
 				r.TargetPath = "/usr/local/bin"
@@ -318,8 +466,8 @@ func (r *RootCLI) Validate() error {
 			if err := exec.Command("sudo", "-v").Run(); err != nil {
 				log.Warn("sudo -v failed (credentials may not cache)", "error", err)
 			}
-		} else if !r.AllowRootUserInstall {
-			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --allow-root-user-install to install to user-local paths")
+		} else if !r.AllowRootUserInstall && !r.ForceRoot {
+			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --force-root / --allow-root-user-install to install to user-local paths")
 			log.Error("init error", "error", err)
 			return err
 		}
@@ -1631,19 +1779,47 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	var lastErr error
 	var lastOutput string
 
+	useContainer := !r.NoCompileContainer && os.Getenv("GHPT_NO_COMPILE_CONTAINER") != "1"
+	var containerRuntime string
+	if useContainer {
+		if _, err := exec.LookPath("podman"); err == nil {
+			containerRuntime = "podman"
+		} else if _, err := exec.LookPath("docker"); err == nil {
+			containerRuntime = "docker"
+		} else {
+			return fmt.Errorf("mandatory AI compilation sandbox error: no container runtime (podman or docker) found in PATH. Running unvetted AI compilation scripts directly on the host is blocked by default to prevent supply-chain compromise. Install docker/podman, or explicitly opt out with --no-compile-container (or GHPT_NO_COMPILE_CONTAINER=1)")
+		}
+	} else {
+		log.Warn("*** [SECURITY: COMPILE_SANDBOX_BYPASS] Executing AI compile script directly on host without container isolation (--no-compile-container specified). Host compromise risk! ***")
+	}
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		log.Info("executing compile script", "script", scriptPath, "attempt", attempt+1)
+		log.Info("executing compile script", "script", scriptPath, "attempt", attempt+1, "container", containerRuntime)
 		var execScriptCmd *exec.Cmd
-		if runtime.GOOS == "windows" {
+		if useContainer && containerRuntime != "" {
+			// Mount repoDir to /build and installDirTarget to /install inside container
+			execScriptCmd = exec.Command(containerRuntime, "run", "--rm",
+				"--security-opt", "no-new-privileges",
+				"--cap-drop=SYS_ADMIN",
+				"--cap-drop=SYS_PTRACE",
+				"--cap-drop=AUDIT_WRITE",
+				"-v", fmt.Sprintf("%s:/build:rw", repoDir),
+				"-v", fmt.Sprintf("%s:/install:rw", installDirTarget),
+				"-w", "/build",
+				"ubuntu:22.04", "bash", ".ghpt/compile.sh",
+			)
+			execScriptCmd.Dir = repoDir
+		} else if runtime.GOOS == "windows" {
 			execScriptCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+			execScriptCmd.Dir = repoDir
 		} else {
 			if _, err := exec.LookPath("bash"); err == nil {
 				execScriptCmd = exec.Command("bash", scriptPath)
 			} else {
 				execScriptCmd = exec.Command("sh", scriptPath)
 			}
+			execScriptCmd.Dir = repoDir
 		}
-		execScriptCmd.Dir = repoDir
 
 		outputBytes, runErr := execScriptCmd.CombinedOutput()
 		if len(outputBytes) > 0 {

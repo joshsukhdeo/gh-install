@@ -276,3 +276,28 @@ func TestWithScopedTemp_EnforcesScopedBoundary(t *testing.T) {
 	assert.FileExists(t, insidePath)
 	assert.NoFileExists(t, outsidePath)
 }
+
+func TestSafeMkdirTemp(t *testing.T) {
+	baseDir := t.TempDir()
+
+	t.Run("NormalSafeCreation", func(t *testing.T) {
+		tempDir, err := SafeMkdirTemp(baseDir, "safe-test-*")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		assert.DirExists(t, tempDir)
+		assert.True(t, HasGhptManagedMarker(tempDir))
+	})
+
+	t.Run("ParentIsSymlinkBlocked", func(t *testing.T) {
+		targetDir := filepath.Join(baseDir, "real_target")
+		require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+		symlinkParent := filepath.Join(baseDir, "symlink_parent")
+		require.NoError(t, os.Symlink(targetDir, symlinkParent))
+
+		_, err := SafeMkdirTemp(symlinkParent, "hijack-*")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "is a symlink")
+	})
+}

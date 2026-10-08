@@ -21,10 +21,12 @@ import (
 )
 
 type mockGhClient struct {
-	releases []Release
-	assets   map[int64][]ReleaseAsset
-	tags     map[string]Release
-	err      error
+	releases      []Release
+	assets        map[int64][]ReleaseAsset
+	tags          map[string]Release
+	description   string
+	readmeContent string
+	err           error
 }
 
 func (m *mockGhClient) Get(path string, response interface{}) error {
@@ -38,6 +40,17 @@ func (m *mockGhClient) Get(path string, response interface{}) error {
 			return err
 		}
 		return json.Unmarshal(data, response)
+	}
+
+	if strings.HasSuffix(path, "/readme") {
+		if m.readmeContent != "" {
+			data, err := json.Marshal(map[string]string{"content": m.readmeContent})
+			if err != nil {
+				return err
+			}
+			return json.Unmarshal(data, response)
+		}
+		return nil
 	}
 
 	if strings.Contains(path, "/assets") {
@@ -65,6 +78,14 @@ func (m *mockGhClient) Get(path string, response interface{}) error {
 			return json.Unmarshal(data, response)
 		}
 		return fmt.Errorf("tag not found")
+	}
+
+	if m.description != "" {
+		data, err := json.Marshal(map[string]string{"description": m.description})
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(data, response)
 	}
 
 	return nil
@@ -417,368 +438,145 @@ func TestCliParams_ShowStruct(t *testing.T) {
 	assert.Equal(t, "owner/repo", cmd.Repository)
 }
 
-type mockShowTreeClient struct {
-	defaultBranch string
-	treeItems     []gitTreeItem
-	repoErr       error
-	treeErr       error
-	requestedPath string
-}
-
-func (m *mockShowTreeClient) Get(path string, response interface{}) error {
-	trimmed := strings.TrimPrefix(path, "/")
-	if strings.Contains(trimmed, "git/trees/") {
-		m.requestedPath = path
-		if m.treeErr != nil {
-			return m.treeErr
-		}
-		data, err := json.Marshal(gitTreeResponse{
-			SHA:  "mock-sha-tree",
-			Tree: m.treeItems,
-		})
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal(data, response)
-	}
-
-	if strings.HasPrefix(trimmed, "repos/") {
-		m.requestedPath = path
-		if m.repoErr != nil {
-			return m.repoErr
-		}
-		data, err := json.Marshal(map[string]interface{}{
-			"default_branch": m.defaultBranch,
-		})
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal(data, response)
-	}
-
-	return fmt.Errorf("unhandled mock path: %s", path)
-}
-
-func TestHandleShow_Success(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	xdg.DataHome = tmpDir
-
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems: []gitTreeItem{
-			{Path: "plugins/core.red", Type: "blob", Size: 100},
-			{Path: "config/app.json", Type: "blob", Size: 50},
-			{Path: "README.md", Type: "blob", Size: 200},
-			{Path: "plugins", Type: "tree"},
-			{Path: "submodule", Type: "commit"},
-		},
-	}
-
+// TestShow_DefaultBehavior_ShowsVersionsAssetsDescriptionReadme asserts that running
+// gh-pt show <repo> with no flags displays all four sections:
+// 1. VERSIONS (all versions up to default limit)
+// 2. ASSETS (classified release assets for the target platform)
+// 3. DESCRIPTION (repository description)
+// 4. README (rendered markdown)
+// and does NOT prompt or require interactive input.
+func TestShow_DefaultBehavior_ShowsVersionsAssetsDescriptionReadme(t *testing.T) {
 	origClient := defaultRestClient
-	origMultiselect := multiselectFiles
-	origDownload := downloadRawFile
-	defer func() {
-		defaultRestClient = origClient
-		multiselectFiles = origMultiselect
-		downloadRawFile = origDownload
-	}()
+	defer func() { defaultRestClient = origClient }()
 
-	defaultRestClient = func() (ghRestClient, error) {
-		return mockClient, nil
-	}
-
-	var presentedOptions []string
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		presentedOptions = options
-		// Select the plugin and config files
-		return []string{"plugins/core.red", "config/app.json"}, nil
-	}
-
-	downloadedURLs := make(map[string]bool)
-	downloadRawFile = func(url string) ([]byte, error) {
-		downloadedURLs[url] = true
-		if strings.HasSuffix(url, "plugins/core.red") {
-			return []byte("plugin-binary-content"), nil
-		}
-		if strings.HasSuffix(url, "config/app.json") {
-			return []byte(`{"enabled": true}`), nil
-		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository: "my-org/cool-tool",
-		},
-		CliParams: &params.ExecContext{
-			Repository: "my-org/cool-tool",
-			Sidecars:   `plugins/.*|config/.*`, // Regex pattern for sidecars
-		},
-	}
-
-	err := r.handleShow()
-	require.NoError(t, err)
-
-	// Verify only blob files were presented
-	assert.Equal(t, []string{"README.md", "config/app.json", "plugins/core.red"}, presentedOptions)
-
-	// Verify URLs requested for download
-	assert.True(t, downloadedURLs["https://raw.githubusercontent.com/my-org/cool-tool/main/plugins/core.red"])
-	assert.True(t, downloadedURLs["https://raw.githubusercontent.com/my-org/cool-tool/main/config/app.json"])
-
-	// Verify files written to SidecarTargetPath
-	targetDir := filepath.Join(tmpDir, "gh-pt", "sidecars", "my-org", "cool-tool")
-	pluginPath := filepath.Join(targetDir, "plugins", "core.red")
-	configPath := filepath.Join(targetDir, "config", "app.json")
-
-	pluginBytes, err := os.ReadFile(pluginPath)
-	require.NoError(t, err)
-	assert.Equal(t, "plugin-binary-content", string(pluginBytes))
-
-	configBytes, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.Equal(t, `{"enabled": true}`, string(configBytes))
-
-	// Verify state.json updated
-	st, err := state.LoadState()
-	require.NoError(t, err)
-	app, exists := st.Apps["my-org/cool-tool"]
-	require.True(t, exists)
-	// SidecarTargetPath removed - sidecars now use IncludeSidecars mode
-	assert.Contains(t, app.InstalledSidecars, pluginPath)
-	assert.Contains(t, app.InstalledSidecars, configPath)
-	// Sidecars is now a regex pattern string, not a slice
-	// The test should verify the regex pattern is stored
-	assert.NotEmpty(t, app.Sidecars)
-
-	// Verify r.InstalledSidecars
-	assert.Contains(t, r.InstalledSidecars, pluginPath)
-	assert.Contains(t, r.InstalledSidecars, configPath)
-}
-
-func TestHandleShow_CustomReleaseVersion(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	xdg.DataHome = tmpDir
-
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems: []gitTreeItem{
-			{Path: "plugin.red", Type: "blob"},
-		},
-	}
-
-	origClient := defaultRestClient
-	origMultiselect := multiselectFiles
-	origDownload := downloadRawFile
-	defer func() {
-		defaultRestClient = origClient
-		multiselectFiles = origMultiselect
-		downloadRawFile = origDownload
-	}()
-
-	defaultRestClient = func() (ghRestClient, error) {
-		return mockClient, nil
-	}
-
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		return []string{"plugin.red"}, nil
-	}
-
-	var downloadedURL string
-	downloadRawFile = func(url string) ([]byte, error) {
-		downloadedURL = url
-		return []byte("data"), nil
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository: "owner/repo",
-			CommonInstallFlags: params.CommonInstallFlags{
-				ReleaseVersion: "v2.5.0",
-			},
-		},
-	}
-
-	err := r.handleShow()
-	require.NoError(t, err)
-
-	assert.Contains(t, mockClient.requestedPath, "git/trees/v2.5.0")
-	assert.Equal(t, "https://raw.githubusercontent.com/owner/repo/v2.5.0/plugin.red", downloadedURL)
-}
-
-func TestHandleShow_NoBlobsFound(t *testing.T) {
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems: []gitTreeItem{
-			{Path: "scripts", Type: "tree"},
-			{Path: "submodule", Type: "commit"},
-		},
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository: "owner/repo",
-		},
-	}
-
-	err := r.handleShowWithClient(mockClient)
-	assert.NoError(t, err)
-	assert.Empty(t, r.InstalledSidecars)
-}
-
-func TestHandleShow_UserSelectsNothing(t *testing.T) {
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems: []gitTreeItem{
-			{Path: "plugin.red", Type: "blob"},
-		},
-	}
-
-	origMultiselect := multiselectFiles
-	defer func() { multiselectFiles = origMultiselect }()
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		return nil, nil
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository: "owner/repo",
-		},
-	}
-
-	err := r.handleShowWithClient(mockClient)
-	assert.NoError(t, err)
-	assert.Empty(t, r.InstalledSidecars)
-}
-
-func TestHandleShow_Errors(t *testing.T) {
-	// Empty repository
-	rEmpty := &RootCLI{}
-	err := rEmpty.handleShow()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "repository must be provided")
-
-	// Invalid repository format
-	rInvalid := &RootCLI{ExecContext: params.ExecContext{Repository: "noslash"}}
-	err = rInvalid.handleShow()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "repository must be in 'owner/repo' format")
-
-	// API error fetching repository info
-	mockRepoErr := &mockShowTreeClient{repoErr: fmt.Errorf("API rate limit exceeded")}
-	r := &RootCLI{ExecContext: params.ExecContext{Repository: "owner/repo"}}
-	err = r.handleShowWithClient(mockRepoErr)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to fetch repository info")
-
-	// API error fetching git tree
-	mockTreeErr := &mockShowTreeClient{defaultBranch: "main", treeErr: fmt.Errorf("Tree not found")}
-	err = r.handleShowWithClient(mockTreeErr)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to fetch git tree")
-
-	// Multiselect error
-	mockClient := &mockShowTreeClient{
-		defaultBranch: "main",
-		treeItems:     []gitTreeItem{{Path: "file.txt", Type: "blob"}},
-	}
-	origMultiselect := multiselectFiles
-	defer func() { multiselectFiles = origMultiselect }()
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		return nil, fmt.Errorf("terminal error")
-	}
-	err = r.handleShowWithClient(mockClient)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "selection failed")
-
-	// Download error
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		return []string{"file.txt"}, nil
-	}
-	origDownload := downloadRawFile
-	defer func() { downloadRawFile = origDownload }()
-	downloadRawFile = func(url string) ([]byte, error) {
-		return nil, fmt.Errorf("network connection refused")
-	}
-	err = r.handleShowWithClient(mockClient)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to download")
-}
-
-func TestShowInfo_NoFlags_DoesNotDelegateToHandleShow(t *testing.T) {
-	mockClient := &mockGhClient{
-		releases: []Release{{ID: 1, TagName: "v1.0.0", Prerelease: false}},
-	}
-
-	origClient := defaultRestClient
-	origMultiselect := multiselectFiles
-	defer func() {
-		defaultRestClient = origClient
-		multiselectFiles = origMultiselect
-	}()
-
-	defaultRestClient = func() (ghRestClient, error) {
-		return mockClient, nil
-	}
-
-	var called bool
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		called = true
-		return nil, nil
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository:      "owner/repo",
-			ShowAssets:      -1,
-			ShowVersions:    -1,
-			ShowDescription: -1,
-			ShowReadme:      -1,
-		},
-	}
-
-	err := ShowInfo(r)
-	assert.NoError(t, err)
-	assert.False(t, called, "file browser multiselect must not be invoked")
-}
-
-// TestShowInfo_NoFlags_ShowsReleaseInfo: gh-pt show <repo> with no flags must show release info,
-// NOT the interactive file browser.
-func TestShowInfo_NoFlags_ShowsReleaseInfo(t *testing.T) {
-	origMultiselect := multiselectFiles
-	defer func() { multiselectFiles = origMultiselect }()
-
-	fileBrowserCalled := false
-	multiselectFiles = func(r *RootCLI, prompt string, options []string) ([]string, error) {
-		fileBrowserCalled = true
-		return nil, nil
-	}
+	rawMD := "# Tool Name\n\nThis is the markdown readme documentation."
+	encodedMD := base64.StdEncoding.EncodeToString([]byte(rawMD))
 
 	mock := &mockGhClient{
-		releases: []Release{{ID: 1, TagName: "v1.0.0", Prerelease: false}},
-		assets:   map[int64][]ReleaseAsset{1: {{ID: 1, Name: "app-linux.tar.gz"}}},
-	}
-
-	r := &RootCLI{
-		ExecContext: params.ExecContext{
-			Repository:      "owner/repo",
-			ShowAssets:      -1,
-			ShowVersions:    -1,
-			ShowDescription: -1,
-			ShowReadme:      -1,
+		releases: []Release{
+			{ID: 102, TagName: "v2.0.0", Prerelease: false},
+			{ID: 101, TagName: "v1.0.0", Prerelease: false},
 		},
+		assets: map[int64][]ReleaseAsset{
+			102: {
+				{ID: 1, Name: "tool-linux-amd64.tar.gz", Size: 1048576},
+				{ID: 2, Name: "tool-windows-amd64.zip", Size: 2097152},
+			},
+		},
+		description:   "A super cool CLI tool for testing",
+		readmeContent: encodedMD,
+	}
+	defaultRestClient = func() (ghRestClient, error) {
+		return mock, nil
 	}
 
-	out := captureOutput(func() {
-		err := showInfoWithClient(r, mock)
-		assert.NoError(t, err)
+	testCases := []struct {
+		name   string
+		cmdStr string
+	}{
+		{name: "show command", cmdStr: "show"},
+		{name: "show with repository positional", cmdStr: "show <repository>"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &params.CLI{
+				Show: params.ShowCmd{
+					Repository:  "owner/tool",
+					Assets:      -1,
+					Versions:    -1,
+					Description: -1,
+					Readme:      -1,
+				},
+			}
+
+			out := captureOutput(func() {
+				err := RunCommand(tc.cmdStr, cli)
+				require.NoError(t, err)
+			})
+
+			// 1. VERSIONS section must be present with tags
+			assert.Contains(t, out, "VERSIONS")
+			assert.Contains(t, out, "v2.0.0")
+			assert.Contains(t, out, "v1.0.0")
+
+			// 2. ASSETS section must be present with asset names
+			assert.Contains(t, out, "ASSETS")
+			assert.Contains(t, out, "tool-linux-amd64.tar.gz")
+
+			// 3. DESCRIPTION section must be present with repo description
+			assert.Contains(t, out, "DESCRIPTION")
+			assert.Contains(t, out, "A super cool CLI tool for testing")
+
+			// 4. README section must be present with rendered readme content
+			assert.Contains(t, out, "README")
+			assert.Contains(t, out, "markdown readme")
+		})
+	}
+}
+
+// TestShow_SelectiveFlags_ShowsOnlyRequestedSections asserts that passing specific flags
+// (e.g. only --versions, only --assets, only --readme, or only --description) restricts output to only those sections.
+func TestShow_SelectiveFlags_ShowsOnlyRequestedSections(t *testing.T) {
+	origClient := defaultRestClient
+	defer func() { defaultRestClient = origClient }()
+
+	rawMD := "# Tool Name\nReadme body."
+	encodedMD := base64.StdEncoding.EncodeToString([]byte(rawMD))
+
+	mock := &mockGhClient{
+		releases: []Release{
+			{ID: 101, TagName: "v1.0.0", Prerelease: false},
+		},
+		assets: map[int64][]ReleaseAsset{
+			101: {{ID: 1, Name: "tool-linux.tar.gz", Size: 1024}},
+		},
+		description:   "Specific description.",
+		readmeContent: encodedMD,
+	}
+	defaultRestClient = func() (ghRestClient, error) {
+		return mock, nil
+	}
+
+	t.Run("Only versions", func(t *testing.T) {
+		cli := &params.CLI{
+			Show: params.ShowCmd{
+				Repository:  "owner/tool",
+				Versions:    10,
+				Assets:      -1,
+				Description: -1,
+				Readme:      -1,
+			},
+		}
+		out := captureOutput(func() {
+			err := RunCommand("show", cli)
+			require.NoError(t, err)
+		})
+		assert.Contains(t, out, "VERSIONS")
+		assert.NotContains(t, out, "ASSETS")
+		assert.NotContains(t, out, "DESCRIPTION")
+		assert.NotContains(t, out, "README")
 	})
 
-	assert.False(t, fileBrowserCalled, "file browser must NOT be shown")
-	assert.Contains(t, out, "v1.0.0")
-	assert.Contains(t, out, "app-linux.tar.gz")
+	t.Run("Only readme", func(t *testing.T) {
+		cli := &params.CLI{
+			Show: params.ShowCmd{
+				Repository:  "owner/tool",
+				Versions:    -1,
+				Assets:      -1,
+				Description: -1,
+				Readme:      50,
+			},
+		}
+		out := captureOutput(func() {
+			err := RunCommand("show", cli)
+			require.NoError(t, err)
+		})
+		assert.NotContains(t, out, "VERSIONS")
+		assert.NotContains(t, out, "ASSETS")
+		assert.NotContains(t, out, "DESCRIPTION")
+		assert.Contains(t, out, "README")
+	})
 }
 
 // TestShowInfo_VersionFlag_SelectsSpecificRelease: --version v1.3.1 must fetch assets from that tag.

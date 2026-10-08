@@ -89,7 +89,7 @@ type ResolutionFlags struct {
 	MaxExeInstalls                                int      `name:"max-exe-installs" default:"0" help:"Maximum number of executables to install (0 = all unique)."`
 	Prerelease                                    bool     `short:"P" help:"Include prereleases."`
 	Stable                                        bool     `help:"Include only stable releases."`
-	FallbackReleases                              int      `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
+	FallbackReleases                              int      `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled, max 3)."`
 	SearchForInstallInstructionsIfNoReleaseAssets bool     `env:"GH_PT_README_FALLBACK" help:"Extract alternative installation instructions from README if release asset matching fails."`
 	AvxLevel                                      string   `default:"auto" enum:"auto,none,avx,avx2,avx512" env:"GH_PT_AVX_LEVEL" help:"AVX instruction set preference: auto, none, avx, avx2, avx512."`
 }
@@ -116,7 +116,7 @@ type DependencyFlags struct {
 type VerificationFlags struct {
 	VerifyChecksum        bool `default:"true" help:"Verify asset checksums."`
 	InsecureAllowUnsigned bool `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
-	SkipVtSandbox         bool `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	SkipVtSandbox         bool `default:"true" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan (default: true, use --skip-vt-sandbox=false to enable)."`
 	AI                    bool `help:"Use AI to scan and analyze releases."`
 }
 
@@ -126,6 +126,8 @@ type SidecarFlags struct {
 	SidecarSymlinkTo   []string `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
 	IncludeSidecars    bool     `name:"include-sidecars" short:"s" negatable:"" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
 	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto (maps standard Unix layout to prefix, else xdg_data_home), local-map, xdg_data_home, or custom-path:/path/to/ (default: auto)."`
+	Driver             string   `optional:"" name:"driver" enum:"auto,vulkan,opencl,vaapi,udev,ldso,none" default:"none" help:"Register hardware/userspace driver manifests: auto, vulkan, opencl, vaapi, udev, ldso (Linux only)."`
+	Plugin             string   `optional:"" name:"plugin" aliases:"plugins" enum:"auto,obs,gimp,vst,lv2,clap,audio,none" default:"none" help:"Register host application plugin manifests or symlinks: auto, obs, gimp, vst, lv2, clap, audio (Linux only)."`
 	EnvInject          []string `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
 	WarnUnmappedAssets bool     `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
 	AISetupSidecars    bool     `help:"Use AI to analyze sidecars and generate post-install setup commands."`
@@ -137,11 +139,18 @@ func (s *SidecarFlags) AfterApply(ctx *kong.Context) error {
 	return nil
 }
 
-// ResolveSidecars auto-enables IncludeSidecars if SidecarMode is explicitly provided,
+// ResolveSidecars auto-enables IncludeSidecars if SidecarMode, Driver, or Plugin is explicitly provided,
 // non-empty, and != "none" or "default", unless IncludeSidecars was explicitly set to false.
 func (s *SidecarFlags) ResolveSidecars(ctx ...*kong.Context) {
 	mode := strings.ToLower(strings.TrimSpace(s.SidecarMode))
-	if mode != "" && mode != "none" && mode != "default" {
+	driver := strings.ToLower(strings.TrimSpace(s.Driver))
+	plugin := strings.ToLower(strings.TrimSpace(s.Plugin))
+
+	explicitlyProvided := (mode != "" && mode != "none" && mode != "default") ||
+		(driver != "" && driver != "none") ||
+		(plugin != "" && plugin != "none")
+
+	if explicitlyProvided {
 		explicitlyDisabled := false
 		if len(ctx) > 0 && ctx[0] != nil {
 			for _, f := range ctx[0].Flags() {
@@ -168,6 +177,8 @@ type ExecutionFlags struct {
 	Wine                 string   `default:"off" enum:"force,priority,allow,off" env:"GH_PT_WINE" help:"Wine mode."`
 	AllowForeignArch     bool     `env:"GH_PT_ALLOW_FOREIGN_ARCH" help:"Allow installing assets with foreign architectures."`
 	AllowRootUserInstall bool     `help:"Allow installation to user-local paths when running as root."`
+	ForceRoot            bool     `name:"force-root" env:"GH_PT_FORCE_ROOT" help:"Allow operations when running as root (suppresses root restriction)."`
+	NoCompileContainer   bool     `name:"no-compile-container" env:"GH_PT_NO_COMPILE_CONTAINER" help:"Opt out of mandatory container isolation for AI source compilation (UNSAFE)."`
 	Extractor            string   `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
 	AllowDowngrade       bool     `help:"Allow downgrades when updating or installing."`
 	SelfInflictedDebt    bool     `name:"self-inflicted-technical-debt" help:"Allow downgrades (alias for allow-downgrade)."`
@@ -279,7 +290,7 @@ type UpgradeFlags struct {
 	DryRun                bool   `default:"false" help:"Show what would be upgraded."`
 	VerifyChecksum        bool   `default:"true" help:"Verify asset checksums."`
 	InsecureAllowUnsigned bool   `name:"insecure-allow-unsigned" aliases:"skip-checksums" env:"GH_PT_INSECURE_ALLOW_UNSIGNED" help:"Allow unsigned release assets without cryptographic verification."`
-	SkipVtSandbox         bool   `default:"false" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan."`
+	SkipVtSandbox         bool   `default:"true" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan (default: true, use --skip-vt-sandbox=false to enable)."`
 	FallbackReleases      int    `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
 	WarnUnmappedAssets    bool   `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
 	ProgressBar           string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`

@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/joshsukhdeo/gh-pt/params"
+	"github.com/joshsukhdeo/gh-pt/safety"
 	"github.com/mholt/archiver/v4"
 )
 
@@ -301,7 +302,7 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 			}
 		}
 
-		extractDir, _ := os.MkdirTemp("", "gh-ext-")
+		extractDir, _ := safety.SafeMkdirTemp("", "gh-ext-*")
 		extracted := false
 
 		for _, method := range precedence {

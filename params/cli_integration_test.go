@@ -82,7 +82,8 @@ func TestCLI_SpecialtyFlagCascades(t *testing.T) {
 			r.PinInstall = false
 		}
 
-		assert.False(t, r.SkipVtSandbox)
+		// Default is now true (opt-in), so SkipVtSandbox remains true unless explicitly disabled
+		assert.True(t, r.SkipVtSandbox)
 		assert.True(t, r.AllowDowngrade)
 		assert.False(t, r.PinInstall)
 	})
@@ -276,5 +277,45 @@ func TestCLI_InsecureAllowUnsignedFlags(t *testing.T) {
 	t.Run("Upgrade Flag Alias skip-checksums", func(t *testing.T) {
 		cli, _ := parseWithTestVars(t, []string{"upgrade", "cli/cli", "--skip-checksums"})
 		assert.True(t, cli.Upgrade.InsecureAllowUnsigned)
+	})
+}
+
+func TestCLI_DriverAndPluginFlags(t *testing.T) {
+	t.Run("Driver flag auto-enables sidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "intel/compute-runtime", "--driver=opencl"})
+		assert.Equal(t, "opencl", cli.Install.Driver)
+		assert.True(t, cli.Install.IncludeSidecars)
+
+		execCtx := cli.ToExecContext()
+		assert.Equal(t, "opencl", execCtx.Driver)
+		assert.True(t, execCtx.IncludeSidecars)
+	})
+
+	t.Run("Plugin flag auto-enables sidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "intel/openvino-plugins-for-obs-studio", "--plugin=obs"})
+		assert.Equal(t, "obs", cli.Install.Plugin)
+		assert.True(t, cli.Install.IncludeSidecars)
+
+		execCtx := cli.ToExecContext()
+		assert.Equal(t, "obs", execCtx.Plugin)
+		assert.True(t, execCtx.IncludeSidecars)
+	})
+
+	t.Run("Plugins alias flag works", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "vendor/audio-pack", "--plugins=vst"})
+		assert.Equal(t, "vst", cli.Install.Plugin)
+		assert.True(t, cli.Install.IncludeSidecars)
+	})
+
+	t.Run("Driver none does not auto-enable sidecars", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "some/app", "--driver=none"})
+		assert.Equal(t, "none", cli.Install.Driver)
+		assert.False(t, cli.Install.IncludeSidecars)
+	})
+
+	t.Run("Explicit --no-include-sidecars overrides auto-enable", func(t *testing.T) {
+		cli, _ := parseWithTestVars(t, []string{"install", "intel/compute-runtime", "--driver=vulkan", "--no-include-sidecars"})
+		assert.Equal(t, "vulkan", cli.Install.Driver)
+		assert.False(t, cli.Install.IncludeSidecars)
 	})
 }

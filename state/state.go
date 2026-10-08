@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,8 @@ type InstalledApp struct {
 	SidecarSymlinkTo         []string          `json:"sidecar_symlink_to,omitempty"`
 	IncludeSidecars          bool              `json:"include_sidecars,omitempty"`
 	SidecarMode              string            `json:"sidecar_mode,omitempty"`
+	Driver                   string            `json:"driver,omitempty"`
+	Plugin                   string            `json:"plugin,omitempty"`
 	InstalledSidecars        []string          `json:"installed_sidecars,omitempty"`
 	EnvInject                []string          `json:"env_inject,omitempty"`
 	FallbackReleases         int               `json:"fallback_releases,omitempty"`
@@ -362,6 +365,7 @@ func LoadState() (*State, error) {
 		s.SourceRepos = make(map[string]*SourceRepo)
 	}
 
+	needsMigration := false
 	if s.Version < 2 {
 		// Create a durable backup of the V1 state before migrating
 		if f, err := os.Create(path + ".v1.bak"); err == nil {
@@ -369,13 +373,24 @@ func LoadState() (*State, error) {
 			_ = f.Sync()
 			_ = f.Close()
 		}
-		_ = s.migrateV1toV2()
-		_ = s.Save()
+		if err := s.migrateV1toV2(); err != nil {
+			return nil, fmt.Errorf("V1->V2 migration failed: %w", err)
+		}
+		needsMigration = true
 	}
 
 	if s.Version < 3 {
-		_ = s.migrateV2toV3()
-		_ = s.Save()
+		if err := s.migrateV2toV3(); err != nil {
+			return nil, fmt.Errorf("V2->V3 migration failed: %w", err)
+		}
+		needsMigration = true
+	}
+
+	// Only save if migrations ran successfully and version changed
+	if needsMigration {
+		if err := s.Save(); err != nil {
+			return nil, fmt.Errorf("failed to save migrated state: %w", err)
+		}
 	}
 
 	return &s, nil

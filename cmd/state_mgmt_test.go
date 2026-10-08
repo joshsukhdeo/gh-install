@@ -287,3 +287,41 @@ func TestRemoveApp_ProtectsSystemAndTargetDirs(t *testing.T) {
 	assert.DirExists(t, targetDir)
 	assert.FileExists(t, keepFile)
 }
+
+func TestRemoveApp_CleansUpDriverManifests(t *testing.T) {
+	tmpDir := t.TempDir()
+	origXdg := os.Getenv("XDG_DATA_HOME")
+	os.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+	defer func() {
+		os.Setenv("XDG_DATA_HOME", origXdg)
+		xdg.Reload()
+	}()
+
+	manifestDir := filepath.Join(tmpDir, "vulkan", "icd.d")
+	require.NoError(t, os.MkdirAll(manifestDir, 0755))
+	manifestFile := filepath.Join(manifestDir, "gh-pt-intel-compute-runtime.json")
+	require.NoError(t, os.WriteFile(manifestFile, []byte(`{"ICD":{}}`), 0644))
+
+	pkgDir := filepath.Join(tmpDir, "packages", "intel", "compute-runtime")
+	require.NoError(t, os.MkdirAll(pkgDir, 0755))
+	require.NoError(t, safety.WriteGhptManagedMarker(pkgDir))
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository:        "intel/compute-runtime",
+		TargetPath:        filepath.Join(tmpDir, "bin"),
+		SymlinkDir:        pkgDir,
+		Driver:            "vulkan",
+		InstalledSidecars: []string{manifestFile},
+	}))
+
+	err = RemoveApp("intel/compute-runtime", true)
+	require.NoError(t, err)
+
+	// Manifest and package dir should be cleanly unlinked
+	assert.NoFileExists(t, manifestFile)
+	assert.NoDirExists(t, pkgDir)
+}

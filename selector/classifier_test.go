@@ -219,7 +219,7 @@ func TestAssetClassifier_ThoriumRelease(t *testing.T) {
 	alternatives := classified[CategoryInstallableAlternative]
 	assert.NotEmpty(t, alternatives)
 	for _, alt := range alternatives {
-		assert.Contains(t, []ArchSubcategory{SubcatNative, SubcatEmulated, SubcatWine}, alt.Subcat)
+		assert.Contains(t, []ArchSubcategory{SubcatNative, SubcatEmulated, SubcatWine, SubcatUniversal}, alt.Subcat)
 	}
 
 	// Category 3: Cannot install
@@ -337,4 +337,132 @@ func TestAssetClassifier_AVXHardwareCompatibility(t *testing.T) {
 
 	// AVX on AVX2 host is Native
 	assert.Equal(t, SubcatNative, cAVX2.DetectSubcategory("thorium-browser_154.0.8037.45_AVX.deb"))
+}
+
+func TestAssetClassifier_NativePackageFiltering(t *testing.T) {
+	// Test that native means BOTH OS AND architecture compatibility
+	// RPM packages should NEVER be installable on Ubuntu (dpkg-based)
+	// .deb packages should be native on Ubuntu
+	// .rpm packages should be native on Fedora/RHEL
+
+	t.Run("Ubuntu_host_rpm_not_native", func(t *testing.T) {
+		// Ubuntu host with dpkg
+		c := NewAssetClassifier("linux", "amd64", "allow", "avx2")
+
+		// RPM should be foreign (wrong package format) on Ubuntu
+		assert.Equal(t, SubcatForeign, c.DetectSubcategory("tool_1.0.0_amd64.rpm"))
+
+		// .deb should be native
+		assert.Equal(t, SubcatNative, c.DetectSubcategory("tool_1.0.0_amd64.deb"))
+
+		// ClassifyRelease should not put RPM in installable categories
+		assets := []string{
+			"tool_1.0.0_amd64.deb",
+			"tool_1.0.0_amd64.rpm",
+		}
+		classified := c.ClassifyRelease(assets, nil)
+
+		// Default install should be .deb
+		defaultInstalls := classified[CategoryDefaultInstall]
+		require.Len(t, defaultInstalls, 1)
+		assert.Equal(t, "tool_1.0.0_amd64.deb", defaultInstalls[0].Name)
+
+		// RPM should NOT be in CategoryDefaultInstall or CategoryInstallableAlternative
+		for _, cat := range []InstallCategory{CategoryDefaultInstall, CategoryInstallableAlternative} {
+			for _, item := range classified[cat] {
+				assert.NotEqual(t, "tool_1.0.0_amd64.rpm", item.Name, "RPM must not be in %v on Ubuntu", cat)
+			}
+		}
+	})
+
+	t.Run("Architecture_mismatch_not_native", func(t *testing.T) {
+		c := NewAssetClassifier("linux", "amd64", "allow", "avx2")
+
+		// arm64 package on amd64 host is Foreign, not Native
+		assert.Equal(t, SubcatForeign, c.DetectSubcategory("tool_1.0.0_arm64.deb"))
+		assert.Equal(t, SubcatForeign, c.DetectSubcategory("tool_1.0.0_arm64.rpm"))
+
+		// i386 is Emulated, not Native (can run via emulation)
+		assert.Equal(t, SubcatEmulated, c.DetectSubcategory("tool_1.0.0_i386.deb"))
+
+		// ClassifyRelease should not include architecture-mismatched packages in default install
+		assets := []string{
+			"tool_1.0.0_amd64.deb",
+			"tool_1.0.0_arm64.deb",
+			"tool_1.0.0_i386.deb",
+		}
+		classified := c.ClassifyRelease(assets, nil)
+
+		defaultInstalls := classified[CategoryDefaultInstall]
+		require.Len(t, defaultInstalls, 1)
+		assert.Equal(t, "tool_1.0.0_amd64.deb", defaultInstalls[0].Name)
+
+		// arm64 should not be in installable categories (it's Foreign)
+		for _, cat := range []InstallCategory{CategoryDefaultInstall, CategoryInstallableAlternative} {
+			for _, item := range classified[cat] {
+				assert.NotContains(t, item.Name, "arm64")
+			}
+		}
+		// i386 is Emulated, which IS installable (via emulation), so it CAN appear in alternatives
+		// This is correct behavior - 32-bit binaries can run on 64-bit Linux
+	})
+
+	t.Run("Package_format_detection", func(t *testing.T) {
+		// Test isPackageFormat helper
+		assert.True(t, isPackageFormat("tool.deb"))
+		assert.True(t, isPackageFormat("tool.rpm"))
+		assert.True(t, isPackageFormat("tool.AppImage"))
+		assert.True(t, isPackageFormat("tool.flatpak"))
+		assert.True(t, isPackageFormat("tool.snap"))
+		assert.True(t, isPackageFormat("tool.dmg"))
+		assert.True(t, isPackageFormat("tool.pkg"))
+		assert.True(t, isPackageFormat("tool.msi"))
+
+		assert.False(t, isPackageFormat("tool.tar.gz"))
+		assert.False(t, isPackageFormat("tool.zip"))
+		assert.False(t, isPackageFormat("tool"))
+	})
+}
+
+func TestAssetClassifier_DetectPackageFormat(t *testing.T) {
+	// Test isPackageFormat helper
+	assert.True(t, isPackageFormat("tool.deb"))
+	assert.True(t, isPackageFormat("tool.rpm"))
+	assert.True(t, isPackageFormat("tool.AppImage"))
+	assert.True(t, isPackageFormat("tool.flatpak"))
+	assert.True(t, isPackageFormat("tool.snap"))
+	assert.True(t, isPackageFormat("tool.dmg"))
+	assert.True(t, isPackageFormat("tool.pkg"))
+	assert.True(t, isPackageFormat("tool.msi"))
+
+	assert.False(t, isPackageFormat("tool.tar.gz"))
+	assert.False(t, isPackageFormat("tool.zip"))
+	assert.False(t, isPackageFormat("tool"))
+}
+
+func TestDetectArchiveMagic(t *testing.T) {
+	assert.Equal(t, "gzip", DetectArchiveMagic([]byte{0x1f, 0x8b, 0x08, 0x00}))
+	assert.Equal(t, "zip", DetectArchiveMagic([]byte{'P', 'K', 0x03, 0x04}))
+	assert.Equal(t, "bzip2", DetectArchiveMagic([]byte{'B', 'Z', 'h', '9'}))
+	assert.Equal(t, "xz", DetectArchiveMagic([]byte{0xfd, '7', 'z', 'X', 'Z', 0x00}))
+	assert.Equal(t, "7z", DetectArchiveMagic([]byte{'7', 'z', 0xbc, 0xaf, 0x27, 0x1c}))
+	assert.Equal(t, "zstd", DetectArchiveMagic([]byte{0x28, 0xb5, 0x2f, 0xfd}))
+	assert.Equal(t, "", DetectArchiveMagic([]byte{0x00, 0x00}))
+}
+
+func TestVerifyAssetContentConsistency(t *testing.T) {
+	// Valid matching headers
+	consistent, _ := VerifyAssetContentConsistency("tool.tar.gz", []byte{0x1f, 0x8b, 0x08, 0x00})
+	assert.True(t, consistent)
+
+	consistent, _ = VerifyAssetContentConsistency("tool.zip", []byte{'P', 'K', 0x03, 0x04})
+	assert.True(t, consistent)
+
+	consistent, _ = VerifyAssetContentConsistency("tool.exe", []byte{'M', 'Z', 0x90, 0x00})
+	assert.True(t, consistent)
+
+	// Mismatched / spoofed header
+	consistent, reason := VerifyAssetContentConsistency("malicious.tar.gz", []byte{'P', 'K', 0x03, 0x04})
+	assert.False(t, consistent)
+	assert.Contains(t, reason, "expected gzip magic")
 }

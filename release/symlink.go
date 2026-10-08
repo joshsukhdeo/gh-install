@@ -19,8 +19,51 @@ import (
 
 var symlinkFunc = os.Symlink
 
+// createSymlinkAtomic creates a symlink atomically to avoid TOCTOU race conditions.
+// It creates the symlink with a temporary name and then atomically renames it into place.
+// If symlink fails (e.g., on Windows without privilege), it falls back to hardlink or copy.
+func createSymlinkAtomic(src, dest string) error {
+	// Create parent directory if needed
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
+
+	// Generate a temporary name in the same directory
+	tmpDest := dest + ".tmp." + filepath.Base(dest)
+
+	// Create the symlink with temporary name
+	if err := symlinkFunc(src, tmpDest); err == nil {
+		// Atomically rename the temporary symlink to the final destination
+		// This replaces any existing file/symlink atomically
+		if err := os.Rename(tmpDest, dest); err != nil {
+			// Clean up temp file on failure
+			_ = os.Remove(tmpDest)
+			return err
+		}
+		return nil
+	}
+
+	// Symlink failed - fall back to hardlink or copy (like createSymlinkOrCopy did)
+	// Clean up temp file if it exists
+	_ = os.Remove(tmpDest)
+
+	// Attempt hardlink fallback where appropriate
+	if err := os.Link(src, dest); err == nil {
+		return nil
+	}
+
+	// Fallback to copying file
+	info, err := os.Stat(src)
+	mode := os.FileMode(0755)
+	if err == nil {
+		mode = info.Mode()
+	}
+
+	return copyFile(src, dest, mode)
+}
+
 func createSymlinkOrCopy(srcPath, destPath string) error {
-	if err := symlinkFunc(srcPath, destPath); err == nil {
+	if err := createSymlinkAtomic(srcPath, destPath); err == nil {
 		return nil
 	} else {
 		log.Warn("failed to create symlink, attempting fallback", "error", err, "src", srcPath, "dest", destPath)
@@ -276,18 +319,24 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 
 		destPath := r.resolveDestinationPath(binary.Name)
 
-		if _, err := os.Lstat(destPath); err == nil {
-			if r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd {
-				if err := os.Remove(destPath); err != nil {
-					log.Warn("failed to remove existing file before overwrite", "error", err, "path", destPath)
+		// Use atomic symlink creation to avoid TOCTOU race condition
+		if err := createSymlinkAtomic(srcPath, destPath); err != nil {
+			// If atomic creation fails, check if it's because the file already exists
+			if _, statErr := os.Lstat(destPath); statErr == nil {
+				if r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd {
+					if removeErr := os.Remove(destPath); removeErr != nil {
+						log.Warn("failed to remove existing file before overwrite", "error", removeErr, "path", destPath)
+					}
+					// Retry atomic creation
+					if retryErr := createSymlinkAtomic(srcPath, destPath); retryErr != nil {
+						return "", retryErr
+					}
+				} else {
+					return "", fmt.Errorf("%s already exists; use force to overwrite", destPath)
 				}
 			} else {
-				return "", fmt.Errorf("%s already exists; use force to overwrite", destPath)
+				return "", err
 			}
-		}
-
-		if err := createSymlinkOrCopy(srcPath, destPath); err != nil {
-			return "", err
 		}
 		r.InstalledFiles = append(r.InstalledFiles, srcPath)
 		r.InstalledSymlinks = append(r.InstalledSymlinks, destPath)
@@ -318,6 +367,17 @@ func (r *GithubRelease) executeSymlinkInstall(binaries []*selector.SelectorItem,
 	if r.CliParams.IncludeSidecars {
 		if err := r.symlinkSidecars(symlinkDir); err != nil {
 			log.Warn("failed to symlink sidecars", "error", err)
+		}
+	}
+
+	// Deploy driver and plugin manifests if --driver or --plugin is set
+	if (r.CliParams.Driver != "" && r.CliParams.Driver != "none") || (r.CliParams.Plugin != "" && r.CliParams.Plugin != "none") {
+		manifests, err := r.DeployDriverAndPluginManifests(symlinkDir)
+		if err != nil {
+			log.Warn("driver/plugin manifest registration encountered warning", "error", err)
+		} else if len(manifests) > 0 {
+			r.InstalledSidecars = append(r.InstalledSidecars, manifests...)
+			log.Infof("Registered %d driver/plugin manifests", len(manifests))
 		}
 	}
 
@@ -427,21 +487,28 @@ func (r *GithubRelease) symlinkSidecarsToDest(symlinkDir, sidecarDest string) er
 		if regex.MatchString(relPath) || regex.MatchString(d.Name()) {
 			destPath := filepath.Join(sidecarDest, d.Name())
 
-			if _, err := os.Lstat(destPath); err == nil {
-				if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
-					if err := os.Remove(destPath); err != nil {
-						log.Warn("failed to remove existing sidecar symlink", "error", err, "path", destPath)
+			// Use atomic symlink creation to avoid TOCTOU race condition
+			if err := createSymlinkAtomic(path, destPath); err != nil {
+				// If atomic creation fails, check if it's because the file already exists
+				if _, statErr := os.Lstat(destPath); statErr == nil {
+					if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
+						if removeErr := os.Remove(destPath); removeErr != nil {
+							log.Warn("failed to remove existing sidecar symlink", "error", removeErr, "path", destPath)
+							return nil
+						}
+						// Retry atomic creation
+						if retryErr := createSymlinkAtomic(path, destPath); retryErr != nil {
+							log.Warn("failed to create sidecar symlink or copy", "error", retryErr, "src", path, "dest", destPath)
+							return nil
+						}
+					} else {
+						log.Warn("sidecar symlink already exists, skipping", "path", destPath)
 						return nil
 					}
 				} else {
-					log.Warn("sidecar symlink already exists, skipping", "path", destPath)
+					log.Warn("failed to create sidecar symlink or copy", "error", err, "src", path, "dest", destPath)
 					return nil
 				}
-			}
-
-			if err := createSymlinkOrCopy(path, destPath); err != nil {
-				log.Warn("failed to create sidecar symlink or copy", "error", err, "src", path, "dest", destPath)
-				return nil
 			}
 
 			log.Info("created sidecar symlink", "src", path, "dest", destPath)
@@ -516,21 +583,28 @@ func (r *GithubRelease) symlinkLocalMap(symlinkDir string) error {
 				return nil
 			}
 
-			if _, err := os.Lstat(destPath); err == nil {
-				if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
-					if err := os.Remove(destPath); err != nil {
-						log.Warn("failed to remove existing sidecar target", "dest", destPath, "error", err)
+			// Use atomic symlink creation to avoid TOCTOU race condition
+			if err := createSymlinkAtomic(path, destPath); err != nil {
+				// If atomic creation fails, check if it's because the file already exists
+				if _, statErr := os.Lstat(destPath); statErr == nil {
+					if r.CliParams != nil && (r.CliParams.Overwrite || r.CliParams.IsUpgradeCmd) {
+						if removeErr := os.Remove(destPath); removeErr != nil {
+							log.Warn("failed to remove existing sidecar target", "dest", destPath, "error", removeErr)
+							return nil
+						}
+						// Retry atomic creation
+						if retryErr := createSymlinkAtomic(path, destPath); retryErr != nil {
+							log.Warn("failed to create local-map symlink", "src", path, "dest", destPath, "error", retryErr)
+							return nil
+						}
+					} else {
+						log.Warn("sidecar target already exists, skipping", "dest", destPath)
 						return nil
 					}
 				} else {
-					log.Warn("sidecar target already exists, skipping", "dest", destPath)
+					log.Warn("failed to create local-map symlink", "src", path, "dest", destPath, "error", err)
 					return nil
 				}
-			}
-
-			if err := createSymlinkOrCopy(path, destPath); err != nil {
-				log.Warn("failed to create local-map symlink", "src", path, "dest", destPath, "error", err)
-				return nil
 			}
 
 			foundAny = true

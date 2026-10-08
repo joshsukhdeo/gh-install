@@ -416,15 +416,47 @@ func RemoveApp(target string, purge bool) error {
 			stopDirs = append(stopDirs, app.TargetPath)
 		}
 
+		var removedLdso, removedUdev bool
 		for _, sc := range app.InstalledSidecars {
 			if _, err := os.Lstat(sc); err == nil {
+				if strings.Contains(sc, "ld.so.conf.d") {
+					removedLdso = true
+				}
+				if strings.Contains(sc, "udev/rules.d") {
+					removedUdev = true
+				}
 				if err := os.Remove(sc); err != nil && !os.IsNotExist(err) {
-					log.Warn(fmt.Sprintf("Failed to remove sidecar %s", sc), "error", err)
+					if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(sc), "/etc") {
+						cmd := execCommand("sudo", "rm", "-f", sc)
+						if sudoErr := cmd.Run(); sudoErr != nil {
+							log.Warn(fmt.Sprintf("Failed to remove sidecar %s with sudo", sc), "error", sudoErr)
+						} else {
+							log.Infof("Deleted sidecar %s with sudo", sc)
+							pruneEmptyParentDirs(filepath.Dir(sc), stopDirs)
+						}
+					} else {
+						log.Warn(fmt.Sprintf("Failed to remove sidecar %s", sc), "error", err)
+					}
 				} else if err == nil {
 					log.Infof("Deleted sidecar %s", sc)
 					pruneEmptyParentDirs(filepath.Dir(sc), stopDirs)
 				}
 			}
+		}
+
+		if removedLdso {
+			log.Info("ld.so fragment removed, executing ldconfig")
+			cmd := execCommand("sudo", "ldconfig")
+			if err := cmd.Run(); err != nil {
+				log.Warn("Failed to execute ldconfig after removing ld.so fragment", "error", err)
+			}
+		}
+		if removedUdev {
+			log.Info("udev rules removed, reloading udev rules")
+			cmd := execCommand("sudo", "udevadm", "control", "--reload-rules")
+			_ = cmd.Run()
+			cmdTrigger := execCommand("sudo", "udevadm", "trigger")
+			_ = cmdTrigger.Run()
 		}
 
 		if app.SymlinkDir != "" {

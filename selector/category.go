@@ -28,6 +28,8 @@ func CategorizeAsset(name string) (AssetCategory, string) {
 		return CategorySidecar, "[Sidecar]"
 	case SubcatWine:
 		return CategoryExecutable, "[Wine]"
+	case SubcatUniversal:
+		return CategoryExecutable, "[Universal]"
 	case SubcatForeign, SubcatEmulated, SubcatUnsupported:
 		return CategoryExecutable, "[Foreign Arch]"
 	default:
@@ -41,16 +43,18 @@ func AssetCategoryPriority(name string) int {
 	switch tag {
 	case "[Native]":
 		return 1
-	case "[Sidecar]":
+	case "[Universal]":
 		return 2
-	case "[Wine]":
+	case "[Sidecar]":
 		return 3
-	case "[Foreign Arch]":
+	case "[Wine]":
 		return 4
-	case "[Checksum]":
+	case "[Foreign Arch]":
 		return 5
-	default:
+	case "[Checksum]":
 		return 6
+	default:
+		return 7
 	}
 }
 

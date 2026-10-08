@@ -113,3 +113,40 @@ func TestCheckAncestorWithGetter_NoMatch(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, isRestricted)
 }
+
+func TestIsContainerEnvironment(t *testing.T) {
+	// Must execute without panic
+	_ = isContainerEnvironment()
+
+	// When container env is set, must return true
+	t.Setenv("container", "docker")
+	assert.True(t, isContainerEnvironment())
+
+	t.Setenv("container", "podman")
+	assert.True(t, isContainerEnvironment())
+}
+
+func TestRootPolicy_ForceRootAndGlobal(t *testing.T) {
+	cli := &RootCLI{
+		Global:    true,
+		ForceRoot: false,
+	}
+	assert.True(t, cli.Global)
+
+	// Test that Global implies ForceRoot
+	if cli.Global {
+		cli.ForceRoot = true
+	}
+	assert.True(t, cli.ForceRoot)
+}
+
+func TestCompileContainerIsolationFlags(t *testing.T) {
+	cli := &RootCLI{
+		NoCompileContainer: false,
+	}
+	// By default, container isolation is enabled (NoCompileContainer == false)
+	assert.False(t, cli.NoCompileContainer)
+
+	cli.NoCompileContainer = true
+	assert.True(t, cli.NoCompileContainer)
+}

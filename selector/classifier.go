@@ -39,6 +39,7 @@ const (
 	SubcatChecksum    ArchSubcategory = "SUM"
 	SubcatSignature   ArchSubcategory = "SIG"
 	SubcatMetadata    ArchSubcategory = "META"
+	SubcatUniversal   ArchSubcategory = "UNI"
 	SubcatUnsupported ArchSubcategory = "UNS"
 	SubcatUnknown     ArchSubcategory = "UNK"
 )
@@ -67,6 +68,7 @@ type AssetClassifier struct {
 	HostArch     string
 	WineMode     string
 	HostAVXLevel string
+	HostPkgMgr   string // "dpkg", "rpm", or "" for unknown
 }
 
 var (
@@ -132,7 +134,20 @@ func NewAssetClassifier(hostOS, hostArch, wineMode, hostAVX string) *AssetClassi
 		HostArch:     hostArch,
 		WineMode:     wineMode,
 		HostAVXLevel: hostAVX,
+		HostPkgMgr:   detectHostPackageManager(),
 	}
+}
+
+// detectHostPackageManager detects the host's native package manager.
+// Returns "dpkg", "rpm", or "" for unknown/unsupported.
+func detectHostPackageManager() string {
+	if _, err := lookPath("dpkg"); err == nil {
+		return "dpkg"
+	}
+	if _, err := lookPath("rpm"); err == nil {
+		return "rpm"
+	}
+	return ""
 }
 
 var defaultClassifier = NewAssetClassifier("", "", "", "")
@@ -559,12 +574,24 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 			return SubcatEmulated
 		}
 
-		// Native AMD64 / x86_64
+		// Check for universal Linux packages (AppImage, Flatpak, Snap) - NOT native
+		// These are runtime-dependent and should not be preferred over native packages
+		if strings.HasSuffix(lower, ".appimage") ||
+			strings.HasSuffix(lower, ".flatpak") ||
+			strings.HasSuffix(lower, ".snap") {
+			return SubcatUniversal
+		}
+
+		// Native AMD64 / x86_64 - check architecture AND package format for the host OS
 		if strings.Contains(lower, "amd64") || strings.Contains(lower, "x86_64") || strings.Contains(lower, "x64") {
 			if c.IsSidecar(name) {
 				return SubcatSidecar
 			}
-			return SubcatNative
+			// Check package format matches host OS
+			if c.isNativeFormatForOS(name) {
+				return SubcatNative
+			}
+			return SubcatForeign
 		}
 
 	case "arm64":
@@ -581,7 +608,11 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 			if c.IsSidecar(name) {
 				return SubcatSidecar
 			}
-			return SubcatNative
+			// Check package format matches host package manager
+			if c.isNativePackageFormat(name) {
+				return SubcatNative
+			}
+			return SubcatForeign
 		}
 
 		// Emulated on ARM64:
@@ -604,21 +635,81 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 		return SubcatSidecar
 	}
 
-	// If no foreign token matched and OS is compatible, default to native
+	// If no foreign token matched and OS is compatible, check format before defaulting to native
 	if os == OSLinux && c.HostOS == "linux" {
-		return SubcatNative
+		if c.isNativeFormatForOS(name) {
+			return SubcatNative
+		}
+		return SubcatForeign
 	}
 	if os == OSDarwin && c.HostOS == "darwin" {
-		return SubcatNative
+		if c.isNativeFormatForOS(name) {
+			return SubcatNative
+		}
+		return SubcatForeign
 	}
 	if os == OSWindows && c.HostOS == "windows" {
-		return SubcatNative
+		if c.isNativeFormatForOS(name) {
+			return SubcatNative
+		}
+		return SubcatForeign
 	}
 	if os == OSMultiplat {
 		return SubcatNative
 	}
 
 	return SubcatUnknown
+}
+
+// isNativePackageFormat checks if the asset's package format matches the host's package manager.
+// Returns true if the format is native to the host OS/distro.
+func (c *AssetClassifier) isNativePackageFormat(name string) bool {
+	lower := strings.ToLower(name)
+	switch c.HostPkgMgr {
+	case "dpkg":
+		// Debian/Ubuntu: .deb is native, .rpm is foreign
+		// Also accept tarballs as native on Linux
+		return strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+	case "rpm":
+		// Fedora/RHEL: .rpm is native, .deb is foreign
+		// Also accept tarballs as native on Linux
+		return strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+	default:
+		// Unknown package manager: treat all recognized Linux package formats as potentially native
+		// (AppImage/Flatpak/Snap are already handled as Universal)
+		return strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+	}
+}
+
+// isNativeWindowsFormat checks if the asset is a native Windows executable format.
+func isNativeWindowsFormat(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".exe") || strings.HasSuffix(lower, ".msi") || strings.HasSuffix(lower, ".dll") || strings.HasSuffix(lower, ".sys") || strings.HasSuffix(lower, ".bat") || strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".ps1")
+}
+
+// isNativeDarwinFormat checks if the asset is a native macOS format.
+func isNativeDarwinFormat(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".dmg") || strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".app") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst") || strings.HasSuffix(lower, ".zip")
+}
+
+// isNativeFormatForOS checks if the asset's format is native for the host OS.
+func (c *AssetClassifier) isNativeFormatForOS(name string) bool {
+	switch c.HostOS {
+	case "linux":
+		return c.isNativePackageFormat(name)
+	case "windows":
+		return isNativeWindowsFormat(name)
+	case "darwin":
+		return isNativeDarwinFormat(name)
+	case "freebsd":
+		// FreeBSD uses pkg, but also accepts tarballs
+		lower := strings.ToLower(name)
+		return strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".txz") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+	default:
+		// Unknown OS: accept common formats
+		return c.isNativePackageFormat(name) || isNativeWindowsFormat(name) || isNativeDarwinFormat(name)
+	}
 }
 
 // ClassifyAsset categorizes a single asset against the full release asset list.
@@ -668,11 +759,11 @@ type BinaryMagic int
 
 const (
 	BinaryMagicUnknown BinaryMagic = iota
-	BinaryMagicELF      // Linux/Unix executable (\x7fELF)
-	BinaryMagicMachO32  // macOS 32-bit (\xfe\xed\xfa\xce)
-	BinaryMagicMachO64  // macOS 64-bit (\xfe\xed\xfa\xcf)
-	BinaryMagicPE       // Windows PE/COFF (MZ)
-	BinaryMagicWasm     // WebAssembly (\x00asm)
+	BinaryMagicELF                 // Linux/Unix executable (\x7fELF)
+	BinaryMagicMachO32             // macOS 32-bit (\xfe\xed\xfa\xce)
+	BinaryMagicMachO64             // macOS 64-bit (\xfe\xed\xfa\xcf)
+	BinaryMagicPE                  // Windows PE/COFF (MZ)
+	BinaryMagicWasm                // WebAssembly (\x00asm)
 )
 
 // DetectBinaryMagic reads the first few bytes of a file to identify its executable format.
@@ -741,6 +832,68 @@ func IsVerifiedBinaryStream(r io.Reader) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// DetectArchiveMagic detects common archive container magic headers.
+func DetectArchiveMagic(header []byte) string {
+	if len(header) < 2 {
+		return ""
+	}
+	if bytes.HasPrefix(header, []byte{0x1f, 0x8b}) {
+		return "gzip"
+	}
+	if bytes.HasPrefix(header, []byte{'P', 'K', 0x03, 0x04}) {
+		return "zip"
+	}
+	if bytes.HasPrefix(header, []byte{'B', 'Z', 'h'}) {
+		return "bzip2"
+	}
+	if len(header) >= 6 && bytes.HasPrefix(header, []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}) {
+		return "xz"
+	}
+	if len(header) >= 6 && bytes.HasPrefix(header, []byte{'7', 'z', 0xbc, 0xaf, 0x27, 0x1c}) {
+		return "7z"
+	}
+	if len(header) >= 4 && bytes.HasPrefix(header, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		return "zstd"
+	}
+	return ""
+}
+
+// VerifyAssetContentConsistency checks whether a file's content magic header matches its filename extension.
+// Catches spoofed file extensions, misnamed executables, and unexpected packaging.
+func VerifyAssetContentConsistency(name string, header []byte) (bool, string) {
+	if len(header) < 4 {
+		return true, "insufficient data"
+	}
+	lower := strings.ToLower(name)
+	arch := DetectArchiveMagic(header)
+
+	if strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") {
+		return arch == "gzip", "expected gzip magic for tar.gz"
+	}
+	if strings.HasSuffix(lower, ".zip") {
+		return arch == "zip", "expected zip magic for .zip"
+	}
+	if strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tbz2") {
+		return arch == "bzip2", "expected bzip2 magic for tar.bz2"
+	}
+	if strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".txz") {
+		return arch == "xz", "expected xz magic for tar.xz"
+	}
+	if strings.HasSuffix(lower, ".7z") {
+		return arch == "7z", "expected 7z magic for .7z"
+	}
+	if strings.HasSuffix(lower, ".tar.zst") || strings.HasSuffix(lower, ".tzst") {
+		return arch == "zstd", "expected zstd magic for tar.zst"
+	}
+
+	// For standalone executables (e.g. .exe)
+	if strings.HasSuffix(lower, ".exe") {
+		return bytes.HasPrefix(header, []byte{'M', 'Z'}), "expected PE/MZ header for .exe"
+	}
+
+	return true, "consistent"
 }
 
 var osReadFile = os.ReadFile

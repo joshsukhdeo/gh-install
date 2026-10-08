@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/adrg/xdg"
@@ -125,5 +127,105 @@ install_types: [invalid yaml
 		cfg := &Config{}
 		err = SaveConfig(cfg)
 		assert.Error(t, err)
+	})
+
+	t.Run("LoadConfig_ExceedsSizeLimit", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "oversized"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "oversized", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		// Create a > 1MB dummy config
+		hugeData := make([]byte, 1024*1024+50)
+		for i := range hugeData {
+			hugeData[i] = ' '
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), hugeData, 0644))
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "exceeds maximum size")
+	})
+
+	t.Run("LoadConfig_SensitiveSystemDirectoryBlocked", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "sensitive"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "sensitive", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		yamlContent := []byte("install_path: /etc/cron.d\n")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), yamlContent, 0644))
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "cannot point to sensitive system directory")
+	})
+
+	t.Run("LoadConfig_ExcessiveYamlAliasesBlocked", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "bomb"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "bomb", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		// Construct alias bomb
+		var b strings.Builder
+		b.WriteString("a: &id [1, 2, 3]\n")
+		for i := 0; i < 40; i++ {
+			b.WriteString(fmt.Sprintf("k%d: *id\n", i))
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), []byte(b.String()), 0644))
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "aliases/anchors")
+	})
+
+	t.Run("LoadConfig_UnknownFieldsRejected", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "unknown"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "unknown", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		yamlContent := []byte("install_path: /custom/bin\nmalicious_unrecognized_field: evil_value\n")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), yamlContent, 0644))
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "invalid config format")
+	})
+
+	t.Run("LoadConfig_PopulatesChecksum", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "checksum"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "checksum", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		yamlContent := []byte("install_path: /custom/bin\n")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), yamlContent, 0644))
+
+		cfg, err := LoadConfig()
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		assert.NotEmpty(t, cfg.Checksum)
+		assert.Len(t, cfg.Checksum, 64)
+	})
+
+	t.Run("LoadConfig_DeepSensitiveDirectoryBlocked", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "deepsensitive"))
+		xdg.Reload()
+		dir := filepath.Join(tmpDir, "deepsensitive", "gh-pt")
+		require.NoError(t, os.MkdirAll(dir, 0755))
+
+		yamlContent := []byte("package_path: /var/spool/cron/crontabs\n")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), yamlContent, 0644))
+
+		cfg, err := LoadConfig()
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), "cannot point to sensitive system directory")
 	})
 }

@@ -1,0 +1,12 @@
+# ShellCheck configuration for gh-pt
+shell=bash
+
+# Follow external sources where available
+external-sources=true
+
+# Optional checks
+enable=avoid-nullary-conditions
+
+# Disabled rules (common false positives in build and automation scripts)
+# SC1091: Sourcing dynamic/external files
+disable=SC1091

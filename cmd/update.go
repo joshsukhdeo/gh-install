@@ -514,14 +514,35 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 				newSidecarSet[filepath.Clean(sc)] = true
 			}
 
+			var removedLdso, removedUdev bool
 			for _, oldSidecar := range oldInstalledSidecars {
 				if strings.TrimSpace(oldSidecar) == "" {
 					continue
 				}
 				if !newSidecarSet[oldSidecar] && !newSidecarSet[filepath.Clean(oldSidecar)] {
 					if _, err := os.Lstat(oldSidecar); err == nil {
+						if strings.Contains(oldSidecar, "ld.so.conf.d") {
+							removedLdso = true
+						}
+						if strings.Contains(oldSidecar, "udev/rules.d") {
+							removedUdev = true
+						}
 						if err := os.Remove(oldSidecar); err != nil && !os.IsNotExist(err) {
-							log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
+							if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(oldSidecar), "/etc") {
+								cmd := execCommand("sudo", "rm", "-f", oldSidecar)
+								if sudoErr := cmd.Run(); sudoErr != nil {
+									log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s with sudo", oldSidecar), "error", sudoErr)
+								} else {
+									log.Info(fmt.Sprintf("Removed obsolete sidecar %s with sudo", oldSidecar))
+									stopDirs := getPruneStopDirs()
+									if targetPath != "" {
+										stopDirs = append(stopDirs, targetPath)
+									}
+									pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
+								}
+							} else {
+								log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
+							}
 						} else if err == nil {
 							log.Info(fmt.Sprintf("Removed obsolete sidecar %s", oldSidecar))
 							stopDirs := getPruneStopDirs()
@@ -532,6 +553,17 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 						}
 					}
 				}
+			}
+
+			if removedLdso {
+				cmd := execCommand("sudo", "ldconfig")
+				_ = cmd.Run()
+			}
+			if removedUdev {
+				cmd := execCommand("sudo", "udevadm", "control", "--reload-rules")
+				_ = cmd.Run()
+				cmdTrigger := execCommand("sudo", "udevadm", "trigger")
+				_ = cmdTrigger.Run()
 			}
 
 			newBinarySet := make(map[string]bool, len(updatedBinaries)*2)

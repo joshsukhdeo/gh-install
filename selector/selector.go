@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/charmbracelet/log"
 )
 
 type Selector struct {
@@ -285,6 +287,23 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 							}
 						}
 
+						// Prefer native packages over universal packages (AppImage, Flatpak, Snap)
+						// when multiple assets have the same AVX level
+						if s.Kind == Asset && len(currentMatches) > 1 {
+							var nativeMatches []*SelectorItem
+							for _, item := range currentMatches {
+								lower := strings.ToLower(item.Name)
+								if !strings.HasSuffix(lower, ".appimage") &&
+									!strings.HasSuffix(lower, ".flatpak") &&
+									!strings.HasSuffix(lower, ".snap") {
+									nativeMatches = append(nativeMatches, item)
+								}
+							}
+							if len(nativeMatches) > 0 {
+								currentMatches = nativeMatches
+							}
+						}
+
 						for _, item := range currentMatches {
 							item.Selected = true
 							selectedItems = append(selectedItems, item)
@@ -311,6 +330,9 @@ func (s *Selector) Run() ([]*SelectorItem, error) {
 		if matches, err := executePass(weakRegexps); err != nil {
 			return nil, err
 		} else if len(matches) > 0 {
+			for _, m := range matches {
+				log.Warn("low confidence (<80%) asset selection; asset matched via weak fallback patterns, verify asset contents", "asset", m.Name)
+			}
 			if s.OnlyFirstMatch && len(matches) > 1 {
 				matches = matches[:1]
 			}
