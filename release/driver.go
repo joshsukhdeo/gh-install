@@ -552,14 +552,20 @@ func DetectPluginTargets(owner, repo, pkgDir, pluginMode string, global bool) ([
 	return targets, nil
 }
 
-func writePrivilegedFile(destPath string, content []byte, perm os.FileMode) error {
+func writePrivilegedFile(destPath string, content []byte, perm os.FileMode, requiresSudo bool) error {
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0755); err != nil && os.IsPermission(err) {
-		_ = execCommand("sudo", "mkdir", "-p", dir).Run()
+		if requiresSudo {
+			_ = execCommand("sudo", "mkdir", "-p", dir).Run()
+		} else {
+			return err
+		}
 	}
 
 	if err := os.WriteFile(destPath, content, perm); err == nil {
 		return nil
+	} else if !os.IsPermission(err) || !requiresSudo {
+		return err
 	}
 
 	tmpFile, err := os.CreateTemp("", "gh-pt-driver-*")
@@ -644,17 +650,22 @@ func (r *GithubRelease) DeployDriverAndPluginManifests(pkgDir string) ([]string,
 
 		destDir := filepath.Dir(target.DestPath)
 		if err := os.MkdirAll(destDir, 0755); err != nil {
-			if target.RequiresSudo || os.IsPermission(err) {
+			if target.RequiresSudo {
 				_ = execCommand("sudo", "mkdir", "-p", destDir).Run()
+			} else {
+				log.Warn("failed creating directory", "dir", destDir, "error", err)
+				continue
 			}
 		}
 
 		if target.IsSymlink {
 			if _, statErr := os.Lstat(target.DestPath); statErr == nil {
-				_ = os.Remove(target.DestPath)
+				if err := os.Remove(target.DestPath); err != nil && target.RequiresSudo {
+					_ = execCommand("sudo", "rm", "-f", target.DestPath).Run()
+				}
 			}
 			if err := createSymlinkAtomic(target.SourceFile, target.DestPath); err != nil {
-				if target.RequiresSudo || os.IsPermission(err) {
+				if target.RequiresSudo {
 					cmd := execCommand("sudo", "ln", "-sfn", target.SourceFile, target.DestPath)
 					if err := cmd.Run(); err != nil {
 						log.Warn("failed creating privileged symlink", "src", target.SourceFile, "dest", target.DestPath, "error", err)
@@ -668,7 +679,7 @@ func (r *GithubRelease) DeployDriverAndPluginManifests(pkgDir string) ([]string,
 			log.Infof("Registered %s plugin symlink: %s -> %s", target.Subsystem, target.DestPath, target.SourceFile)
 			installed = append(installed, target.DestPath)
 		} else if len(target.Content) > 0 {
-			if err := writePrivilegedFile(target.DestPath, target.Content, 0644); err != nil {
+			if err := writePrivilegedFile(target.DestPath, target.Content, 0644, target.RequiresSudo); err != nil {
 				log.Warn("failed writing manifest", "path", target.DestPath, "error", err)
 				continue
 			}
