@@ -608,8 +608,8 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 			if c.IsSidecar(name) {
 				return SubcatSidecar
 			}
-			// Check package format matches host package manager
-			if c.isNativePackageFormat(name) {
+			// Check package format matches host OS
+			if c.isNativeFormatForOS(name) {
 				return SubcatNative
 			}
 			return SubcatForeign
@@ -662,35 +662,45 @@ func (c *AssetClassifier) DetectSubcategory(name string) ArchSubcategory {
 }
 
 // isNativePackageFormat checks if the asset's package format matches the host's package manager.
-// Returns true if the format is native to the host OS/distro.
+// Returns false only if the asset is explicitly an alien distro package format (e.g. .rpm on Debian/Ubuntu, .deb on Fedora/RHEL).
+// Generic binaries, tarballs, and zips are native across all Linux systems.
 func (c *AssetClassifier) isNativePackageFormat(name string) bool {
 	lower := strings.ToLower(name)
 	switch c.HostPkgMgr {
 	case "dpkg":
-		// Debian/Ubuntu: .deb is native, .rpm is foreign
-		// Also accept tarballs as native on Linux
-		return strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+		// Debian/Ubuntu: .rpm and Arch Linux packages are foreign
+		if strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".pkg.tar.zst") || strings.HasSuffix(lower, ".pkg.tar.xz") {
+			return false
+		}
+		return true
 	case "rpm":
-		// Fedora/RHEL: .rpm is native, .deb is foreign
-		// Also accept tarballs as native on Linux
-		return strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+		// Fedora/RHEL: .deb and Arch Linux packages are foreign
+		if strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".pkg.tar.zst") || strings.HasSuffix(lower, ".pkg.tar.xz") {
+			return false
+		}
+		return true
 	default:
-		// Unknown package manager: treat all recognized Linux package formats as potentially native
-		// (AppImage/Flatpak/Snap are already handled as Universal)
-		return strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+		// Unknown package manager: treat generic formats and packages as native
+		return true
 	}
 }
 
-// isNativeWindowsFormat checks if the asset is a native Windows executable format.
+// isNativeWindowsFormat checks if the asset is a native Windows executable or archive format.
 func isNativeWindowsFormat(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".exe") || strings.HasSuffix(lower, ".msi") || strings.HasSuffix(lower, ".dll") || strings.HasSuffix(lower, ".sys") || strings.HasSuffix(lower, ".bat") || strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".ps1")
+	if strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".dmg") || strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".appimage") {
+		return false
+	}
+	return true
 }
 
 // isNativeDarwinFormat checks if the asset is a native macOS format.
 func isNativeDarwinFormat(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, ".dmg") || strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".app") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst") || strings.HasSuffix(lower, ".zip")
+	if strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".exe") || strings.HasSuffix(lower, ".msi") || strings.HasSuffix(lower, ".appimage") {
+		return false
+	}
+	return true
 }
 
 // isNativeFormatForOS checks if the asset's format is native for the host OS.
@@ -703,11 +713,12 @@ func (c *AssetClassifier) isNativeFormatForOS(name string) bool {
 	case "darwin":
 		return isNativeDarwinFormat(name)
 	case "freebsd":
-		// FreeBSD uses pkg, but also accepts tarballs
 		lower := strings.ToLower(name)
-		return strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".txz") || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz") || strings.HasSuffix(lower, ".tar.xz") || strings.HasSuffix(lower, ".tar.bz2") || strings.HasSuffix(lower, ".tar.zst")
+		if strings.HasSuffix(lower, ".deb") || strings.HasSuffix(lower, ".rpm") || strings.HasSuffix(lower, ".exe") || strings.HasSuffix(lower, ".dmg") {
+			return false
+		}
+		return true
 	default:
-		// Unknown OS: accept common formats
 		return c.isNativePackageFormat(name) || isNativeWindowsFormat(name) || isNativeDarwinFormat(name)
 	}
 }

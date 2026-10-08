@@ -466,3 +466,48 @@ func TestVerifyAssetContentConsistency(t *testing.T) {
 	assert.False(t, consistent)
 	assert.Contains(t, reason, "expected gzip magic")
 }
+
+func TestAssetClassifier_BareLinuxBinaryNativeOverWine(t *testing.T) {
+	c := NewAssetClassifier("linux", "amd64", "allow", "avx2")
+
+	assets := []string{
+		"checksums.txt",
+		"hfdownloader_darwin_amd64_v3.4.0",
+		"hfdownloader_darwin_arm64_v3.4.0",
+		"hfdownloader_linux_amd64_v3.4.0",
+		"hfdownloader_linux_arm64_v3.4.0",
+		"hfdownloader_windows_amd64_v3.4.0.exe",
+		"hfdownloader_windows_arm64_v3.4.0.exe",
+	}
+
+	// 1. Bare Linux AMD64 binary must be native, not foreign
+	assert.Equal(t, SubcatNative, c.DetectSubcategory("hfdownloader_linux_amd64_v3.4.0"))
+	// Linux ARM64 binary must be foreign on AMD64
+	assert.Equal(t, SubcatForeign, c.DetectSubcategory("hfdownloader_linux_arm64_v3.4.0"))
+	// Windows exe must be Wine on Linux
+	assert.Equal(t, SubcatWine, c.DetectSubcategory("hfdownloader_windows_amd64_v3.4.0.exe"))
+
+	// 2. ClassifyRelease must choose the native Linux binary as default install, NOT the Wine Windows executable
+	classified := c.ClassifyRelease(assets, nil)
+	defaultInstalls := classified[CategoryDefaultInstall]
+	require.Len(t, defaultInstalls, 1)
+	assert.Equal(t, "hfdownloader_linux_amd64_v3.4.0", defaultInstalls[0].Name)
+	assert.Equal(t, SubcatNative, defaultInstalls[0].Subcat)
+
+	// 3. Windows executable must be placed in CategoryInstallableAlternative (Wine), NOT default
+	alternatives := classified[CategoryInstallableAlternative]
+	var altNames []string
+	for _, alt := range alternatives {
+		altNames = append(altNames, alt.Name)
+	}
+	assert.Contains(t, altNames, "hfdownloader_windows_amd64_v3.4.0.exe")
+
+	// 4. Linux ARM64 must be placed in CategoryCannotInstall (foreign)
+	cannotInstall := classified[CategoryCannotInstall]
+	var cannotNames []string
+	for _, ci := range cannotInstall {
+		cannotNames = append(cannotNames, ci.Name)
+	}
+	assert.Contains(t, cannotNames, "hfdownloader_linux_arm64_v3.4.0")
+	assert.Contains(t, cannotNames, "checksums.txt")
+}
