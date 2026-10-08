@@ -326,16 +326,32 @@ func RemoveApp(target string, purge bool, unsafeSkipDirFlagCheck bool) error {
 				log.Infof("Uninstalling package %s...", pkgName)
 				var cmd *exec.Cmd
 				if _, err := execLookPath("dpkg"); err == nil {
-					script := fmt.Sprintf(`if command -v apt-get >/dev/null 2>&1; then sudo apt-get remove -y "%s"; else sudo dpkg -r "%s"; fi`, pkgName, pkgName)
+					sudoStr := "sudo "
+					if os.Geteuid() == 0 {
+						sudoStr = ""
+					}
+					script := fmt.Sprintf(`if command -v apt-get >/dev/null 2>&1; then %sapt-get remove -y "%s"; else %sdpkg -r "%s"; fi`, sudoStr, pkgName, sudoStr, pkgName)
 					cmd = execCommand("sh", "-c", script)
 				} else if _, err := execLookPath("rpm"); err == nil {
-					script := fmt.Sprintf(`if command -v dnf >/dev/null 2>&1; then sudo dnf remove -y "%s"; elif command -v yum >/dev/null 2>&1; then sudo yum remove -y "%s"; else sudo rpm -e "%s"; fi`, pkgName, pkgName, pkgName)
+					sudoStr := "sudo "
+					if os.Geteuid() == 0 {
+						sudoStr = ""
+					}
+					script := fmt.Sprintf(`if command -v dnf >/dev/null 2>&1; then %sdnf remove -y "%s"; elif command -v yum >/dev/null 2>&1; then %syum remove -y "%s"; else %srpm -e "%s"; fi`, sudoStr, pkgName, sudoStr, pkgName, sudoStr, pkgName)
 					cmd = execCommand("sh", "-c", script)
 				} else if _, err := execLookPath("pacman"); err == nil {
-					script := fmt.Sprintf(`sudo pacman -Rs --noconfirm "%s"`, pkgName)
+					sudoStr := "sudo "
+					if os.Geteuid() == 0 {
+						sudoStr = ""
+					}
+					script := fmt.Sprintf(`%spacman -Rs --noconfirm "%s"`, sudoStr, pkgName)
 					cmd = execCommand("sh", "-c", script)
 				} else if _, err := execLookPath("pkg"); err == nil {
-					script := fmt.Sprintf(`sudo pkg delete -y "%s"`, pkgName)
+					sudoStr := "sudo "
+					if os.Geteuid() == 0 {
+						sudoStr = ""
+					}
+					script := fmt.Sprintf(`%spkg delete -y "%s"`, sudoStr, pkgName)
 					cmd = execCommand("sh", "-c", script)
 				}
 
@@ -432,7 +448,12 @@ func RemoveApp(target string, purge bool, unsafeSkipDirFlagCheck bool) error {
 				}
 				if err := os.Remove(sc); err != nil && !os.IsNotExist(err) {
 					if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(sc), "/etc") {
-						cmd := execCommand("sudo", "rm", "-f", sc)
+						var cmd *exec.Cmd
+						if os.Geteuid() == 0 {
+							cmd = execCommand("rm", "-f", sc)
+						} else {
+							cmd = execCommand("sudo", "rm", "-f", sc)
+						}
 						if sudoErr := cmd.Run(); sudoErr != nil {
 							log.Warn(fmt.Sprintf("Failed to remove sidecar %s with sudo", sc), "error", sudoErr)
 						} else {
@@ -451,16 +472,31 @@ func RemoveApp(target string, purge bool, unsafeSkipDirFlagCheck bool) error {
 
 		if removedLdso {
 			log.Info("ld.so fragment removed, executing ldconfig")
-			cmd := execCommand("sudo", "ldconfig")
+			var cmd *exec.Cmd
+			if os.Geteuid() == 0 {
+				cmd = execCommand("ldconfig")
+			} else {
+				cmd = execCommand("sudo", "ldconfig")
+			}
 			if err := cmd.Run(); err != nil {
 				log.Warn("Failed to execute ldconfig after removing ld.so fragment", "error", err)
 			}
 		}
 		if removedUdev {
 			log.Info("udev rules removed, reloading udev rules")
-			cmd := execCommand("sudo", "udevadm", "control", "--reload-rules")
+			var cmd *exec.Cmd
+			if os.Geteuid() == 0 {
+				cmd = execCommand("udevadm", "control", "--reload-rules")
+			} else {
+				cmd = execCommand("sudo", "udevadm", "control", "--reload-rules")
+			}
 			_ = cmd.Run()
-			cmdTrigger := execCommand("sudo", "udevadm", "trigger")
+			var cmdTrigger *exec.Cmd
+			if os.Geteuid() == 0 {
+				cmdTrigger = execCommand("udevadm", "trigger")
+			} else {
+				cmdTrigger = execCommand("sudo", "udevadm", "trigger")
+			}
 			_ = cmdTrigger.Run()
 		}
 

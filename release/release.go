@@ -1014,25 +1014,37 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 	destination, err := os.Create(destinationPath)
 	if err != nil {
 		if os.IsPermission(err) {
-			log.Info("permission denied, attempting to install with sudo")
-			if err := r.ensureSudo(); err != nil {
-				return err
-			}
-			if r.CliParams.Interactive {
-				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo install -m 755 %s %s'?", binaryPath, destinationPath)) {
-					return fmt.Errorf("permission denied and user aborted sudo installation")
+			log.Info("permission denied, attempting to install with elevated privileges")
+
+			var cmd *exec.Cmd
+			if os.Geteuid() == 0 {
+				if r.CliParams.Interactive {
+					if !r.interactiveConfirm(fmt.Sprintf("Run 'install -m 755 %s %s'?", binaryPath, destinationPath)) {
+						return fmt.Errorf("permission denied and user aborted installation")
+					}
 				}
+				cmd = execCommand("install", "-m", "755", binaryPath, destinationPath)
+			} else {
+				if err := r.ensureSudo(); err != nil {
+					return err
+				}
+				if r.CliParams.Interactive {
+					if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo install -m 755 %s %s'?", binaryPath, destinationPath)) {
+						return fmt.Errorf("permission denied and user aborted sudo installation")
+					}
+				}
+				cmd = execCommand("sudo", "install", "-m", "755", binaryPath, destinationPath)
 			}
+
 			if r.UI != nil {
 				r.UI.Pause()
 				defer r.UI.Resume()
 			}
-			cmd := execCommand("sudo", "install", "-m", "755", binaryPath, destinationPath)
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err != nil {
-				return fmt.Errorf("sudo install failed: %w", err)
+				return fmt.Errorf("elevated install failed: %w", err)
 			}
 			noComp := false
 			if r.CliParams != nil {
@@ -1068,6 +1080,9 @@ func (r *GithubRelease) installBinary(binaryPath string) error {
 }
 
 func (r *GithubRelease) ensureSudo() error {
+	if os.Geteuid() == 0 {
+		return nil
+	}
 	check := execCommand("sudo", "-n", "true")
 	if err := check.Run(); err != nil {
 		if !r.CliParams.Interactive {
@@ -1520,10 +1535,15 @@ func (r *GithubRelease) installMac(binaryPath string) error {
 		log.Info("Successfully copied app from DMG!")
 		return nil
 	} else if strings.HasSuffix(strings.ToLower(binaryPath), ".pkg") {
-		if err := r.ensureSudo(); err != nil {
-			return err
+		var cmd *exec.Cmd
+		if os.Geteuid() == 0 {
+			cmd = execCommand("installer", "-pkg", binaryPath, "-target", "/")
+		} else {
+			if err := r.ensureSudo(); err != nil {
+				return err
+			}
+			cmd = execCommand("sudo", "installer", "-pkg", binaryPath, "-target", "/")
 		}
-		cmd := execCommand("sudo", "installer", "-pkg", binaryPath, "-target", "/")
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -2314,27 +2334,47 @@ func (r *GithubRelease) Install() error {
 			case selector.BinaryDebInstaller:
 				log.Debug("binary is a deb installer")
 				binariesOutput[binary.Name] = "deb"
-				installCmd = fmt.Sprintf("sudo apt install %s", actualDownloadPath)
+				sudoStr := "sudo "
+				if os.Geteuid() == 0 {
+					sudoStr = ""
+				}
+				installCmd = fmt.Sprintf("%sapt install %s", sudoStr, actualDownloadPath)
 				execErr = r.installDeb(actualDownloadPath)
 			case selector.BinaryRpmInstaller:
 				log.Debug("binary is a rpm installer")
 				binariesOutput[binary.Name] = "rpm"
-				installCmd = fmt.Sprintf("sudo dnf install %s", actualDownloadPath)
+				sudoStr := "sudo "
+				if os.Geteuid() == 0 {
+					sudoStr = ""
+				}
+				installCmd = fmt.Sprintf("%sdnf install %s", sudoStr, actualDownloadPath)
 				execErr = r.installRpm(actualDownloadPath)
 			case selector.BinaryPacmanInstaller:
 				log.Debug("binary is a pacman installer")
 				binariesOutput[binary.Name] = "pacman"
-				installCmd = fmt.Sprintf("sudo pacman -U %s", actualDownloadPath)
+				sudoStr := "sudo "
+				if os.Geteuid() == 0 {
+					sudoStr = ""
+				}
+				installCmd = fmt.Sprintf("%spacman -U %s", sudoStr, actualDownloadPath)
 				execErr = r.installPacman(actualDownloadPath)
 			case selector.BinaryPkgInstaller:
 				log.Debug("binary is a freebsd pkg/txz installer")
 				binariesOutput[binary.Name] = "pkg"
-				installCmd = fmt.Sprintf("sudo pkg install %s", actualDownloadPath)
+				sudoStr := "sudo "
+				if os.Geteuid() == 0 {
+					sudoStr = ""
+				}
+				installCmd = fmt.Sprintf("%spkg install %s", sudoStr, actualDownloadPath)
 				execErr = r.installPkg(actualDownloadPath)
 			case selector.BinaryMacInstaller:
 				log.Debug("binary is a mac installer")
 				binariesOutput[binary.Name] = "mac"
-				installCmd = fmt.Sprintf("sudo installer -pkg %s -target /", actualDownloadPath)
+				sudoStr := "sudo "
+				if os.Geteuid() == 0 {
+					sudoStr = ""
+				}
+				installCmd = fmt.Sprintf("%sinstaller -pkg %s -target /", sudoStr, actualDownloadPath)
 				execErr = r.installMac(actualDownloadPath)
 			case selector.BinaryWindowsInstaller:
 				log.Debug("binary is a windows installer")
@@ -2422,21 +2462,31 @@ func (r *GithubRelease) Install() error {
 			r.InstalledPkgManager = args[0]
 			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		} else {
-			if err := r.ensureSudo(); err != nil {
-				return err
-			}
-			if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
-				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-					return fmt.Errorf("user aborted batched .deb installation")
+			var cmd *exec.Cmd
+			if os.Geteuid() == 0 {
+				if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+					if !r.interactiveConfirm(fmt.Sprintf("Run '%s'?", strings.Join(args, " "))) {
+						return fmt.Errorf("user aborted batched .deb installation")
+					}
 				}
+				cmd = execCommand(args[0], args[1:]...)
+				log.Infof("Executing batched package install: %s", strings.Join(args, " "))
+			} else {
+				if err := r.ensureSudo(); err != nil {
+					return err
+				}
+				if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+					if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+						return fmt.Errorf("user aborted batched .deb installation")
+					}
+				}
+				cmd = execCommand("sudo", args...)
+				log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
 			}
-
-			cmd := execCommand("sudo", args...)
 			cmd.Dir = filepath.Dir(r.PendingDebs[0])
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
-			log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("batched .deb installation failed: %w", err)
 			}
@@ -2469,21 +2519,31 @@ func (r *GithubRelease) Install() error {
 			r.InstalledPkgManager = args[0]
 			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		} else {
-			if err := r.ensureSudo(); err != nil {
-				return err
-			}
-			if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
-				if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-					return fmt.Errorf("user aborted batched .rpm installation")
+			var cmd *exec.Cmd
+			if os.Geteuid() == 0 {
+				if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+					if !r.interactiveConfirm(fmt.Sprintf("Run '%s'?", strings.Join(args, " "))) {
+						return fmt.Errorf("user aborted batched .rpm installation")
+					}
 				}
+				cmd = execCommand(args[0], args[1:]...)
+				log.Infof("Executing batched package install: %s", strings.Join(args, " "))
+			} else {
+				if err := r.ensureSudo(); err != nil {
+					return err
+				}
+				if r.CliParams.Interactive && !r.CliParams.DisablePrompts {
+					if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+						return fmt.Errorf("user aborted batched .rpm installation")
+					}
+				}
+				cmd = execCommand("sudo", args...)
+				log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
 			}
-
-			cmd := execCommand("sudo", args...)
 			cmd.Dir = filepath.Dir(r.PendingRpms[0])
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
-			log.Infof("Executing batched package install: sudo %s", strings.Join(args, " "))
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("batched .rpm installation failed: %w", err)
 			}
@@ -2722,9 +2782,6 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 		log.Infof("[dry-run] Would install freebsd pkg: %s", filepath.Base(binaryPath))
 		return nil
 	}
-	if err := r.ensureSudo(); err != nil {
-		return err
-	}
 	var args []string
 	if r.CliParams.NoDeps {
 		args = []string{"pkg", "add", basePath}
@@ -2739,13 +2796,26 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 		defer r.UI.Resume()
 	}
 
-	if r.CliParams.Interactive {
-		if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
-			return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", filepath.Base(binaryPath))
+	var cmd *exec.Cmd
+	if os.Geteuid() == 0 {
+		if r.CliParams.Interactive {
+			if !r.interactiveConfirm(fmt.Sprintf("Run '%s'?", strings.Join(args, " "))) {
+				return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", filepath.Base(binaryPath))
+			}
 		}
+		cmd = execCommand(args[0], args[1:]...)
+	} else {
+		if err := r.ensureSudo(); err != nil {
+			return err
+		}
+		if r.CliParams.Interactive {
+			if !r.interactiveConfirm(fmt.Sprintf("Run 'sudo %s'?", strings.Join(args, " "))) {
+				return fmt.Errorf("'%s' is a FreeBSD PKG installer and user did not want to run it", filepath.Base(binaryPath))
+			}
+		}
+		cmd = execCommand("sudo", args...)
 	}
 
-	cmd := execCommand("sudo", args...)
 	cmd.Dir = filepath.Dir(binaryPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -2770,9 +2840,6 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 		log.Infof("[dry-run] Would install pacman pkg: %s", filepath.Base(binaryPath))
 		return nil
 	}
-	if err := r.ensureSudo(); err != nil {
-		return err
-	}
 	if name := extractPackageName(binaryPath, "pacman"); name != "" {
 		r.InstalledPackageNames = append(r.InstalledPackageNames, name)
 		r.InstalledPkgManager = "pacman"
@@ -2782,12 +2849,26 @@ func (r *GithubRelease) installPacman(binaryPath string) error {
 
 	var cmd *exec.Cmd
 	basePath := "./" + filepath.Base(binaryPath)
-	if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
-		cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", basePath)
-	} else if r.CliParams.NoDeps {
-		cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", basePath)
+
+	if os.Geteuid() == 0 {
+		if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
+			cmd = execCommand("pacman", "-U", "--noconfirm", basePath)
+		} else if r.CliParams.NoDeps {
+			cmd = execCommand("pacman", "-U", "--nodeps", "--noconfirm", basePath)
+		} else {
+			cmd = execCommand("pacman", "-U", basePath)
+		}
 	} else {
-		cmd = execCommand("sudo", "pacman", "-U", basePath)
+		if err := r.ensureSudo(); err != nil {
+			return err
+		}
+		if r.CliParams.ResolveDeps || r.CliParams.DisablePrompts {
+			cmd = execCommand("sudo", "pacman", "-U", "--noconfirm", basePath)
+		} else if r.CliParams.NoDeps {
+			cmd = execCommand("sudo", "pacman", "-U", "--nodeps", "--noconfirm", basePath)
+		} else {
+			cmd = execCommand("sudo", "pacman", "-U", basePath)
+		}
 	}
 	cmd.Dir = filepath.Dir(binaryPath)
 

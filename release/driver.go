@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -556,7 +557,11 @@ func writePrivilegedFile(destPath string, content []byte, perm os.FileMode, requ
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0755); err != nil && os.IsPermission(err) {
 		if requiresSudo {
-			_ = execCommand("sudo", "mkdir", "-p", dir).Run()
+			if os.Geteuid() == 0 {
+				_ = execCommand("mkdir", "-p", dir).Run()
+			} else {
+				_ = execCommand("sudo", "mkdir", "-p", dir).Run()
+			}
 		} else {
 			return err
 		}
@@ -581,7 +586,12 @@ func writePrivilegedFile(destPath string, content []byte, perm os.FileMode, requ
 	}
 	_ = tmpFile.Close()
 
-	cmd := execCommand("sudo", "install", "-m", fmt.Sprintf("%04o", perm), tmpName, destPath)
+	var cmd *exec.Cmd
+	if os.Geteuid() == 0 {
+		cmd = execCommand("install", "-m", fmt.Sprintf("%04o", perm), tmpName, destPath)
+	} else {
+		cmd = execCommand("sudo", "install", "-m", fmt.Sprintf("%04o", perm), tmpName, destPath)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sudo install %s failed: %w (%s)", destPath, err, string(out))
 	}
@@ -651,7 +661,11 @@ func (r *GithubRelease) DeployDriverAndPluginManifests(pkgDir string) ([]string,
 		destDir := filepath.Dir(target.DestPath)
 		if err := os.MkdirAll(destDir, 0755); err != nil {
 			if target.RequiresSudo {
-				_ = execCommand("sudo", "mkdir", "-p", destDir).Run()
+				if os.Geteuid() == 0 {
+					_ = execCommand("mkdir", "-p", destDir).Run()
+				} else {
+					_ = execCommand("sudo", "mkdir", "-p", destDir).Run()
+				}
 			} else {
 				log.Warn("failed creating directory", "dir", destDir, "error", err)
 				continue
@@ -661,12 +675,21 @@ func (r *GithubRelease) DeployDriverAndPluginManifests(pkgDir string) ([]string,
 		if target.IsSymlink {
 			if _, statErr := os.Lstat(target.DestPath); statErr == nil {
 				if err := os.Remove(target.DestPath); err != nil && target.RequiresSudo {
-					_ = execCommand("sudo", "rm", "-f", target.DestPath).Run()
+					if os.Geteuid() == 0 {
+						_ = execCommand("rm", "-f", target.DestPath).Run()
+					} else {
+						_ = execCommand("sudo", "rm", "-f", target.DestPath).Run()
+					}
 				}
 			}
 			if err := createSymlinkAtomic(target.SourceFile, target.DestPath); err != nil {
 				if target.RequiresSudo {
-					cmd := execCommand("sudo", "ln", "-sfn", target.SourceFile, target.DestPath)
+					var cmd *exec.Cmd
+					if os.Geteuid() == 0 {
+						cmd = execCommand("ln", "-sfn", target.SourceFile, target.DestPath)
+					} else {
+						cmd = execCommand("sudo", "ln", "-sfn", target.SourceFile, target.DestPath)
+					}
 					if err := cmd.Run(); err != nil {
 						log.Warn("failed creating privileged symlink", "src", target.SourceFile, "dest", target.DestPath, "error", err)
 						continue
@@ -697,12 +720,24 @@ func (r *GithubRelease) DeployDriverAndPluginManifests(pkgDir string) ([]string,
 	if !r.CliParams.DryRun {
 		if needLdconfig {
 			log.Info("executing ldconfig for updated library paths")
-			_ = execCommand("sudo", "ldconfig").Run()
+			if os.Geteuid() == 0 {
+				_ = execCommand("ldconfig").Run()
+			} else {
+				_ = execCommand("sudo", "ldconfig").Run()
+			}
 		}
 		if needUdevadm {
 			log.Info("reloading udev rules")
-			_ = execCommand("sudo", "udevadm", "control", "--reload-rules").Run()
-			_ = execCommand("sudo", "udevadm", "trigger").Run()
+			if os.Geteuid() == 0 {
+				_ = execCommand("udevadm", "control", "--reload-rules").Run()
+			} else {
+				_ = execCommand("sudo", "udevadm", "control", "--reload-rules").Run()
+			}
+			if os.Geteuid() == 0 {
+				_ = execCommand("udevadm", "trigger").Run()
+			} else {
+				_ = execCommand("sudo", "udevadm", "trigger").Run()
+			}
 		}
 	}
 

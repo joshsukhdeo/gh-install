@@ -463,8 +463,10 @@ func (r *RootCLI) Validate() error {
 			if r.TargetPath == GetDefaultTargetPath() {
 				r.TargetPath = "/usr/local/bin"
 			}
-			if err := exec.Command("sudo", "-v").Run(); err != nil {
-				log.Warn("sudo -v failed (credentials may not cache)", "error", err)
+			if os.Geteuid() != 0 {
+				if err := exec.Command("sudo", "-v").Run(); err != nil {
+					log.Warn("sudo -v failed (credentials may not cache)", "error", err)
+				}
 			}
 		} else if !r.AllowRootUserInstall && !r.ForceRoot {
 			err := fmt.Errorf("running as root without --global flag. Use --global for system-wide install or --force-root / --allow-root-user-install to install to user-local paths")

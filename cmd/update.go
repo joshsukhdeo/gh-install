@@ -529,7 +529,12 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 						}
 						if err := os.Remove(oldSidecar); err != nil && !os.IsNotExist(err) {
 							if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(oldSidecar), "/etc") {
-								cmd := execCommand("sudo", "rm", "-f", oldSidecar)
+								var cmd *exec.Cmd
+								if os.Geteuid() == 0 {
+									cmd = execCommand("rm", "-f", oldSidecar)
+								} else {
+									cmd = execCommand("sudo", "rm", "-f", oldSidecar)
+								}
 								if sudoErr := cmd.Run(); sudoErr != nil {
 									log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s with sudo", oldSidecar), "error", sudoErr)
 								} else {
@@ -556,13 +561,28 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			}
 
 			if removedLdso {
-				cmd := execCommand("sudo", "ldconfig")
+				var cmd *exec.Cmd
+				if os.Geteuid() == 0 {
+					cmd = execCommand("ldconfig")
+				} else {
+					cmd = execCommand("sudo", "ldconfig")
+				}
 				_ = cmd.Run()
 			}
 			if removedUdev {
-				cmd := execCommand("sudo", "udevadm", "control", "--reload-rules")
+				var cmd *exec.Cmd
+				if os.Geteuid() == 0 {
+					cmd = execCommand("udevadm", "control", "--reload-rules")
+				} else {
+					cmd = execCommand("sudo", "udevadm", "control", "--reload-rules")
+				}
 				_ = cmd.Run()
-				cmdTrigger := execCommand("sudo", "udevadm", "trigger")
+				var cmdTrigger *exec.Cmd
+				if os.Geteuid() == 0 {
+					cmdTrigger = execCommand("udevadm", "trigger")
+				} else {
+					cmdTrigger = execCommand("sudo", "udevadm", "trigger")
+				}
 				_ = cmdTrigger.Run()
 			}
 
