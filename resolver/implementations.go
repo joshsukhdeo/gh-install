@@ -24,7 +24,7 @@ type AptManager struct {
 }
 
 func NewAptManager() *AptManager {
-	return &AptManager{}
+	return &AptManager{UseSudo: os.Geteuid() != 0}
 }
 
 func (m *AptManager) Name() string {
@@ -125,7 +125,7 @@ type DnfManager struct {
 }
 
 func NewDnfManager() *DnfManager {
-	return &DnfManager{}
+	return &DnfManager{UseSudo: os.Geteuid() != 0}
 }
 
 func (m *DnfManager) Name() string {
@@ -204,7 +204,7 @@ type PacmanManager struct {
 }
 
 func NewPacmanManager() *PacmanManager {
-	return &PacmanManager{}
+	return &PacmanManager{UseSudo: os.Geteuid() != 0}
 }
 
 func (m *PacmanManager) Name() string {

@@ -147,7 +147,7 @@ func TestInstallCommands(t *testing.T) {
 	}{
 		{
 			name:        "apt install packages",
-			mgr:         NewAptManager(),
+			mgr:         &AptManager{UseSudo: false},
 			pkgs:        []string{"pkgA", "pkgB"},
 			expectedCmd: "apt-get install -y pkgA pkgB",
 		},
@@ -159,7 +159,7 @@ func TestInstallCommands(t *testing.T) {
 		},
 		{
 			name:        "dnf install packages",
-			mgr:         NewDnfManager(),
+			mgr:         &DnfManager{UseSudo: false},
 			pkgs:        []string{"pkgA", "pkgB"},
 			expectedCmd: "dnf install -y pkgA pkgB",
 		},
@@ -171,7 +171,7 @@ func TestInstallCommands(t *testing.T) {
 		},
 		{
 			name:        "pacman install packages",
-			mgr:         NewPacmanManager(),
+			mgr:         &PacmanManager{UseSudo: false},
 			pkgs:        []string{"pkgA", "pkgB"},
 			expectedCmd: "pacman -S --noconfirm pkgA pkgB",
 		},
