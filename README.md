@@ -154,7 +154,7 @@ Configuration is stored in `~/.config/gh-pt/config.yml`. It defines defaults tha
 install_path: "~/.local/bin"
 global_path: "/usr/local/bin"
 clone_path: "~/src"
-fork_path: "~/projects"
+fork_path: "~/src/forks"
 
 # AI Configuration
 ai_cmd: "agy -p \"%s\""

@@ -19,7 +19,7 @@ func parseWithTestVars(t *testing.T, args []string) (*params.CLI, *kong.Kong) {
 			"install_types": "deb,rpm,appimage,tar.gz",
 			"install_path":  "/default/bin",
 			"clone_path":    "~/src",
-			"fork_path":     "~/projects",
+			"fork_path":     "~/src/forks",
 			"extractor":     "default",
 			"version":       "2.0.0",
 		},

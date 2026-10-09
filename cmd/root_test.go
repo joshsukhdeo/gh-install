@@ -73,7 +73,7 @@ func TestGetDefaultPaths_CloneAndFork(t *testing.T) {
 	assert.NotEmpty(t, clonePath)
 	assert.NotEmpty(t, forkPath)
 	assert.Contains(t, clonePath, "src")
-	assert.Contains(t, forkPath, "projects")
+	assert.Contains(t, forkPath, filepath.Join("src", "forks"))
 }
 
 func TestResolveRepoPath(t *testing.T) {
@@ -83,7 +83,7 @@ func TestResolveRepoPath(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, "src", "repos", "cli"), p1)
 
 	p2 := resolveRepoPath("cli/cli", false, true, "", "")
-	assert.Equal(t, filepath.Join(home, "projects", "cli"), p2)
+	assert.Equal(t, filepath.Join(home, "src", "forks", "cli"), p2)
 
 	p3 := resolveRepoPath("cli/cli", true, false, "/custom/src", "")
 	assert.Equal(t, filepath.Join("/custom/src", "cli"), p3)

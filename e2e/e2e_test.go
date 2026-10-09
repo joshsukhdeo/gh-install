@@ -84,8 +84,8 @@ func TestE2E_ConfigLs(t *testing.T) {
 		t.Errorf("Expected exit code 0, got %d. Stderr: %s", exitCode, stderr)
 	}
 
-	if !strings.Contains(stdout, "InstallPath") {
-		t.Errorf("Expected output to contain 'InstallPath', got: %s", stdout)
+	if !strings.Contains(stdout, "install_path") {
+		t.Errorf("Expected output to contain 'install_path', got: %s", stdout)
 	}
 }
 

@@ -2198,7 +2198,7 @@ func GetDefaultForkPath() string {
 		return ""
 	}
 
-	return filepath.Join(homeDir, "projects")
+	return filepath.Join(homeDir, "src", "forks")
 }
 
 func GetDefaultInstallTypes() string {

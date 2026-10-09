@@ -15,7 +15,7 @@ func TestCLIFlags_CloneAndFork(t *testing.T) {
 		"install_types": "deb,rpm",
 		"install_path":  "/test/path",
 		"clone_path":    "~/src",
-		"fork_path":     "~/projects",
+		"fork_path":     "~/src/forks",
 		"extractor":     "default",
 	})
 	require.NoError(t, err)
@@ -29,7 +29,7 @@ func TestCLIFlags_CloneAndFork(t *testing.T) {
 		"install_types": "deb,rpm",
 		"install_path":  "/test/path",
 		"clone_path":    "~/src",
-		"fork_path":     "~/projects",
+		"fork_path":     "~/src/forks",
 		"extractor":     "default",
 	})
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestCLIFlags_CloneAndFork(t *testing.T) {
 		"install_types": "deb,rpm",
 		"install_path":  "/test/path",
 		"clone_path":    "~/src",
-		"fork_path":     "~/projects",
+		"fork_path":     "~/src/forks",
 		"extractor":     "default",
 	})
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestCLIDefaults(t *testing.T) {
 		"install_types": "deb,rpm",
 		"install_path":  "/test/path",
 		"clone_path":    "~/src",
-		"fork_path":     "~/projects",
+		"fork_path":     "~/src/forks",
 		"extractor":     "default",
 	})
 	require.NoError(t, err)
@@ -85,8 +85,8 @@ func TestCLIParse(t *testing.T) {
 	parser, err := kong.New(&cli, kong.Vars{
 		"install_types": "deb,rpm",
 		"install_path":  "/test/path",
-		"clone_path":    "~/src",
-		"fork_path":     "~/projects",
+		"clone_path":    "~/src/repos",
+		"fork_path":     "~/src/forks",
 		"extractor":     "default",
 	})
 	require.NoError(t, err)
