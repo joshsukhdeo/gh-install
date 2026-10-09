@@ -1,0 +1,242 @@
+workflow:
+  name: "gh-pt Security Hardening & AI Workflow Implementation"
+  description: "Orchestrate remaining security hardening and AI workflow implementation for gh-pt source build system"
+  version: "1.0.0"
+  timeout: "4h"
+
+  inputs:
+    - name: repo_path
+      type: string
+      required: false
+      default: "/home/tay/projects/gh-pt"
+      description: "Path to gh-pt repository"
+    - name: skip_tests
+      type: boolean
+      required: false
+      default: false
+      description: "Skip test execution for faster iteration"
+
+  agents:
+    researcher:
+      name: "Security Researcher"
+      role: "Research security best practices and implementation approaches"
+      prompt: |
+        You are a security researcher. Research the given topic and provide:
+        1. Current best practices and standards
+        2. Recommended libraries/tools with versions
+        3. Implementation approaches with pros/cons
+        4. Code examples where applicable
+        5. Security considerations and potential pitfalls
+        
+        Topic: {{input}}
+        Context: gh-pt source build system with three-part compilation model (header + body.sh + footer)
+        Current state: Container hardening partially implemented, AST-based validation planned, AI-in-container architecture designed
+        
+        Provide concrete, actionable recommendations with code examples where possible.
+      tools: [Read, Write, Grep, Glob, Bash, WebSearch, WebFetch]
+      timeout: "10m"
+      retry:
+        max_attempts: 2
+        backoff: linear
+        on_failure: skip
+
+    security_auditor:
+      name: "Security Auditor"
+      role: "Review code for security vulnerabilities and compliance with threat model"
+      prompt: |
+        You are a security auditor. Review the provided code/files for:
+        1. Security vulnerabilities and attack vectors
+        2. Compliance with the threat model (process tree detection, container hardening, AST validation)
+        3. Adherence to security best practices
+        4. Potential bypasses or bypassable controls
+        5. Configuration issues
+        
+        Focus on: {{input}}
+        Context: gh-pt source build system with three-part compilation model
+        
+        Provide:
+        - Specific vulnerabilities found with severity (CRITICAL/HIGH/MEDIUM/LOW)
+        - Recommended fixes with code examples
+        - Priority ranking for fixes
+        - Compliance status with threat model
+      tools: [Read, Grep, Glob, Bash]
+      timeout: "15m"
+      retry:
+        max_attempts: 1
+        backoff: none
+        on_failure: abort
+
+    implementer:
+      name: "Go Implementer"
+      role: "Implement Go code changes following gh-pt patterns and conventions"
+      prompt: |
+        You are a Go implementer for the gh-pt project. Implement the requested changes following:
+        1. Existing code patterns and conventions in the codebase
+        2. Error handling with proper error wrapping
+        3. Proper logging using charmbracelet/log
+        4. Security best practices (no hardcoded secrets, proper validation)
+        5. Testability (dependency injection where appropriate)
+        
+        Task: {{input}}
+        Context: gh-pt source build system
+        Relevant files: {{context_files}}
+        
+        Constraints:
+        - Follow existing code style (gofmt, golangci-lint)
+        - Add appropriate tests
+        - Update documentation/comments
+        - Maintain backward compatibility
+        - Security-first approach
+        
+        Provide: Implementation plan, then code changes with file paths
+      tools: [Read, Write, Edit, Grep, Glob, Bash]
+      timeout: "30m"
+      retry:
+        max_attempts: 2
+        backoff: linear
+        on_failure: fallback:code_reviewer
+
+    code_reviewer:
+      name: "Code Reviewer"
+      role: "Review code changes for correctness, security, and maintainability"
+      prompt: |
+        You are a code reviewer for the gh-pt project. Review the changes for:
+        1. Correctness - Does it implement the requirements correctly?
+        2. Security - Any vulnerabilities or unsafe patterns?
+        3. Maintainability - Code clarity, modularity, testability
+        4. Performance - Any obvious performance issues?
+        5. Testing - Adequate test coverage?
+        6. Documentation - Adequate comments and documentation
+        
+        Changes to review: {{input}}
+        Context: gh-pt source build system
+        
+        Provide:
+        - Summary of changes
+        - Issues found (blocking/non-blocking)
+        - Suggested improvements
+        - Approval status (APPROVE / REQUEST_CHANGES)
+      tools: [Read, Grep, Glob]
+      timeout: "10m"
+      retry:
+        max_attempts: 1
+        backoff: none
+        on_failure: abort
+
+    tester:
+      name: "Test Engineer"
+      role: "Write and run tests for the implemented changes"
+      prompt: |
+        You are a test engineer. Write and run tests for:
+        {{input}}
+        
+        Requirements:
+        1. Unit tests for all new functions
+        2. Integration tests for container execution flows
+        3. Security tests for validation logic
+        4. Edge cases and error conditions
+        4. Mock external dependencies (container runtime, file system)
+        
+        Testing standards:
+        - Table-driven tests
+        - Use testify/assert, testify/require
+        - Test isolation with temp directories
+        - Deterministic tests
+        - Run `go test -v ./...` to verify
+        
+        Context: gh-pt source build system
+        Target package: {{target_package}}
+      tools: [Read, Write, Edit, Bash]
+      timeout: "20m"
+      retry:
+        max_attempts: 2
+        backoff: linear
+        on_failure: fallback:code_reviewer
+
+  steps:
+    # Phase 1: Research & Design (Parallel)
+    - id: research_ast_validation
+      agent: researcher
+      type: sequential
+      input: "AST-based bash validation using mvdan.cc/sh parser for body.sh validation. Focus on: 1) mvdan.cc/sh parser capabilities and API, 2) AST walking patterns for bash, 3) Allowlist vs blocklist approaches, 4) Integration with existing validation, 4) Performance considerations"
+      
+    - id: research_container_hardening
+      agent: researcher
+      type: sequential
+      input: "Container hardening for Go applications: 1) Seccomp profile best practices for build containers, 2) Capability dropping strategies (DAC_OVERRIDE, CAP_DAC_READ_SEARCH), 3) Seccomp profile for build tools (cmake, make, gcc, go), 3) Network isolation strategies, 4) Rootless container best practices, 5) tmpfs configuration for /tmp"
+      
+    - id: research_ai_container
+      agent: researcher
+      type: sequential
+      input: "AI-in-container architecture for build systems: 1) Two-stage execution (AI container + compile container), 2) Body.sh generation in AI container, 3) Cross-container communication for body.sh transfer, 3) Network isolation strategies (AI container with network, compile container without), 4) Dependency installation in compile container, 5) Artifact transfer from compile to host"
+
+    # Phase 2: Parallel Implementation (Fan-out)
+    - id: impl_ast_validation
+      agent: implementer
+      type: parallel
+      parallel:
+        - agent: implementer
+          input: "Implement AST-based validation for body.sh using mvdan.cc/sh/v3/syntax parser. Replace regex validation in ai/parser.go. Create ValidateBodyScript function that: 1) Parses body.sh with mvdan.cc/sh/v3/syntax, 2) Walks AST checking against allowlist of allowed commands (cmake, make, gcc, g++, ghpt, bash, sh), 2) Blocks forbidden patterns: network commands (curl, wget, ssh, scp, nc), privilege escalation (sudo, su, pkexec), filesystem ops (cp, mv, mkdir, chmod), env var refs to target dirs, privilege escalation (sudo, su, pkexec), 3) Returns detailed errors with line numbers"
+        - agent: implementer
+          input: "Update ai/parser.go BodyTemplate constant to reflect new AST-based validation workflow. Update CompileScriptTemplate to match new body.sh template. Remove references to _ghpt_install shell function. Add comments explaining validation workflow. Update CompileScriptTemplate alias to point to BodyTemplate."
+
+    - id: impl_container_hardening
+      agent: implementer
+      type: parallel
+      parallel:
+        - agent: implementer
+          input: "Update compile/container.go RunContainer and BuildContainerCommand functions: 1) Add --network=none flag, 2) Change --cap-drop=ALL with --cap-add=DAC_OVERRIDE, 3) Add --read-only flag, 4) Add --tmpfs=/tmp:size=100M,mode=1777, 5) Add --user=1000:1000, 5) Add --security-opt=seccomp=seccomp-profile.json, 6) Update volume mounts: /build:ro, /install:rw, 7) Update RunContainer and BuildContainerCommand to use hardened flags"
+        - agent: implementer
+          input: "Create compile/seccomp-profile.json with comprehensive syscall allowlist for build tools. Include: file ops (open, read, write, close, stat, fstat, lstat, openat), process ops (clone, fork, execve, exit, wait4), memory (mmap, munmap, mprotect, brk), file ops (openat, read, write, close, fstat, statx), directory ops (mkdirat, unlinkat, renameat, getdents64), process control (clone, fork, vfork, execve, wait4, exit_group), time (clock_gettime, nanosleep), signals (rt_sigaction, rt_sigprocmask, rt_sigreturn), and build tool specific syscalls. Block: network, ptrace, mount, ptrace, reboot, kexec."
+
+    - id: impl_ai_container
+      agent: implementer
+      type: parallel
+      parallel:
+        - agent: implementer
+          input: "Implement two-stage execution in cmd/root.go handleCompileFromSource: 1) Stage 1 - AI Container: Run AI container with network enabled, generate body.sh and manifest.json, 2) Stage 2: Compile Container: Hardened container (no network, minimal caps, seccomp, read-only fs), 3) Transfer body.sh and manifest.json between containers, 3) Validate body.sh before execution, 4) Reconstruct compile.sh at runtime (header + body.sh + footer), 5) Execute in hardened container, 5) Extract binaries to install dir. Use existing compile.CompileConfig and compile.Execute functions."
+
+    # Phase 3: Security Review (Sequential - depends on implementations)
+    - id: security_review_ast
+      agent: security_auditor
+      type: sequential
+      input: "AST-based validation implementation in ai/parser.go (ValidateBodyScript function, BodyTemplate, HeaderTemplate, FooterTemplate). Check: 1) AST parsing correctly handles all bash constructs, 2) Allowlist is comprehensive for build tools, 3) Forbidden patterns cover all attack vectors, 4) Error messages are helpful, 4) No bypasses via obfuscation, 5) Performance is acceptable."
+
+    - id: security_review_container
+      agent: security_auditor
+      type: sequential
+      input: "Container hardening in compile/container.go and compile/seccomp-profile.json. Check: 1) Network isolation (--network=none), 2) Capability dropping (--cap-drop=ALL, --cap-add=DAC_OVERRIDE), 3) Read-only filesystem (--read-only), 3) Seccomp profile completeness, 4) Non-root user (--user=1000:1000), 4) Tmpfs for /tmp, 5) Read-only source mount, 5) Seccomp profile completeness for build tools."
+
+    - id: security_review_ai_container
+      agent: security_auditor
+      type: sequential
+      input: "AI-in-container two-stage architecture in cmd/root.go. Check: 1) AI container has network, compile container doesn't, 2) body.sh transfer is secure, 3) Dependencies installed in compile container, 4) body.sh validation before execution, 5) compile.sh reconstruction is secure, 6) No sensitive data leakage between containers."
+
+    # Phase 4: Testing & Validation (Parallel)
+    - id: test_ast_validation
+      agent: tester
+      type: parallel
+      parallel:
+        - agent: tester
+          input: "Write tests for AST-based validation in ai/parser_test.go: 1) Valid body.sh with allowed commands passes, 2) Forbidden commands blocked (curl, wget, sudo, eval, etc.), 2) Obfuscated commands blocked (base64, heredocs, eval), 3) Shell expansions blocked (eval, exec, source), 3) Env var references blocked, 4) Build tools allowed (cmake, make, gcc), 4) ghpt helper commands allowed, 5) Error messages include line numbers"
+          target_package: "github.com/joshsukhdeo/gh-pt/ai"
+        - agent: tester
+          input: "Write tests for container hardening in compile/container_test.go: 1) Network disabled in container, 2) Only DAC_OVERRIDE capability, 2) Read-only filesystem enforced, 3) Non-root user (1000:1000), 3) no-new-privileges set, 4) /tmp on tmpfs, 4) seccomp profile applied, 4) Source mount read-only, install mount read-write"
+          target_package: "github.com/joshsukhdeo/gh-pt/compile"
+
+    - id: test_integration
+      agent: tester
+      type: sequential
+      input: "End-to-end integration test for two-stage AI build: 1) AI generates body.sh with valid commands, 2) body.sh passes validation, 3) compile.sh reconstructed correctly, 2) Compile container executes successfully, 2) Binaries installed to /install, 3) Binaries executable and functional"
+      target_package: "github.com/joshsukhdeo/gh-pt/cmd"
+
+    # Phase 5: Final Validation
+    - id: final_validation
+      agent: code_reviewer
+      type: sequential
+      input: "Complete implementation review: 1) All security controls implemented per threat model, 2) All tests passing, 3) Spec matches implementation, 3) Documentation updated, 3) No regressions in existing functionality"
+
+  # Final output
+  output:
+    store_as: "workflow_result"
+    format: "json"

@@ -24,6 +24,7 @@ import (
 	"github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/joshsukhdeo/gh-pt/ai"
+	"github.com/joshsukhdeo/gh-pt/compile"
 	"github.com/joshsukhdeo/gh-pt/config"
 	"github.com/joshsukhdeo/gh-pt/heuristics"
 	"github.com/joshsukhdeo/gh-pt/params"
@@ -1078,37 +1079,66 @@ func (r *RootCLI) processNewFilesAndSymlinks(newFiles []string) []string {
 }
 
 func buildCompilePrompt(repo, buildDir, scriptPath, targetPath, symlinkDir string) string {
-	ext := ".sh"
-	if runtime.GOOS == "windows" {
-		ext = ".ps1"
-	}
-
 	var basePrompt string
 	if symlinkDir != "" {
-		basePrompt = fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and generate an automated compilation/build script at '%s'. The script should follow all build instructions for '%s', compile and install the application/binaries into '%s' (this is the staging directory), then create symlink(s) in '%s' pointing to the executable(s) in '%s'. IMPORTANT: First install/stage everything in '%s', then symlink from there to '%s'. Purge any temporary build artifacts. Format the output as an executable %s script. Please test and then attempt to run the compile script and it is only done when script runs successfully.", repo, buildDir, scriptPath, repo, symlinkDir, targetPath, symlinkDir, symlinkDir, targetPath, ext)
+		basePrompt = fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and create an automated compilation/build workflow. Follow all build instructions for '%s', compile and install the application/binaries into '%s' (this is the staging directory), then create symlink(s) in '%s' pointing to the executable(s) in '%s'. IMPORTANT: First install/stage everything in '%s', then symlink from there to '%s'. Purge any temporary build artifacts.", repo, buildDir, repo, symlinkDir, targetPath, symlinkDir, symlinkDir, targetPath)
 	} else {
-		basePrompt = fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and generate an automated compilation/build script at '%s'. The script should follow all build instructions for '%s', compile the application/binaries, install or copy them to '%s', and purge any temporary build artifacts. Format the output as an executable %s script. Please test and then attempt to run the compile script and it is only done when script runs successfully.", repo, buildDir, scriptPath, repo, targetPath, ext)
+		basePrompt = fmt.Sprintf("Please inspect the repository '%s' (cloned at '%s') and create an automated compilation/build workflow. Follow all build instructions for '%s', compile the application/binaries, install or copy them to '%s', and purge any temporary build artifacts.", repo, buildDir, repo, targetPath)
 	}
 
-	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow these templates:\n\nMANIFEST TEMPLATE (output as ```json code block):\n%s\n(Optional version requirement can be min, max, exact, or suggested)\n\nCOMPILE SCRIPT TEMPLATE (output as ```bash code block):\n%s\nTreat \"install-dir\" (.ghpt/install-dir) the same as /usr/local or $HOME/.local and place binaries into the same structure (install-dir/bin, install-dir/libs, install-dir/share, install-dir/state).\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestJSONTemplate, ai.CompileScriptTemplate)
+	instruction := `\n\nWORKFLOW — USE ONLY ghpt helper COMMANDS (do NOT output any code or JSON):
+
+1. INSPECT: Run 'ghpt helper --get-system-info' to understand the build environment
+2. MANIFEST: Use 'ghpt helper --append-manifest "manager=pkg@version"' to declare build dependencies
+   - Check current manifest with 'ghpt helper --get-manifest'
+   - Validate with 'ghpt helper --validate-manifest'
+   - Remove deps with 'ghpt helper --remove-from-manifest "manager=pkg"'
+3. BUILD SCRIPT:
+   - Get template: 'ghpt helper --get-body-template'
+   - Create body.sh in .ghpt/ using that template
+   - INSIDE body.sh, use 'ghpt helper --install "SRC=DEST"' to copy files during build
+   - Validate with 'ghpt helper --validate-compile-script' (MUST pass before execution)
+4. EXECUTE: Run 'ghpt helper --run-compile-script' (only works if validation passes)
+
+KEY RULES:
+- ghpt binary checks PROCESS TREE for 'gh-pt' ancestor — if found, ONLY 'ghpt helper' subcommands permitted
+- Dependencies are installed via CONTAINERIZATION before script runs (container image matches user's OS)
+- NEVER output JSON or code — use helper commands exclusively
+- body.sh must be created in .ghpt/ directory using template from --get-body-template
+- INSIDE body.sh, use exclusively 'ghpt helper --install "SRC=DEST"' to copy files (not direct filesystem writes)
+- --run-compile-script ONLY executes if --validate-compile-script returns true
+- Source builds default to symlink mode; version = commit hash (latest-commit) or git tag (stable/prerelease)`
 
 	return basePrompt + instruction
 }
 
 func buildCompileFixPrompt(repo, buildDir, scriptPath, targetPath, symlinkDir, errorOutput string, attempt int) string {
-	ext := ".sh"
-	if runtime.GOOS == "windows" {
-		ext = ".ps1"
-	}
-
 	var basePrompt string
 	if symlinkDir != "" {
-		basePrompt = fmt.Sprintf("The automated compilation script at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the script at '%s' so that it successfully compiles and installs the application into '%s' (staging directory), then creates symlink(s) in '%s' pointing to the executable(s) in '%s'. REMEMBER: First stage everything in '%s', then symlink from there to '%s'. Format the output as an executable %s script. Please fix and then attempt to run the compile script and it is only done when script runs successfully.", scriptPath, repo, buildDir, attempt, errorOutput, scriptPath, symlinkDir, targetPath, symlinkDir, symlinkDir, targetPath, ext)
+		basePrompt = fmt.Sprintf("The automated compilation workflow at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the workflow so that it successfully compiles and installs the application into '%s' (staging directory), then creates symlink(s) in '%s' pointing to the executable(s) in '%s'. REMEMBER: First stage everything in '%s', then symlink from there to '%s'.", scriptPath, repo, buildDir, attempt, errorOutput, symlinkDir, targetPath, symlinkDir, symlinkDir, targetPath)
 	} else {
-		basePrompt = fmt.Sprintf("The automated compilation script at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the script at '%s' so that it successfully compiles and installs the binaries into '%s'. Format the output as an executable %s script. Please fix and then attempt to run the compile script and it is only done when script runs successfully.", scriptPath, repo, buildDir, attempt, errorOutput, scriptPath, targetPath, ext)
+		basePrompt = fmt.Sprintf("The automated compilation workflow at '%s' for repository '%s' (cloned at '%s') failed to run with the following error output (attempt %d of 2):\n\n%s\n\nPlease fix the workflow so that it successfully compiles and installs the binaries into '%s'.", scriptPath, repo, buildDir, attempt, errorOutput, targetPath)
 	}
 
-	instruction := fmt.Sprintf("\n\nCRITICAL: Output exactly two structured blocks (JSON manifest + Bash script) rather than a single monolithic script. Follow these templates:\n\nMANIFEST TEMPLATE (output as ```json code block):\n%s\n(Optional version requirement can be min, max, exact, or suggested)\n\nCOMPILE SCRIPT TEMPLATE (output as ```bash code block):\n%s\nTreat \"install-dir\" (.ghpt/install-dir) the same as /usr/local or $HOME/.local and place binaries into the same structure (install-dir/bin, install-dir/libs, install-dir/share, install-dir/state).\nAlternatively, binaries can be placed in '.ghpt/dist/' for automatic installation handoff.", ai.ManifestJSONTemplate, ai.CompileScriptTemplate)
+	instruction := `\n\nWORKFLOW — USE ONLY ghpt helper COMMANDS (do NOT output any code or JSON):
+
+1. REVIEW: Check current manifest with 'ghpt helper --get-manifest'
+2. FIX MANIFEST: Use 'ghpt helper --append-manifest' or '--remove-from-manifest' as needed
+3. FIX body.sh:
+   - Read current body.sh in .ghpt/
+   - Get fresh template if needed: 'ghpt helper --get-body-template'
+   - INSIDE body.sh, use exclusively 'ghpt helper --install "SRC=DEST"' to copy files
+4. VALIDATE: Run 'ghpt helper --validate-compile-script' (MUST pass before execution)
+5. EXECUTE: Run 'ghpt helper --run-compile-script' (only works if validation passes)
+
+KEY RULES:
+- ghpt binary checks PROCESS TREE for 'gh-pt' ancestor — if found, ONLY 'ghpt helper' subcommands permitted
+- Dependencies are installed via CONTAINERIZATION before script runs (container image matches user's OS)
+- NEVER output JSON or code — use helper commands exclusively
+- body.sh must be created in .ghpt/ directory using template from --get-body-template
+- INSIDE body.sh, use exclusively 'ghpt helper --install "SRC=DEST"' to copy files (not direct filesystem writes)
+- --run-compile-script ONLY executes if --validate-compile-script returns true
+- Source builds default to symlink mode; version = commit hash (latest-commit) or git tag (stable/prerelease)`
 
 	return basePrompt + instruction
 }
@@ -1145,6 +1175,60 @@ func runAIAgentWithOutput(aiCmdTemplate, prompt, dir string) (string, error) {
 	cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
+	return outBuf.String(), err
+}
+
+// runAIAgentInContainer runs the AI agent inside a container with network access
+// to generate body.sh and manifest.json. This is Stage 1 of the two-stage AI workflow.
+func (r *RootCLI) runAIAgentInContainer(aiCmdTemplate, prompt, repoDir string) (string, error) {
+	// Detect container runtime
+	runtimeName, err := compile.DetectContainerRuntime()
+	if err != nil {
+		return "", fmt.Errorf("no container runtime found for AI container: %w", err)
+	}
+
+	// Use a lightweight image with the AI tool pre-installed, or install it
+	// For now, use the same base image but with network enabled
+	aiImage := compile.DetectContainerImage()
+
+	// Build container command with network access for AI
+	containerArgs := []string{
+		"run", "--rm",
+		// Network enabled for AI to access APIs
+		"--network=host",
+		// Mount repo directory
+		"-v", fmt.Sprintf("%s:/build:rw", repoDir),
+		"-w", "/build",
+		// Set environment variables
+		"-e", "GH_PT_PROMPT=" + prompt,
+		"-e", "HOME=/tmp",
+	}
+
+	// Add the AI command
+	if strings.Contains(aiCmdTemplate, "%s") {
+		aiCmdTemplate = strings.ReplaceAll(aiCmdTemplate, `"%s"`, `%s`)
+		aiCmdTemplate = strings.ReplaceAll(aiCmdTemplate, `'%s'`, `%s`)
+
+		var formattedCmd string
+		if runtime.GOOS == "windows" {
+			formattedCmd = strings.ReplaceAll(aiCmdTemplate, "%s", `$env:GH_PT_PROMPT`)
+			containerArgs = append(containerArgs, aiImage, "powershell", "-NoProfile", "-Command", formattedCmd)
+		} else {
+			formattedCmd = strings.ReplaceAll(aiCmdTemplate, "%s", `"$GH_PT_PROMPT"`)
+			containerArgs = append(containerArgs, aiImage, "sh", "-c", formattedCmd)
+		}
+	} else {
+		containerArgs = append(containerArgs, aiImage, aiCmdTemplate, prompt)
+	}
+
+	log.Info("running AI agent in container (stage 1)", "runtime", runtimeName, "image", aiImage)
+	cmd := exec.Command(runtimeName, containerArgs...)
+	cmd.Dir = repoDir
+	cmd.Stdin = os.Stdin
+	var outBuf bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
 	return outBuf.String(), err
 }
 
@@ -1591,8 +1675,21 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	repoName := parts[len(parts)-1]
 	repoDir := filepath.Join(homeDir, "builds", repoName)
 
-	var symlinkDir string
-	if r.Symlink {
+	// Source builds default to symlink mode for better isolation and updates
+	symlinkDir := ""
+	if r.CompileFromSource {
+		// Source builds always use symlink by default
+		var ownerID, repoID string
+		if len(parts) >= 2 {
+			ownerID = parts[0]
+			repoID = parts[1]
+		} else if len(parts) == 1 {
+			ownerID = ""
+			repoID = parts[0]
+		}
+		symlinkDir = filepath.Join(homeDir, "src", "apps", ownerID, repoID)
+	} else if r.Symlink {
+		// Regular installs only use symlink if explicitly requested
 		var ownerID, repoID string
 		if len(parts) >= 2 {
 			ownerID = parts[0]
@@ -1722,17 +1819,24 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			return fmt.Errorf("failed to create scripts directory: %w", err)
 		}
 
+		// Stage 1: Generate body.sh using AI container with network access
 		prompt := buildCompilePrompt(r.Repository, repoDir, scriptPath, targetPath, symlinkDir)
-		log.Info(fmt.Sprintf("Generating AI compilation script using: %s", aiCmdTemplate))
-		aiResp, err := runAIAgentWithOutput(aiCmdTemplate, prompt, repoDir)
+		log.Info(fmt.Sprintf("Generating AI compilation body.sh using container: %s", aiCmdTemplate))
+		aiResp, err := r.runAIAgentInContainer(aiCmdTemplate, prompt, repoDir)
 		if err != nil {
-			return fmt.Errorf("AI agent failed to generate/test compilation script: %w", err)
+			return fmt.Errorf("AI agent failed to generate body.sh: %w", err)
 		}
 
 		p, parseErr := ai.ParseAIOutput(aiResp)
 		if parseErr != nil {
-			if scriptContent, readErr := os.ReadFile(scriptPath); readErr == nil && len(scriptContent) > 0 {
-				p, parseErr = ai.ParseAIOutput(string(scriptContent))
+			// Fallback: try reading existing body.sh if available
+			bodyPath := filepath.Join(ghptDir, "body.sh")
+			if bodyContent, readErr := os.ReadFile(bodyPath); readErr == nil && len(bodyContent) > 0 {
+				// Create a minimal payload from existing body.sh
+				p = &ai.CompilePayload{
+					Script: string(bodyContent),
+				}
+				parseErr = nil
 			}
 		}
 		if parseErr != nil {
@@ -1740,13 +1844,49 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		}
 		payload = p
 
+		// Extract body.sh from payload.Script (AI should output body.sh content)
+		bodyContent := payload.Script
+		if bodyContent == "" {
+			return fmt.Errorf("AI did not generate body.sh content")
+		}
+
+		// Validate body.sh using AST-based validation
+		bodyPath := filepath.Join(ghptDir, "body.sh")
+		if err := os.WriteFile(bodyPath, []byte(bodyContent), 0644); err != nil {
+			return fmt.Errorf("failed to write body.sh: %w", err)
+		}
+		if err := ai.ValidateBodyScript(bodyPath); err != nil {
+			return fmt.Errorf("body.sh validation failed: %w", err)
+		}
+		log.Info("body.sh validation passed", "path", bodyPath)
+
+		// Write manifest.json
 		manifestContent := payload.ManifestJSON
 		if manifestContent == "" {
 			manifestContent = ai.ManifestJSONTemplate
 		}
 		_ = os.WriteFile(manifestPath, []byte(manifestContent), 0644)
 
-		if err := os.WriteFile(scriptPath, []byte(payload.Script), 0755); err != nil {
+		// Render and write header.sh with template substitution
+		headerContent := ai.HeaderTemplate
+		headerContent = strings.ReplaceAll(headerContent, "{{.InstallPrefix}}", installDirTarget)
+		headerContent = strings.ReplaceAll(headerContent, "{{.RepoPath}}", repoDir)
+		headerContent = strings.ReplaceAll(headerContent, "{{.Repository}}", r.Repository)
+		headerContent = strings.ReplaceAll(headerContent, "{{.Version}}", "source-build")
+		headerPath := filepath.Join(ghptDir, "header.sh")
+		if err := os.WriteFile(headerPath, []byte(headerContent), 0644); err != nil {
+			return fmt.Errorf("failed to write header.sh: %w", err)
+		}
+
+		// Write footer.sh (no template substitution needed)
+		footerPath := filepath.Join(ghptDir, "footer.sh")
+		if err := os.WriteFile(footerPath, []byte(ai.FooterTemplate), 0644); err != nil {
+			return fmt.Errorf("failed to write footer.sh: %w", err)
+		}
+
+		// Also write the full compile.sh for backward compatibility (reconstructed)
+		compileScript := headerContent + bodyContent + ai.FooterTemplate
+		if err := os.WriteFile(scriptPath, []byte(compileScript), 0755); err != nil {
 			return fmt.Errorf("failed to write compilation script '%s': %w", scriptPath, err)
 		}
 		_ = os.Chmod(scriptPath, 0755)
@@ -1782,84 +1922,85 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	var lastOutput string
 
 	useContainer := !r.NoCompileContainer && os.Getenv("GHPT_NO_COMPILE_CONTAINER") != "1"
-	var containerRuntime string
+	
 	if useContainer {
-		if _, err := exec.LookPath("podman"); err == nil {
-			containerRuntime = "podman"
-		} else if _, err := exec.LookPath("docker"); err == nil {
-			containerRuntime = "docker"
-		} else {
-			return fmt.Errorf("mandatory AI compilation sandbox error: no container runtime (podman or docker) found in PATH. Running unvetted AI compilation scripts directly on the host is blocked by default to prevent supply-chain compromise. Install docker/podman, or explicitly opt out with --no-compile-container (or GHPT_NO_COMPILE_CONTAINER=1)")
+		// Verify container runtime is available
+		if _, err := exec.LookPath("podman"); err != nil {
+			if _, err := exec.LookPath("docker"); err != nil {
+				return fmt.Errorf("mandatory AI compilation sandbox error: no container runtime (podman or docker) found in PATH. Running unvetted AI compilation scripts directly on the host is blocked by default to prevent supply-chain compromise. Install docker/podman, or explicitly opt out with --no-compile-container (or GHPT_NO_COMPILE_CONTAINER=1)")
+			}
 		}
 	} else {
 		log.Warn("*** [SECURITY: COMPILE_SANDBOX_BYPASS] Executing AI compile script directly on host without container isolation (--no-compile-container specified). Host compromise risk! ***")
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		log.Info("executing compile script", "script", scriptPath, "attempt", attempt+1, "container", containerRuntime)
-		var execScriptCmd *exec.Cmd
-		if useContainer && containerRuntime != "" {
-			// Mount repoDir to /build and installDirTarget to /install inside container
-			execScriptCmd = exec.Command(containerRuntime, "run", "--rm",
-				"--security-opt", "no-new-privileges",
-				"--cap-drop=SYS_ADMIN",
-				"--cap-drop=SYS_PTRACE",
-				"--cap-drop=AUDIT_WRITE",
-				"-v", fmt.Sprintf("%s:/build:rw", repoDir),
-				"-v", fmt.Sprintf("%s:/install:rw", installDirTarget),
-				"-w", "/build",
-				"ubuntu:22.04", "bash", ".ghpt/compile.sh",
-			)
-			execScriptCmd.Dir = repoDir
-		} else if runtime.GOOS == "windows" {
-			execScriptCmd = exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
-			execScriptCmd.Dir = repoDir
-		} else {
-			if _, err := exec.LookPath("bash"); err == nil {
-				execScriptCmd = exec.Command("bash", scriptPath)
-			} else {
-				execScriptCmd = exec.Command("sh", scriptPath)
-			}
-			execScriptCmd.Dir = repoDir
+		log.Info("executing compile script in hardened container (stage 2)", "attempt", attempt+1)
+		
+		// Use the compile package's hardened container execution with three-part reconstruction
+		// The container will reconstruct compile.sh from header.sh + body.sh + footer.sh at runtime
+		reconstructCmd := "bash -c 'cat /build/.ghpt/header.sh /build/.ghpt/body.sh /build/.ghpt/footer.sh > /build/.ghpt/compile.sh && bash /build/.ghpt/compile.sh'"
+		
+		compileCfg := &compile.Config{
+			Repository:       r.Repository,
+			RepoDir:          repoDir,
+			BuildDir:         repoDir,
+			ScriptPath:       scriptPath, // Not used directly, but kept for compatibility
+			ManifestPath:     manifestPath,
+			TargetPath:       targetPath,
+			SymlinkDir:       symlinkDir,
+			InstallDirTarget: installDirTarget,
+			Track:            r.Track,
+			Version:          "source-build",
+			CompileScript:    reconstructCmd,
 		}
-
-		outputBytes, runErr := execScriptCmd.CombinedOutput()
-		if len(outputBytes) > 0 {
-			_, _ = os.Stdout.Write(outputBytes)
-		}
-
-		if runErr == nil {
+		
+		// Execute in hardened container (network=none, cap-drop=ALL, read-only, seccomp, non-root user)
+		err := compile.ExecuteInContainer(compileCfg)
+		if err == nil {
 			lastErr = nil
 			break
 		}
-
-		lastErr = runErr
-		lastOutput = string(outputBytes)
-		log.Warn("compile script failed", "error", runErr, "attempt", attempt+1)
-
+		
+		lastErr = err
+		log.Warn("compile script failed", "error", err, "attempt", attempt+1)
+		
 		if attempt < maxRetries {
-			log.Info(fmt.Sprintf("Prompting AI to fix compile script (retry %d of %d)...", attempt+1, maxRetries))
-			fixPrompt := buildCompileFixPrompt(r.Repository, repoDir, scriptPath, targetPath, symlinkDir, lastOutput, attempt+1)
-			fixResp, fixErr := runAIAgentWithOutput(aiCmdTemplate, fixPrompt, repoDir)
+			log.Info(fmt.Sprintf("Prompting AI to fix body.sh (retry %d of %d)...", attempt+1, maxRetries))
+			// Re-read body.sh for context
+			bodyPath := filepath.Join(ghptDir, "body.sh")
+			fixPrompt := buildCompileFixPrompt(r.Repository, repoDir, bodyPath, targetPath, symlinkDir, err.Error(), attempt+1)
+			fixResp, fixErr := r.runAIAgentInContainer(aiCmdTemplate, fixPrompt, repoDir)
 			if fixErr != nil {
 				log.Warn("AI repair command execution failed", "error", fixErr)
 			}
 			fixPayload, pErr := ai.ParseAIOutput(fixResp)
 			if pErr != nil {
-				if data, rErr := os.ReadFile(scriptPath); rErr == nil {
-					fixPayload, _ = ai.ParseAIOutput(string(data))
+				log.Warn("failed to parse AI fix response", "error", pErr)
+			}
+			if fixPayload != nil && fixPayload.Script != "" {
+				// Validate and write new body.sh
+				newBodyContent := fixPayload.Script
+				if err := os.WriteFile(bodyPath, []byte(newBodyContent), 0644); err != nil {
+					log.Warn("failed to write fixed body.sh", "error", err)
+				} else if err := ai.ValidateBodyScript(bodyPath); err != nil {
+					log.Warn("fixed body.sh validation failed", "error", err)
+				} else {
+					log.Info("fixed body.sh validation passed")
+					// Update manifest if provided
+					if fixPayload.ManifestJSON != "" {
+						_ = os.WriteFile(manifestPath, []byte(fixPayload.ManifestJSON), 0644)
+					}
+					// Reconstruct compile.sh for fallback
+					headerContent := ai.HeaderTemplate
+					headerContent = strings.ReplaceAll(headerContent, "{{.InstallPrefix}}", installDirTarget)
+					headerContent = strings.ReplaceAll(headerContent, "{{.RepoPath}}", repoDir)
+					headerContent = strings.ReplaceAll(headerContent, "{{.Repository}}", r.Repository)
+					headerContent = strings.ReplaceAll(headerContent, "{{.Version}}", "source-build")
+					compileScript := headerContent + newBodyContent + ai.FooterTemplate
+					_ = os.WriteFile(scriptPath, []byte(compileScript), 0755)
 				}
 			}
-			if fixPayload != nil {
-				if len(fixPayload.Dependencies) > 0 {
-					_, _ = r.resolveCompileDependencies(fixPayload.Dependencies, repoDir, cfg)
-				}
-				if fixPayload.ManifestJSON != "" {
-					_ = os.WriteFile(manifestPath, []byte(fixPayload.ManifestJSON), 0644)
-				}
-				_ = os.WriteFile(scriptPath, []byte(fixPayload.Script), 0755)
-			}
-			_ = os.Chmod(scriptPath, 0755)
 		}
 	}
 
@@ -1892,11 +2033,32 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 		}
 	}
 
-	commitHash := "unknown"
-	revParseCmd := exec.Command("git", "rev-parse", "HEAD")
-	revParseCmd.Dir = repoDir
-	if out, err := revParseCmd.Output(); err == nil {
-		commitHash = strings.TrimSpace(string(out))
+	// Determine version based on track
+	var version string
+	if r.Track == "latest-commit" {
+		// Use commit hash for latest-commit track
+		commitHash := "unknown"
+		revParseCmd := exec.Command("git", "rev-parse", "HEAD")
+		revParseCmd.Dir = repoDir
+		if out, err := revParseCmd.Output(); err == nil {
+			commitHash = strings.TrimSpace(string(out))
+		}
+		version = commitHash
+	} else {
+		// Use git tag for stable/prerelease tracks
+		version = "unknown"
+		describeCmd := exec.Command("git", "describe", "--tags", "--abbrev=0")
+		describeCmd.Dir = repoDir
+		if out, err := describeCmd.Output(); err == nil {
+			version = strings.TrimSpace(string(out))
+		} else {
+			// Fallback to commit hash if no tags
+			revParseCmd := exec.Command("git", "rev-parse", "HEAD")
+			revParseCmd.Dir = repoDir
+			if out, err := revParseCmd.Output(); err == nil {
+				version = strings.TrimSpace(string(out))
+			}
+		}
 	}
 
 	if !r.NoSaveState {
@@ -1923,7 +2085,8 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 				Repository:        r.Repository,
 				TargetPath:        targetPath,
 				Global:            r.Global,
-				Version:           commitHash,
+				Version:           version,
+				CommitHash:        version, // For source builds, version is commit hash or tag
 				CompileScript:     scriptPath,
 				Pinned:            r.PinInstall,
 				MaxDepth:          r.MaxDepth,

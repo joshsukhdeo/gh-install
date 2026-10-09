@@ -46,15 +46,9 @@ func RunHelper(h *params.HelperCmd) error {
 	}
 }
 
-func resolveTargetBaseDir(h *params.HelperCmd) string {
-	if h.TargetBaseDir != "" {
-		return h.TargetBaseDir
-	}
+func resolveTargetBaseDir() string {
 	if env := os.Getenv("GHPT_TARGET_BASE_DIR"); env != "" {
 		return env
-	}
-	if h.Global {
-		return "/usr/local"
 	}
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -82,8 +76,8 @@ func helperGetSystemInfo(h *params.HelperCmd) error {
 		home = os.Getenv("USERPROFILE")
 	}
 
-	targetBaseDir := resolveTargetBaseDir(h)
-	global := h.Global
+	targetBaseDir := resolveTargetBaseDir()
+	global := false
 	if targetBaseDir == "/usr/local" {
 		global = true
 	}
@@ -326,10 +320,11 @@ func helperValidateCompileScript() error {
 	if repoPath == "" {
 		return fmt.Errorf("GHPT_REPO_PATH not set")
 	}
-	scriptPath := filepath.Join(repoPath, ".ghpt", "compile.sh")
+	// Validate body.sh (what AI created), not compile.sh (reconstructed at runtime)
+	scriptPath := filepath.Join(repoPath, ".ghpt", "body.sh")
 	data, err := os.ReadFile(scriptPath)
 	if err != nil {
-		return fmt.Errorf("cannot read compile.sh: %w", err)
+		return fmt.Errorf("cannot read body.sh: %w", err)
 	}
 
 	forbidden := []struct {
@@ -357,16 +352,16 @@ func helperValidateCompileScript() error {
 	for _, f := range forbidden {
 		matched, _ := regexp.MatchString(f.pattern, content)
 		if matched {
-			return fmt.Errorf("forbidden pattern in compile.sh: %s", f.desc)
+			return fmt.Errorf("forbidden pattern in body.sh: %s", f.desc)
 		}
 	}
 
-	fmt.Println("compile.sh validation passed")
+	fmt.Println("body.sh validation passed")
 	return nil
 }
 
 func helperViewTargetDirs(h *params.HelperCmd) error {
-	baseDir := resolveTargetBaseDir(h)
+	baseDir := resolveTargetBaseDir()
 	return printDirTree(baseDir, 0)
 }
 
@@ -436,7 +431,7 @@ func printDirTreeRecursive(dir string, depth int) {
 }
 
 func helperViewInstalledFiles(h *params.HelperCmd) error {
-	baseDir := resolveTargetBaseDir(h)
+	baseDir := resolveTargetBaseDir()
 	return filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -456,7 +451,7 @@ func helperInstall(h *params.HelperCmd) error {
 	dirname := parts[0]
 	source := parts[1]
 
-	targetBaseDir := resolveTargetBaseDir(h)
+	targetBaseDir := resolveTargetBaseDir()
 	destDir := filepath.Join(targetBaseDir, dirname)
 
 	resolvedDest, err := filepath.Abs(destDir)
@@ -672,23 +667,57 @@ func helperRunCompileScript() error {
 	if repoPath == "" {
 		return fmt.Errorf("GHPT_REPO_PATH not set")
 	}
-	scriptPath := filepath.Join(repoPath, ".ghpt", "compile.sh")
+	bodyPath := filepath.Join(repoPath, ".ghpt", "body.sh")
 
-	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("compile.sh not found: %w", err)
+	// Read body.sh (AI-generated build logic)
+	bodyContent, err := os.ReadFile(bodyPath)
+	if err != nil {
+		return fmt.Errorf("cannot read body.sh: %w", err)
 	}
+
+	// Reconstruct compile.sh in memory: header + body.sh + footer
+	header := ai.HeaderTemplate
+	footer := ai.FooterTemplate
+
+	// Get environment info for template variables
+	targetBaseDir := resolveTargetBaseDir()
+	// Use environment variables if set, otherwise use defaults
+	repoName := os.Getenv("GHPT_REPOSITORY")
+	version := os.Getenv("GHPT_VERSION")
+	if repoName == "" {
+		repoName = "unknown"
+	}
+	if version == "" {
+		version = "unknown"
+	}
+
+	// Simple template variable substitution
+	header = strings.ReplaceAll(header, "{{.InstallPrefix}}", targetBaseDir)
+	header = strings.ReplaceAll(header, "{{.RepoPath}}", repoPath)
+	header = strings.ReplaceAll(header, "{{.Repository}}", repoName)
+	header = strings.ReplaceAll(header, "{{.Version}}", version)
+	footer = strings.ReplaceAll(footer, "{{.RepoPath}}", repoPath)
+
+	compileScript := header + string(bodyContent) + footer
+
+	// Write reconstructed compile.sh to temporary file
+	tmpScript := filepath.Join(repoPath, ".ghpt", "compile.sh.tmp")
+	if err := os.WriteFile(tmpScript, []byte(compileScript), 0755); err != nil {
+		return fmt.Errorf("cannot write temporary compile.sh: %w", err)
+	}
+	defer os.Remove(tmpScript)
 
 	// Check if containerized execution is requested
 	if os.Getenv("GHPT_COMPILE_CONTAINER") == "1" {
-		return helperRunCompileScriptContainer(repoPath, scriptPath)
+		return helperRunCompileScriptContainer(repoPath, tmpScript)
 	}
 
 	// Default: run directly with validation warning
 	fmt.Fprintf(os.Stderr, "WARNING: Running compile.sh directly without container sandbox.\n")
 	fmt.Fprintf(os.Stderr, "         Set GHPT_COMPILE_CONTAINER=1 to enable containerized execution.\n")
-	fmt.Fprintf(os.Stderr, "         Ensure compile.sh has been validated with 'ghpt helper --validate-compile-script'.\n")
+	fmt.Fprintf(os.Stderr, "         Ensure body.sh has been validated with 'ghpt helper --validate-compile-script'.\n")
 
-	cmd := exec.Command("bash", scriptPath)
+	cmd := exec.Command("bash", tmpScript)
 	cmd.Dir = repoPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

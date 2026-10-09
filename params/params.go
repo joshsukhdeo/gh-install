@@ -61,6 +61,7 @@ type CLI struct {
 	Show        Show           `cmd:"" help:"Show release information."`
 	Hook        Hook           `cmd:"" help:"Configure repository lifecycle hooks."`
 	Source      SourceCmd      `cmd:"" help:"Compile repository from source."`
+	SourceClean SourceCleanCmd `cmd:"source-clean" help:"Clean source build artifacts."`
 	Completions CompletionsCmd `cmd:"" help:"Generate shell completions."`
 	Search      SearchCmd      `cmd:"" help:"Search for repositories on GitHub."`
 	Helper      HelperCmd      `cmd:"" help:"AI-safe helper functions."`
@@ -72,6 +73,11 @@ type CLI struct {
 	LogQuietInteractive bool             `default:"true" negatable:"" help:"Quiet log in interactive mode"`
 	Verbose             bool             `short:"V" help:"Enable verbose output (sets log level to debug)."`
 	Version             kong.VersionFlag `help:"Show version." env:""`
+}
+
+type SourceCleanCmd struct {
+	Repository string `arg:"" optional:"" predictor:"github_repos" predict:"github_repos" help:"Repository to clean (owner/repo). If omitted, cleans all builds."`
+	All        bool   `help:"Clean all build artifacts."`
 }
 
 // CliParams is an alias for CLI.
@@ -419,6 +425,8 @@ func (h *Hook) Run() error {
 type SourceCmd struct {
 	Repository string `arg:"" env:"GH_PT_REPOSITORY" predictor:"github_repos" predict:"github_repos" help:"Github repository."`
 	AICmd      string `help:"Command template for AI execution."`
+	TargetOS   string `help:"Target operating system for cross-compilation (e.g., linux, windows, darwin)."`
+	TargetArch string `help:"Target architecture for cross-compilation (e.g., amd64, arm64, arm)."`
 	CommonInstallFlags
 }
 
@@ -469,6 +477,9 @@ type ExecContext struct {
 	AI                  bool
 	AICmd               string
 	AISafetyScan        bool
+	Track               string // "stable", "prerelease", "latest-commit"
+	TargetOS            string // Target OS for cross-compilation
+	TargetArch          string // Target architecture for cross-compilation
 	LogLevel            string
 	LogFormat           string
 	LogQuietInteractive bool
@@ -506,8 +517,6 @@ type HelperCmd struct {
 	AppendManifest        string `help:"Add dependencies (format: manager=pkg@version)."`
 	RemoveFromManifest    string `help:"Remove dependencies (format: manager=pkg)."`
 	RunCompileScript      bool   `help:"Execute compile.sh."`
-	TargetBaseDir         string `help:"Base installation directory." name:"target-base-dir" type:"path"`
-	Global                bool   `short:"g" help:"Use global install paths."`
 }
 
 // TruncateRegex truncates a regex pattern to maxLen characters (default 200) if it is longer than maxLen.

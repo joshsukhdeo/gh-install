@@ -807,6 +807,11 @@ func mapSharedObjectToPackage(mgrName string, soName string) string {
 		return "openssl1.1"
 	case strings.HasPrefix(soName, "libfuse.so.2"):
 		return "libfuse2"
+	case strings.HasPrefix(soName, "libxml2.so"):
+		if mgrName == "apt" {
+			return "libxml2"
+		}
+		return "libxml2"
 	case strings.HasPrefix(soName, "libfuse3.so"):
 		if mgrName == "apt" {
 			return "libfuse3-3"
@@ -2458,7 +2463,11 @@ func (r *GithubRelease) Install() error {
 		}
 
 		if r.CliParams.DryRun {
-			log.Infof("[dry-run] Would execute batched package install: sudo %s", strings.Join(args, " "))
+			prefix := "sudo "
+			if os.Geteuid() == 0 {
+				prefix = ""
+			}
+			log.Infof("[dry-run] Would execute batched package install: %s%s", prefix, strings.Join(args, " "))
 			r.InstalledPkgManager = args[0]
 			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		} else {
@@ -2515,7 +2524,11 @@ func (r *GithubRelease) Install() error {
 		}
 
 		if r.CliParams.DryRun {
-			log.Infof("[dry-run] Would execute batched package install: sudo %s", strings.Join(args, " "))
+			prefix := "sudo "
+			if os.Geteuid() == 0 {
+				prefix = ""
+			}
+			log.Infof("[dry-run] Would execute batched package install: %s%s", prefix, strings.Join(args, " "))
 			r.InstalledPkgManager = args[0]
 			r.InstalledPackageIDs = append(r.InstalledPackageIDs, r.InstalledPackageNames...)
 		} else {
@@ -2816,19 +2829,24 @@ func (r *GithubRelease) installPkg(binaryPath string) error {
 		cmd = execCommand("sudo", args...)
 	}
 
+	cmdStr := strings.Join(args, " ")
+	if os.Geteuid() != 0 {
+		cmdStr = "sudo " + cmdStr
+	}
+
 	cmd.Dir = filepath.Dir(binaryPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		log.Error(fmt.Sprintf("'sudo %s' failed", strings.Join(args, " ")), "installer binary", binaryPath, "error", err)
+		log.Error(fmt.Sprintf("'%s' failed", cmdStr), "installer binary", binaryPath, "error", err)
 		if r.CliParams.Interactive {
 			pterm.Error.Println("Failed to install FreeBSD package")
 		}
 		return err
 	}
-	log.Info(fmt.Sprintf("ran 'sudo %s'", strings.Join(args, " ")), "installer binary", binaryPath)
+	log.Info(fmt.Sprintf("ran '%s'", cmdStr), "installer binary", binaryPath)
 	if r.CliParams.Interactive {
 		pterm.Success.Println("Successfully installed FreeBSD package!")
 	}

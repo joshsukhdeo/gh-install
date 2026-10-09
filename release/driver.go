@@ -593,7 +593,11 @@ func writePrivilegedFile(destPath string, content []byte, perm os.FileMode, requ
 		cmd = execCommand("sudo", "install", "-m", fmt.Sprintf("%04o", perm), tmpName, destPath)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sudo install %s failed: %w (%s)", destPath, err, string(out))
+		prefix := "sudo install"
+		if os.Geteuid() == 0 {
+			prefix = "install"
+		}
+		return fmt.Errorf("%s %s failed: %w (%s)", prefix, destPath, err, string(out))
 	}
 	return nil
 }

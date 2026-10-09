@@ -169,4 +169,5 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
+	mvdan.cc/sh/v3 v3.14.1 // indirect
 )

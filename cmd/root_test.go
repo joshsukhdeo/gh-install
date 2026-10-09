@@ -106,9 +106,11 @@ func TestBuildCompilePrompt(t *testing.T) {
 	prompt := buildCompilePrompt("neovim/neovim", "/tmp/gh-compile-123", "/custom/script.sh", "/usr/local/bin", "")
 	assert.Contains(t, prompt, "neovim/neovim")
 	assert.Contains(t, prompt, "/tmp/gh-compile-123")
-	assert.Contains(t, prompt, "/custom/script.sh")
 	assert.Contains(t, prompt, "/usr/local/bin")
-	assert.Contains(t, prompt, "test and then attempt to run the compile script and it is only done when script runs successfully")
+	assert.Contains(t, prompt, "WORKFLOW — USE ONLY ghpt helper COMMANDS")
+	assert.Contains(t, prompt, "ghpt helper --get-system-info")
+	assert.Contains(t, prompt, "ghpt helper --append-manifest")
+	assert.Contains(t, prompt, "ghpt helper --run-compile-script")
 
 	symlinkPrompt := buildCompilePrompt("neovim/neovim", "/tmp/gh-compile-123", "/custom/script.sh", "/usr/local/bin", "/home/user/src/apps/neovim/neovim")
 	assert.Contains(t, symlinkPrompt, "/home/user/src/apps/neovim/neovim")
@@ -119,10 +121,11 @@ func TestBuildCompilePrompt(t *testing.T) {
 func TestBuildCompileFixPrompt(t *testing.T) {
 	prompt := buildCompileFixPrompt("neovim/neovim", "/tmp/gh-compile-123", "/custom/script.sh", "/usr/local/bin", "", "ninja: command not found", 1)
 	assert.Contains(t, prompt, "neovim/neovim")
-	assert.Contains(t, prompt, "/custom/script.sh")
 	assert.Contains(t, prompt, "ninja: command not found")
 	assert.Contains(t, prompt, "attempt 1 of 2")
-	assert.Contains(t, prompt, "fix and then attempt to run the compile script and it is only done when script runs successfully")
+	assert.Contains(t, prompt, "WORKFLOW — USE ONLY ghpt helper COMMANDS")
+	assert.Contains(t, prompt, "ghpt helper --validate-compile-script")
+	assert.Contains(t, prompt, "ghpt helper --run-compile-script")
 
 	symlinkFix := buildCompileFixPrompt("neovim/neovim", "/tmp/gh-compile-123", "/custom/script.sh", "/usr/local/bin", "/home/user/src/apps/neovim/neovim", "error", 1)
 	assert.Contains(t, symlinkFix, "/home/user/src/apps/neovim/neovim")

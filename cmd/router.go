@@ -198,6 +198,9 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		r.Repository = cli.Source.Repository
 		r.CompileFromSource = true
 		r.AI = true
+		r.Track = "latest-commit" // Default for source builds
+		r.TargetOS = cli.Source.TargetOS
+		r.TargetArch = cli.Source.TargetArch
 		resolveDisplayPreferences(&r.CommonInstallFlags, r)
 		aiCmd := cli.Source.AICmd
 		if aiCmd == "" {
@@ -212,6 +215,8 @@ func RunCommand(cmdStr string, cli *params.CLI) error {
 		}
 		r.AICmd = aiCmd
 		return r.RunInstall()
+	case "source-clean":
+		return CleanSourceBuilds(cli.SourceClean.Repository, cli.SourceClean.All)
 	case "scan ai":
 		aiCmd := cli.Scan.Ai.AICmd
 		if aiCmd == "" {

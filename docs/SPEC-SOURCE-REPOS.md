@@ -9,7 +9,7 @@ This specification defines gh-pt's source build system, which manages persistent
 - **Persistent Clones**: Repositories are cloned once and reused, not re-downloaded
 - **AI-Assisted Compilation**: AI generates compile scripts within strict boundaries
 - **Deterministic Dependencies**: All dependencies explicitly listed in manifest.json
-- **Security-First**: AI operates in a restricted sandbox via wrapper binary
+- **Security-First**: AI operates in a restricted sandbox via process tree detection
 - **Version Flexibility**: Support for stable, prerelease, and latest-commit tracks
 
 ### 1.2 User Stories
@@ -52,18 +52,18 @@ $GH_PT_REPO_DIR/
 ```
 $GH_PT_REPO_DIR/clones/owner/repo/
 ├── .ghpt/
-│   ├── manifest.json      # Dependency manifest (AI-readable, gh-pt validated)
-│   ├── compile.sh         # Concatenated script: header + body + footer
-│   ├── body.sh            # AI-generated body only (for reference)
+│   ├── manifest.json      # Dependency manifest (AI-modified via ghpt helper --append-manifest)
+│   ├── body.sh            # AI-generated build logic (no shebang, no header/footer)
+│   ├── compile.sh         # Reconstructed at runtime: header + body.sh + footer (not written to disk)
 │   ├── compile.log        # Execution log
 │   └── install.log        # File installation log
 ```
 
 **Key Points**:
 - `.ghpt/` directory is owned by gh-pt, not the user or AI
-- `manifest.json` is modified via `gh-pt helper --append-manifest`, not directly edited
-- `compile.sh` is auto-generated; users should not edit it directly
-- `body.sh` is the AI's output, kept for debugging/reference
+- `manifest.json` is modified exclusively via `ghpt helper --append-manifest`, not directly edited
+- `body.sh` is the AI's sole output — contains build logic only (no shebang, no header/footer)
+- `compile.sh` is reconstructed at execution time by gh-pt (header + body.sh + footer), never written to disk
 
 ## 3. State Schema Changes
 
@@ -171,6 +171,59 @@ type SourceRepo struct {
 | `--global, -g` | bool | false | For `source`/`install`: install to /usr/local. For `upgrade`: update only global installations. |
 | `--user, -u` | bool | false | For `upgrade`: update only user installations. |
 | `--force` | bool | false | Force reinstall to different target base dir (uninstall old, install new). Only for `ghpt source` and `ghpt install`. |
+| `--target-os` | string | - | Target operating system for cross-compilation (e.g., linux, windows, darwin) |
+| `--target-arch` | string | - | Target architecture for cross-compilation (e.g., amd64, arm64, arm) |
+
+### 4.1.2 Container Security Hardening
+
+The compile container is hardened with the following security controls:
+
+**Network Isolation**
+- `--network=none` — No network access during compilation to prevent data exfiltration
+
+**Capability Dropping**
+- `--cap-drop=ALL` — Drop all capabilities
+- `--cap-add=DAC_OVERRIDE` — Only add DAC_OVERRIDE for file operations
+
+**Filesystem Hardening**
+- `--read-only` — Root filesystem is read-only
+- `--tmpfs=/tmp:size=100M,mode=1777` — Temporary filesystem for build artifacts
+- Source mounted read-only (`/build:ro`), install directory read-write (`/install:rw`)
+
+**Process Isolation**
+- `--user=1000:1000` — Non-root user
+- `--security-opt=no-new-privileges` — Prevent privilege escalation
+
+**Syscall Filtering (seccomp)**
+- `--security-opt=seccomp=/build/.ghpt/seccomp-profile.json` — Comprehensive seccomp profile
+- Allows only build-essential syscalls: file ops, process ops, memory management, directory ops, time, signals
+- Blocks: network syscalls, ptrace, mount, reboot, kexec, etc.
+
+The seccomp profile is generated at `compile/seccomp-profile.json` and copied to the repo's `.ghpt/` directory before container execution.
+
+### 4.1.1 `ghpt source-clean [repository] [flags]`
+
+**Purpose**: Clean build artifacts for source repositories
+
+**Flags**:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--all` | bool | false | Clean all source build artifacts |
+
+**Behavior**:
+- If `repository` is provided: removes `~/builds/{repo}` directory
+- If `--all` is specified: removes all build artifacts in `~/builds/`
+- If neither: displays usage information
+
+**Example**:
+```bash
+# Clean specific repository build
+ghpt source-clean neovim/neovim
+
+# Clean all source build artifacts
+ghpt source-clean --all
+```
 
 **Flag Resolution & Validation** (`--target-base-dir` / `-g` / `-u` / `--force`):
 
@@ -211,10 +264,13 @@ type SourceRepo struct {
    - Clone repository to `$GH_PT_REPO_DIR/clones/owner/repo` (or `forks/` if `--fork`)
    - Resolve version based on `--version` flag
    - Checkout appropriate tag/branch/commit
-   - Generate wrapper script with PID tracking
-   - Invoke AI to generate `body.sh`
-   - Concatenate header + body + footer → `compile.sh`
-   - Execute `compile.sh`
+   - Set `GHPT_REPO_PATH` and `GHPT_TARGET_BASE_DIR` environment variables
+   - Pull/build container image (OS-specific via `DetectContainerImage()`)
+   - Invoke AI to generate `body.sh` (build logic only, no shebang)
+   - Install dependencies from `manifest.json` in container
+   - Validate `body.sh` via `ghpt helper --validate-compile-script`
+   - Reconstruct `compile.sh` in memory (header + body.sh + footer)
+   - Execute `compile.sh` in container
    - Track installed files and update state (including `target_base_dir`)
 
 2. **Subsequent Runs (repo exists, same target_base_dir)**:
@@ -305,16 +361,27 @@ type SourceRepo struct {
 | `--get-manifest` | - | Display current manifest.json contents |
 | `--append-manifest` | string | Add dependencies (format: "manager=pkg@version,manager=pkg@version") |
 | `--remove-from-manifest` | string | Remove dependencies (format: "manager=pkg,manager=pkg") |
-| `--get-body-template` | - | Display body.sh template |
+| `--get-body-template` | - | Display body.sh template (no shebang, header/footer added by gh-pt at runtime) |
 | `--validate-manifest` | - | Validate manifest.json schema |
-| `--validate-compile-script` | - | Validate compile.sh for forbidden patterns |
-| `--run-compile-script` | - | Execute compile.sh (for AI iterative debugging) |
+| `--validate-compile-script` | - | Validate body.sh for forbidden patterns (checks what AI created) |
+| `--run-compile-script` | - | Execute reconstructed compile.sh in container (header + body.sh + footer) |
 | `--get-system-info` | - | Display system information for AI context |
 | `--view-target-dirs` | - | List contents of target base directory and subdirs |
 | `--view-installed-files` | - | List paths of all installed files across target directories |
-| `--install` | string | Install file/directory (format: "dirname=source") |
+| `--install` | string | Install file/directory (format: "dirname=source" where dirname is bin/libs/share or relative path) |
 
-**Example Output** (`--get-system-info`):
+**Environment Variables** (set by gh-pt before invoking AI or running container):
+- `GHPT_REPO_PATH`: Path to the repository build directory (required for manifest/compile operations)
+- `GHPT_TARGET_BASE_DIR`: Base installation directory (inferred from parent `source`/`install` command)
+- If `GHPT_TARGET_BASE_DIR` not set, defaults to `$HOME/.local`
+
+**Note**: The helper command does NOT accept `--target-base-dir` or `--global` flags. It uses `GHPT_TARGET_BASE_DIR` environment variable set by the parent gh-pt process.
+
+**Security**:
+- Process tree detection: gh-pt checks for `gh-pt` ancestor process in the process tree
+- If ancestor found, ONLY `ghpt helper` subcommands permitted (exit code 126 for others)
+- Restriction built into main gh-pt binary, not a separate wrapper
+- All operations logged for audit trail
 ```
 os: linux
 arch: amd64
@@ -367,8 +434,8 @@ global: false
 ```
 
 **Security**:
-- Only accessible via wrapper binary during AI session
-- Wrapper validates PID is still active
+- Process tree detection restricts to helper commands during AI session
+- gh-pt binary checks for 'gh-pt' ancestor process
 - All operations logged for audit trail
 
 ### 4.4 Version Constraint Syntax
@@ -391,89 +458,68 @@ ghpt helper --remove-from-manifest "apt=clang"
 
 ## 5. Compile Script Architecture
 
-### 5.1 Three-Part Concatenation
+### 5.1 Three-Part Compilation Model
+
+The compile script is reconstructed **at execution time** by gh-pt. AI creates only `body.sh`; gh-pt provides header and footer.
 
 ```
 ┌─────────────────────────────────────┐
 │  HEADER (gh-pt generated)           │
-│  - Environment variable setup       │
-│  - _ghpt_install function definition│
+│  - Shebang (#!/usr/bin/env bash)    │
+│  - set -euo pipefail                │
+│  - Minimal env vars                 │
 │  - Logging setup                    │
 ├─────────────────────────────────────┤
-│  BODY (AI generated, validated)     │
-│  - Build logic                      │
-│  - File installation via _ghpt_install│
-│  - No package manager calls         │
-│  - No writes outside target dirs    │
+│  BODY (AI generated in body.sh)     │
+│  - Build commands only              │
+│  - NO shebang, NO header/footer     │
+│  - Calls ghpt helper --install      │
+│  - Validated before execution       │
 ├─────────────────────────────────────┤
 │  FOOTER (gh-pt generated)           │
 │  - Cleanup                          │
 │  - Final logging                    │
 │  - Exit code handling               │
 └─────────────────────────────────────┘
+
+Assembly Flow:
+  body.sh (on disk) ─┐
+                     ├─> compile.sh (in memory) ─> executed in container
+  header + footer ───┘
+                     └─> NOT written to disk
 ```
 
-### 5.2 Header Template
+**Why reconstruct at runtime?**
+- Header/footer can be updated without AI changes
+- AI only creates body.sh (simpler, smaller, easier to validate)
+- gh-pt controls environment setup and security constraints
+- Validation checks body.sh (what AI created), not full compile.sh
+
+### 5.2 Header Template (gh-pt generated)
 
 ```bash
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # ============================================================================
-# gh-pt Compile Script - Auto-Generated
-# Repository: {{.Repository}}
-# Version: {{.Version}}
-# Generated: {{.Timestamp}}
+# gh-pt Compile Script - Runtime Reconstructed
+# Generated by gh-pt from header + body.sh + footer
 # ============================================================================
 
-# Environment Variables
+# Minimal environment - delegate to ghpt helper, don't rely on env vars
 export GHPT_TARGET_BASE_DIR="{{.InstallPrefix}}"
-export GHPT_TARGET_BIN_DIR="{{.InstallBin}}"
-export GHPT_TARGET_LIB_DIR="{{.InstallLib}}"
-export GHPT_TARGET_SHARE_DIR="{{.InstallShare}}"
+export GHPT_REPO_PATH="{{.RepoPath}}"
 export GHPT_LOG_FILE="{{.RepoPath}}/.ghpt/compile.log"
 export GHPT_INSTALL_LOG="{{.RepoPath}}/.ghpt/install.log"
 
-# Ensure target directories exist
-mkdir -p "$GHPT_TARGET_BIN_DIR" "$GHPT_TARGET_LIB_DIR" "$GHPT_TARGET_SHARE_DIR"
+# Ensure target directories exist via ghpt helper
+ghpt helper --install "bin=.ghpt/.keep" 2>/dev/null || true
+ghpt helper --install "libs=.ghpt/.keep" 2>/dev/null || true
+ghpt helper --install "share=.ghpt/.keep" 2>/dev/null || true
 
 # Logging function
 log() {
     echo "[$(date -Iseconds)] $*" | tee -a "$GHPT_LOG_FILE"
-}
-
-# Installation function - validates target is within allowed prefix
-_ghpt_install() {
-    local src="$1"
-    local dst="$2"
-    
-    # Resolve to absolute path
-    local resolved_dst
-    resolved_dst=$(realpath -m "$dst")
-    
-    # Validate destination is under allowed prefix
-    case "$resolved_dst" in
-        "$GHPT_TARGET_BASE_DIR"/*) ;;
-        *) 
-            log "ERROR: destination '$resolved_dst' outside allowed prefix '$GHPT_TARGET_BASE_DIR'"
-            return 1
-            ;;
-    esac
-    
-    # Ensure parent directory exists
-    mkdir -p "$(dirname "$resolved_dst")"
-    
-    # Copy file/directory
-    if [ -d "$src" ]; then
-        cp -r "$src" "$resolved_dst"
-        # Log all installed files
-        find "$resolved_dst" -type f >> "$GHPT_INSTALL_LOG"
-    else
-        cp "$src" "$resolved_dst"
-        echo "$resolved_dst" >> "$GHPT_INSTALL_LOG"
-    fi
-    
-    log "Installed: $src -> $resolved_dst"
 }
 
 log "=== Compile Script Started ==="
@@ -481,17 +527,63 @@ log "Repository: {{.Repository}}"
 log "Version: {{.Version}}"
 ```
 
-### 5.3 Body Template (AI-Generated)
+**Design Principles:**
+- Minimal env vars (GHPT_TARGET_BASE_DIR, GHPT_REPO_PATH)
+- All file operations via `ghpt helper --install` (AI cannot modify helper functions)
+- No `_ghpt_install` shell function (security risk if AI modifies it)
+- Target directories created via helper (validates paths automatically)
+
+### 5.3 Body Template (AI-generated, stored as body.sh)
+
+The AI creates `body.sh` using the template from `ghpt helper --get-body-template`. This file:
+- Has **NO shebang** (header provides it)
+- Has **NO header/footer** (gh-pt adds them at runtime)
+- Calls `ghpt helper --install "dirname=source"` directly for all file operations
+- Does NOT reference env vars (GHPT_TARGET_BIN_DIR etc.)
 
 ```bash
 # ============================================================================
 # Build Logic - AI Generated
-# Use _ghpt_install for all file operations
-# Example: _ghpt_install ./build/myapp "$GHPT_TARGET_BIN_DIR/myapp"
+# Created by AI via: ghpt helper --get-body-template
+# Validated by: ghpt helper --validate-compile-script
+# ============================================================================
+#
+# CONTEXT:
+# - This runs INSIDE a build container provisioned by gh-pt
+# - Dependencies are PRE-INSTALLED in the container (from manifest.json)
+# - The 'ghpt' command ONLY permits 'ghpt helper' subcommands
+# - All other ghpt commands are BLOCKED (exit code 126)
+#
+# FILE OPERATIONS:
+# - Use: ghpt helper --install "bin=./build/myapp"
+# - Use: ghpt helper --install "libs=./build/libfoo.so"
+# - Use: ghpt helper --install "share=./data/config.json"
+# - NEVER use: cp, mv, mkdir, or direct filesystem writes
+# - NEVER reference: $GHPT_TARGET_BIN_DIR, $GHPT_TARGET_LIB_DIR, etc.
+#
+# FORBIDDEN:
+# - Package manager calls (apt, dnf, brew, cargo, go install, pip, npm)
+# - Writes to /usr/local, /usr/bin, /etc, /var, /opt
+# - Privilege escalation (sudo, su, pkexec)
+# - Direct filesystem operations (cp, mv, mkdir, chmod)
+# - Environment variable references for target paths
 # ============================================================================
 
-{{.AI_BUILD_LOGIC}}
+# Example: Build a CMake project
+cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j$(nproc)
+
+# Example: Install built artifacts
+ghpt helper --install "bin=./build/bin/myapp"
+ghpt helper --install "libs=./build/lib/libfoo.so"
+ghpt helper --install "share=./build/share/myapp"
 ```
+
+**Why body.sh calls ghpt helper directly?**
+- AI cannot modify helper functions (they're in gh-pt binary)
+- No risk of AI bypassing validation via env vars
+- Consistent behavior across all builds
+- Security: helper validates all paths, handles logging
 
 ### 5.4 Footer Template
 
@@ -512,11 +604,69 @@ fi
 exit 0
 ```
 
-### 5.5 Validation Rules
+## 5.6 Execution Flow
 
-**Forbidden Patterns** (detected by semgrep/regex):
+The complete lifecycle of a source build:
 
-1. **Package Manager Calls**:
+```
+1. gh-pt sets environment variables
+   ├── GHPT_REPO_PATH = /path/to/repo
+   └── GHPT_TARGET_BASE_DIR = ~/.local (or from --target-base-dir)
+
+2. gh-pt pulls/builds container image
+   └── Uses DetectContainerImage() for OS-specific image
+       (e.g., ubuntu:22.04 for Linux, macos-build-tools for macOS)
+
+3. gh-pt reads manifest.json and installs dependencies
+   └── Runs in container: apt-get install -y gcc cmake etc.
+
+4. gh-pt reads body.sh (AI-created)
+   └── Path: $GHPT_REPO_PATH/.ghpt/body.sh
+
+5. gh-pt validates body.sh
+   └── ghpt helper --validate-compile-script
+   └── Checks for forbidden patterns (see §5.5)
+   └── If validation fails → abort, report errors
+
+6. gh-pt reconstructs compile.sh (in memory)
+   ├── header = template with env vars + logging
+   ├── body = body.sh content
+   └── footer = template with cleanup + exit handling
+
+7. gh-pt executes compile.sh in container
+   └── Mounts repo as /build (read-write)
+   └── Mounts install target as /install (read-write)
+   └── Runs: bash -c "$header$body$footer"
+   └── Streams output to compile.log
+
+8. gh-pt captures results
+   ├── Exit code (0 = success, non-zero = failure)
+   ├── Installed files (from install.log)
+   └── Updates state.json with build metadata
+```
+
+**Key Properties:**
+- Container reused for deps + compile (single invocation)
+- body.sh never modified by gh-pt (AI is sole author)
+- compile.sh reconstructed fresh each time (never cached)
+- Validation happens before execution (fail fast)
+- All env vars set by gh-pt (AI cannot override)
+
+**Validation Target:**
+- `ghpt helper --validate-compile-script` validates `body.sh` (what AI created)
+- NOT `compile.sh` (which is reconstructed at runtime and never written to disk)
+- Validation happens BEFORE reconstruction and execution
+
+**Execution Context:**
+- The compile script runs INSIDE a build container provisioned by gh-pt
+- Dependencies from manifest.json are PRE-INSTALLED in the container
+- The 'ghpt' command uses process tree detection to restrict AI to helper subcommands
+- Process tree detection checks for 'gh-pt' ancestor process (built into main binary)
+- All file operations via `ghpt helper --install` validate paths automatically
+
+**Forbidden Patterns** (detected by semgrep/regex in body.sh):
+
+1. **Package Manager Calls** (dependencies must be declared in manifest.json, not installed in script):
    ```
    apt(-get)? install
    dnf install
@@ -549,9 +699,25 @@ exit 0
    /var/*
    ```
 
+5. **Direct Filesystem Operations** (must use ghpt helper instead):
+   ```
+   \bcp\b
+   \bmv\b
+   \bchmod\b
+   \bchown\b
+   ```
+
+6. **Environment Variable References** (must use ghpt helper instead):
+   ```
+   \$GHPT_TARGET_BIN_DIR
+   \$GHPT_TARGET_LIB_DIR
+   \$GHPT_TARGET_SHARE_DIR
+   ```
+
 **Validation Function**:
 ```go
 func ValidateCompileScript(scriptPath string) error {
+    // scriptPath points to body.sh (what AI created)
     content, err := os.ReadFile(scriptPath)
     if err != nil {
         return err
@@ -574,12 +740,19 @@ func ValidateCompileScript(scriptPath string) error {
         `\bsu\b`,
         `/etc/`,
         `/var/`,
+        `\bcp\b`,
+        `\bmv\b`,
+        `\bchmod\b`,
+        `\bchown\b`,
+        `\$GHPT_TARGET_BIN_DIR`,
+        `\$GHPT_TARGET_LIB_DIR`,
+        `\$GHPT_TARGET_SHARE_DIR`,
     }
     
     for _, pattern := range forbidden {
         matched, _ := regexp.MatchString(pattern, string(content))
         if matched {
-            return fmt.Errorf("forbidden pattern found: %s", pattern)
+            return fmt.Errorf("forbidden pattern in body.sh: %s", pattern)
         }
     }
     
@@ -587,109 +760,46 @@ func ValidateCompileScript(scriptPath string) error {
 }
 ```
 
-## 6. Wrapper Binary Design
+## 6. AI Sandbox Restriction (Process Tree Based)
 
 ### 6.1 Purpose
 
-The wrapper binary (`ghpt-ai-wrapper`) restricts AI to only call `ghpt helper` commands, preventing:
+The gh-pt binary restricts AI execution context by detecting a `gh-pt` ancestor process in the process tree. When detected, it ONLY permits `ghpt helper` subcommands, preventing:
 - Direct execution of `ghpt install` (which could modify state inappropriately)
 - Access to sensitive gh-pt commands
 - Bypassing of security validation
 
+This restriction is **built into the main gh-pt binary** (see `main.go:27-33`), not a separate wrapper binary.
+
 ### 6.2 Implementation
 
 ```go
-package main
-
-import (
-    "fmt"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "strconv"
-    "syscall"
-)
-
-func main() {
-    // Get parent PID from environment
-    parentPID := os.Getenv("GHPT_AI_PARENT_PID")
-    if parentPID == "" {
-        fmt.Println("ERROR: GHPT_AI_PARENT_PID not set")
-        os.Exit(1)
+// In main.go - runs at startup before command parsing
+func run() int {
+    // Active Threat AI Sandbox: If an ancestor process is gh-pt, lock down execution strictly to helper commands
+    if isRestricted, err := cmd.CheckAncestorForGhPt(); err == nil && isRestricted {
+        if !cmd.IsHelperInvocation(os.Args[1:]) {
+            fmt.Fprintln(os.Stderr, "Error: Restricted AI execution context detected (gh-pt ancestor present). Only 'gh-pt helper ...' commands are permitted.")
+            return 126
+        }
     }
-    
-    pid, err := strconv.Atoi(parentPID)
-    if err != nil {
-        fmt.Printf("ERROR: invalid PID: %s\n", parentPID)
-        os.Exit(1)
-    }
-    
-    // Check if parent process is still alive
-    proc, err := os.FindProcess(pid)
-    if err != nil || proc.Signal(syscall.Signal(0)) != nil {
-        // Parent is dead, forward to real gh-pt
-        fmt.Println("Parent process not found, forwarding to gh-pt...")
-        forwardToGhpt(os.Args[1:])
-        return
-    }
-    
-    // Validate command is "helper"
-    if len(os.Args) < 2 || os.Args[1] != "helper" {
-        fmt.Println("Only 'ghpt helper' is permitted within this AI session.")
-        fmt.Println("If you need to install a dependency, use:")
-        fmt.Println("  ghpt helper --append-manifest \"manager=package@version\"")
-        os.Exit(1)
-    }
-    
-    // Execute ghpt helper with all arguments
-    ghptPath, err := exec.LookPath("gh-pt")
-    if err != nil {
-        fmt.Printf("ERROR: gh-pt not found in PATH\n")
-        os.Exit(1)
-    }
-    
-    cmd := exec.Command(ghptPath, os.Args[1:]...)
-    cmd.Stdin = os.Stdin
-    cmd.Stdout = os.Stdout
-    cmd.Stderr = os.Stderr
-    
-    if err := cmd.Run(); err != nil {
-        os.Exit(cmd.ProcessState.ExitCode())
-    }
-}
-
-func forwardToGhpt(args []string) {
-    ghptPath, err := exec.LookPath("gh-pt")
-    if err != nil {
-        fmt.Printf("ERROR: gh-pt not found\n")
-        os.Exit(1)
-    }
-    
-    cmd := exec.Command(ghptPath, args...)
-    cmd.Stdin = os.Stdin
-    cmd.Stdout = os.Stdout
-    cmd.Stderr = os.Stderr
-    
-    if err := cmd.Run(); err != nil {
-        os.Exit(cmd.ProcessState.ExitCode())
-    }
+    // ... rest of main
 }
 ```
 
-### 6.3 Permissions and Location
+### 6.3 Process Tree Detection
 
+```go
+// cmd/sandbox.go
+func CheckAncestorForGhPt() (bool, error) {
+    // Traverses parent processes upwards up to PID 1
+    // Returns true if any ancestor process name is "gh-pt" (or "gh-pt.exe")
+}
+
+func IsHelperInvocation(args []string) bool {
+    // Checks if the first non-flag argument is "helper"
+}
 ```
-/tmp/ghpt-ai-wrapper-$PID/
-├── ghpt                  # Wrapper binary
-└── (PID checked on each invocation)
-```
-
-**Permissions**: `0100` (execute-only, no read/write)
-
-**Rationale**:
-- Prevents AI from reading wrapper source and reverse-engineering restrictions
-- PID in path prevents collisions between concurrent AI sessions
-- `/tmp` ensures cleanup on reboot
 
 ### 6.4 Integration with AI Prompt
 
@@ -697,27 +807,51 @@ func forwardToGhpt(args []string) {
 You are building a tool from source. You have access to `ghpt` command, but
 you may ONLY use `ghpt helper` subcommands. All other ghpt commands are blocked.
 
-Available commands:
-- ghpt helper --get-system-info          # Get system information
-- ghpt helper --view-target-dirs         # List target directory structure
-- ghpt helper --view-installed-files     # List all installed files
-- ghpt helper --get-manifest             # View current dependencies
-- ghpt helper --append-manifest "..."    # Add dependencies
+The 'ghpt' binary detects AI execution context by checking the PROCESS TREE
+for a 'gh-pt' ancestor. If found, it ONLY permits 'ghpt helper' subcommands
+(exit code 126 for others). This restriction is BUILT INTO THE MAIN GH-PT BINARY,
+not a separate wrapper.
+
+WORKFLOW:
+1. Use `ghpt helper --append-manifest` to declare build dependencies
+2. Use `ghpt helper --get-body-template` to get body.sh template
+3. Create body.sh with build logic (NO shebang, NO header/footer)
+4. Use `ghpt helper --validate-compile-script` to validate body.sh
+5. Use `ghpt helper --run-compile-script` to execute (only if validation passes)
+
+Available helper subcommands:
+- ghpt helper --get-system-info           # Get system information (distro, compilers, CPU, RAM, etc.)
+- ghpt helper --view-target-dirs          # List target directory structure
+- ghpt helper --view-installed-files      # List all installed files
+- ghpt helper --get-manifest              # View current manifest.json
+- ghpt helper --append-manifest "..."     # Add build dependencies (format: "manager=pkg@version")
 - ghpt helper --remove-from-manifest "..." # Remove dependencies
-- ghpt helper --get-body-template        # Get build script template
-- ghpt helper --validate-manifest        # Validate manifest
-- ghpt helper --validate-compile-script  # Validate build script
-- ghpt helper --run-compile-script       # Execute build script
-- ghpt helper --install 'dirname=src'    # Install file/directory
+- ghpt helper --get-body-template         # Get body.sh template (NO shebang, header/footer added by gh-pt)
+- ghpt helper --validate-manifest         # Validate manifest schema
+- ghpt helper --validate-compile-script   # Validate body.sh for forbidden patterns (BEFORE execution)
+- ghpt helper --run-compile-script        # Execute reconstructed compile.sh (header + body.sh + footer)
+- ghpt helper --install 'dirname=src'     # Install file/directory (dirname = bin/libs/share or relative path)
 
-If you need to install a dependency (e.g., gcc, cmake), use:
+MANIFEST MANAGEMENT:
   ghpt helper --append-manifest "apt=gcc@latest,apt=cmake@3.20-"
-
-If you need to install another gh-pt managed tool as a dependency:
   ghpt helper --append-manifest "gh-pt=owner/repo@latest"
 
+BODY.SH REQUIREMENTS:
+- NO shebang (#!/bin/bash) - header provides it
+- NO header/footer code - gh-pt adds them at runtime
+- Call `ghpt helper --install "dirname=src"` DIRECTLY for file operations
+- Do NOT reference env vars ($GHPT_TARGET_BIN_DIR etc.)
+- Do NOT use cp, mv, mkdir, or other filesystem operations
+
+FORBIDDEN IN body.sh:
+- Package manager calls (apt install, dnf install, brew install, cargo install, go install, pip install, npm install)
+- Direct system writes (/usr/local/*, /usr/bin/*, /etc/*, /var/*, /opt/*)
+- Privilege escalation (sudo, su, pkexec)
+- Direct filesystem operations (cp, mv, mkdir, chmod, chown)
+- Environment variable references ($GHPT_TARGET_BIN_DIR, $GHPT_TARGET_LIB_DIR, etc.)
+
 DO NOT attempt to run `ghpt install`, `ghpt source`, or other ghpt commands.
-They will be blocked by the wrapper.
+They will be blocked with exit code 126.
 ```
 
 ## 7. Environment Variables and Configuration

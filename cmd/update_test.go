@@ -455,6 +455,7 @@ func TestDoUpdate_ConcurrentWorkerPool(t *testing.T) {
 
 	r := &RootCLI{}
 	r.Update = true
+	r.ProgressBar = "none"
 	err = DoUpdate(r, nil)
 	require.NoError(t, err)
 
@@ -525,6 +526,7 @@ func TestDoUpdate_WorkerErrorHandling(t *testing.T) {
 
 	r := &RootCLI{}
 	r.Update = true
+	r.ProgressBar = "none"
 	err = DoUpdate(r, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "download failed: 404 not found")
@@ -635,9 +637,11 @@ func TestDoUpdate_DryRun(t *testing.T) {
 	}
 	defer func() { installReleaseFunc = origInstall }()
 
-	r := &RootCLI{}
+r := &RootCLI{}
 	r.Update = true
 	r.DryRun = true
+	r.ProgressBar = "none"
+
 	err = DoUpdate(r, nil)
 	require.NoError(t, err)
 
@@ -710,9 +714,11 @@ func TestDoUpdate_InsecureAllowUnsigned_PerItemEnforcement(t *testing.T) {
 	// Case 1: Bulk upgrade with --insecure-allow-unsigned
 	// Guarantees flag only permits unsigned for packages that genuinely lack signatures,
 	// while strictly enforcing cryptographic checks on packages that previously possessed them.
-	r := &RootCLI{}
+r := &RootCLI{}
 	r.Update = true
 	r.InsecureAllowUnsigned = true
+	r.ProgressBar = "none"
+
 	err = DoUpdate(r, nil)
 	require.NoError(t, err)
 
@@ -972,9 +978,10 @@ func TestUpdate_ReconcilesObsoleteAssets(t *testing.T) {
 	}
 	defer func() { installReleaseFunc = origInstall }()
 
-	r := &RootCLI{}
+r := &RootCLI{}
 	r.Update = true
-	r.Repository = "owner/mytool"
+	r.ProgressBar = "none"
+
 	err = DoUpdate(r, nil)
 	require.NoError(t, err)
 
@@ -1065,6 +1072,7 @@ func TestDoUpdate_IncrementalCheckpointing(t *testing.T) {
 
 	r := &RootCLI{}
 	r.Update = true
+	r.ProgressBar = "none"
 
 	err = DoUpdate(r, nil)
 	assert.Error(t, err, "DoUpdate should report error when a worker fails")

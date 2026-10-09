@@ -157,6 +157,238 @@ func FetchLatestReleaseTags(client GQLClient, repos []string) (map[string]string
 	return mergedTags, nil
 }
 
+// processSingleUpdate handles the update of a single application.
+// It encapsulates the logic that was previously inside the errgroup.Go closure.
+func processSingleUpdate(
+	r *RootCLI,
+	st *state.State,
+	appParams *params.ExecContext,
+	ghClient *api.RESTClient,
+	app *state.InstalledApp,
+	latestTag string,
+	mu *sync.Mutex,
+	successfulUpdates map[string]string,
+	oldInstalledSidecars []string,
+	oldInstalledBinaries []string,
+	oldTargetPath string,
+) error {
+	// Create a copy of appParams for this specific app
+	appParamsCopy := *appParams
+	appParamsCopy.Repository = app.Repository
+	appParamsCopy.TargetPath = app.TargetPath
+	appParamsCopy.Global = app.Global
+	appParamsCopy.ReleaseAsset = app.ReleaseAsset
+	appParamsCopy.ReleaseAssetRegexp = app.ReleaseRegexp
+	if appParamsCopy.ReleaseAssetRegexp == "" {
+		appParamsCopy.ReleaseAssetRegexps = buildRegexFromTypes(appParamsCopy.Type, appParamsCopy.Wine)
+		appParamsCopy.ReleaseAssetRegexp = strings.Join(appParamsCopy.ReleaseAssetRegexps, " | ")
+	} else {
+		appParamsCopy.ReleaseAssetRegexps = strings.Split(app.ReleaseRegexp, " | ")
+	}
+	appParamsCopy.Rename = app.Rename
+	if len(app.Type) > 0 {
+		appParamsCopy.Type = app.Type
+	}
+	appParamsCopy.All = app.All
+	appParamsCopy.AssetBinaries = app.AssetBinaries
+	appParamsCopy.AssetBinariesRegexp = app.AssetBinariesRegexp
+	appParamsCopy.Extractor = app.Extractor
+	appParamsCopy.Sidecars = app.Sidecars
+	appParamsCopy.SidecarSymlinkTo = app.SidecarSymlinkTo
+	appParamsCopy.IncludeSidecars = app.IncludeSidecars
+	appParamsCopy.SidecarMode = app.SidecarMode
+	if app.SymlinkDir != "" {
+		appParamsCopy.Symlink = true
+	}
+	appParamsCopy.EnvInject = app.EnvInject
+	appParamsCopy.FallbackReleases = app.FallbackReleases
+	appParamsCopy.ReleaseVersion = "latest"
+	if app.IsPrerelease {
+		appParamsCopy.Prerelease = true
+	}
+	if r.Stable {
+		appParamsCopy.Prerelease = false
+		appParamsCopy.Stable = true
+	}
+	appParamsCopy.IsUpgradeCmd = true
+	appParamsCopy.NoSaveState = true // thread safety: don't save per worker
+	specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
+	appParamsCopy.SpecificallyTargeted = specificallyTargeted
+	appParamsCopy.InsecureAllowUnsigned = app.AllowsUnsigned(r.InsecureAllowUnsigned, specificallyTargeted, r.Overwrite)
+
+	err := installReleaseFunc(&appParamsCopy, ghClient)
+	if err != nil {
+		log.Error(fmt.Sprintf("Failed to update %s", app.Repository), "error", err)
+		return fmt.Errorf("failed to update %s: %w", app.Repository, err)
+	}
+
+	// Reconcile obsolete assets after successful update installation
+	updatedSidecars := app.InstalledSidecars
+	updatedBinaries := app.InstalledBinaries
+	targetPath := oldTargetPath
+	if targetPath == "" {
+		targetPath = app.TargetPath
+	}
+
+	if freshState, err := state.LoadState(); err == nil && freshState.Apps != nil {
+		if updatedApp, ok := freshState.Apps[app.Repository]; ok && updatedApp != nil {
+			if updatedApp.TargetPath != "" {
+				targetPath = updatedApp.TargetPath
+			}
+			if !stringSlicesEqual(updatedApp.InstalledSidecars, oldInstalledSidecars) ||
+				!stringSlicesEqual(updatedApp.InstalledBinaries, oldInstalledBinaries) ||
+				updatedApp.Version == latestTag {
+				updatedSidecars = updatedApp.InstalledSidecars
+				updatedBinaries = updatedApp.InstalledBinaries
+			}
+		}
+	}
+
+	newSidecarSet := make(map[string]bool, len(updatedSidecars)*2)
+	for _, sc := range updatedSidecars {
+		newSidecarSet[sc] = true
+		newSidecarSet[filepath.Clean(sc)] = true
+	}
+
+	var removedLdso, removedUdev bool
+	for _, oldSidecar := range oldInstalledSidecars {
+		if strings.TrimSpace(oldSidecar) == "" {
+			continue
+		}
+		if !newSidecarSet[oldSidecar] && !newSidecarSet[filepath.Clean(oldSidecar)] {
+			if _, err := os.Lstat(oldSidecar); err == nil {
+				if strings.Contains(oldSidecar, "ld.so.conf.d") {
+					removedLdso = true
+				}
+				if strings.Contains(oldSidecar, "udev/rules.d") {
+					removedUdev = true
+				}
+				if err := os.Remove(oldSidecar); err != nil && !os.IsNotExist(err) {
+					if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(oldSidecar), "/etc") {
+						var cmd *exec.Cmd
+						if os.Geteuid() == 0 {
+							cmd = execCommand("rm", "-f", oldSidecar)
+						} else {
+							cmd = execCommand("sudo", "rm", "-f", oldSidecar)
+						}
+						if sudoErr := cmd.Run(); sudoErr != nil {
+							log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s with sudo", oldSidecar), "error", sudoErr)
+						} else {
+							log.Info(fmt.Sprintf("Removed obsolete sidecar %s with sudo", oldSidecar))
+							stopDirs := getPruneStopDirs()
+							if targetPath != "" {
+								stopDirs = append(stopDirs, targetPath)
+							}
+							pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
+						}
+					} else {
+						log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
+					}
+				} else if err == nil {
+					log.Info(fmt.Sprintf("Removed obsolete sidecar %s", oldSidecar))
+					stopDirs := getPruneStopDirs()
+					if targetPath != "" {
+						stopDirs = append(stopDirs, targetPath)
+					}
+					pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
+				}
+			}
+		}
+	}
+
+	if removedLdso {
+		var cmd *exec.Cmd
+		if os.Geteuid() == 0 {
+			cmd = execCommand("ldconfig")
+		} else {
+			cmd = execCommand("sudo", "ldconfig")
+		}
+		_ = cmd.Run()
+	}
+	if removedUdev {
+		var cmd *exec.Cmd
+		if os.Geteuid() == 0 {
+			cmd = execCommand("udevadm", "control", "--reload-rules")
+		} else {
+			cmd = execCommand("sudo", "udevadm", "control", "--reload-rules")
+		}
+		_ = cmd.Run()
+		var cmdTrigger *exec.Cmd
+		if os.Geteuid() == 0 {
+			cmdTrigger = execCommand("udevadm", "trigger")
+		} else {
+			cmdTrigger = execCommand("sudo", "udevadm", "trigger")
+		}
+		_ = cmdTrigger.Run()
+	}
+
+	newBinarySet := make(map[string]bool, len(updatedBinaries)*2)
+	for _, b := range updatedBinaries {
+		newBinarySet[b] = true
+		newBinarySet[filepath.Base(b)] = true
+	}
+
+	if targetPath != "" {
+		for _, oldBin := range oldInstalledBinaries {
+			if strings.TrimSpace(oldBin) == "" {
+				continue
+			}
+			if !newBinarySet[oldBin] && !newBinarySet[filepath.Base(oldBin)] {
+				binName := oldBin
+				if filepath.Base(binName) != binName || filepath.IsAbs(binName) {
+					binName = filepath.Base(oldBin)
+				}
+				binPath, err := safeDeletePath(targetPath, binName)
+				if err != nil {
+					log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", oldBin), "error", err)
+					continue
+				}
+				if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+					log.Warn(fmt.Sprintf("Failed to remove obsolete binary %s", binPath), "error", err)
+				} else if err == nil {
+					log.Info(fmt.Sprintf("Removed obsolete binary %s", binPath))
+				}
+			}
+		}
+	}
+
+	log.Info(fmt.Sprintf("Successfully updated %s", app.Repository))
+	state.LogHistory("update", app.Repository, latestTag)
+
+	// Incremental checkpointing: atomically persist state per completed app update
+	if !r.NoSaveState && !r.DryRun {
+		if err := state.Mutate(func(currentSt *state.State) error {
+			if currentSt.Apps == nil {
+				currentSt.Apps = make(map[string]*state.InstalledApp)
+			}
+			if currentApp, ok := currentSt.Apps[app.Repository]; ok && currentApp != nil {
+				currentApp.Version = latestTag
+				currentApp.InstalledSidecars = updatedSidecars
+				currentApp.InstalledBinaries = updatedBinaries
+			} else {
+				app.Version = latestTag
+				app.InstalledSidecars = updatedSidecars
+				app.InstalledBinaries = updatedBinaries
+				currentSt.Apps[app.Repository] = app
+			}
+			return nil
+		}); err != nil {
+			log.Warn(fmt.Sprintf("Failed to checkpoint state for %s", app.Repository), "error", err)
+		}
+	}
+
+	mu.Lock()
+	successfulUpdates[app.Repository] = latestTag
+	if appEntry, ok := st.Apps[app.Repository]; ok {
+		appEntry.Version = latestTag
+		appEntry.InstalledSidecars = updatedSidecars
+		appEntry.InstalledBinaries = updatedBinaries
+	}
+	mu.Unlock()
+
+	return nil
+}
+
 func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	if r.Barbarous {
 		r.InsecureAllowUnsigned = true
@@ -410,257 +642,90 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 		return nil
 	}
 
-	// Spin up a worker pool using errgroup to concurrently download and install updates
-	var g errgroup.Group
-	limit := UpdateConcurrencyLimit
-	if limit <= 0 {
-		limit = 4
+	// Determine if we should run sequentially (for TUI progress bars) or in parallel
+	// TUI progress bars (pacman, conveyor, spinner) cannot run concurrently as they
+	// fight over terminal control (cursor, alternate screen buffer)
+	r.ensureCliParams()
+	progressBar := "standard"
+	if r.CliParams != nil && r.CliParams.ProgressBar != "" {
+		progressBar = r.CliParams.ProgressBar
 	}
-	g.SetLimit(limit)
+	isTUIProgress := progressBar == "pacman" || progressBar == "conveyor" || strings.HasPrefix(progressBar, "spinner")
+	runSequentially := isTUIProgress && len(outdatedApps) > 1
+
+	if runSequentially {
+		log.Info("Multiple upgrades detected with TUI progress bar; running sequentially to avoid terminal conflicts",
+			"progress_bar", progressBar, "count", len(outdatedApps))
+	}
 
 	var mu sync.Mutex
 	successfulUpdates := make(map[string]string)
 
-	for _, item := range outdatedApps {
-		app := item.app
-		latestTag := item.latestTag
+	if runSequentially {
+		// Sequential execution for TUI progress bars
+		for _, item := range outdatedApps {
+			app := item.app
+			latestTag := item.latestTag
 
-		indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
-		repoDisplay := app.Repository
-		if indicator != "" {
-			repoDisplay = indicator + " " + app.Repository
-		}
-		log.Info(fmt.Sprintf("Updating %s from %s to %s", repoDisplay, app.Version, latestTag))
+			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
+			repoDisplay := app.Repository
+			if indicator != "" {
+				repoDisplay = indicator + " " + app.Repository
+			}
+			log.Info(fmt.Sprintf("Updating %s from %s to %s", repoDisplay, app.Version, latestTag))
 
-		g.Go(func() error {
 			oldInstalledSidecars := append([]string(nil), app.InstalledSidecars...)
 			oldInstalledBinaries := append([]string(nil), app.InstalledBinaries...)
 			oldTargetPath := app.TargetPath
 
-			appParams := r.ExecContext
-			appParams.Repository = app.Repository
-			appParams.TargetPath = app.TargetPath
-			appParams.Global = app.Global
-			appParams.ReleaseAsset = app.ReleaseAsset
-			appParams.ReleaseAssetRegexp = app.ReleaseRegexp
-			if appParams.ReleaseAssetRegexp == "" {
-				appParams.ReleaseAssetRegexps = buildRegexFromTypes(appParams.Type, appParams.Wine)
-				appParams.ReleaseAssetRegexp = strings.Join(appParams.ReleaseAssetRegexps, " | ")
-			} else {
-				appParams.ReleaseAssetRegexps = strings.Split(app.ReleaseRegexp, " | ")
-			}
-			appParams.Rename = app.Rename
-			if len(app.Type) > 0 {
-				appParams.Type = app.Type
-			}
-			appParams.All = app.All
-			appParams.AssetBinaries = app.AssetBinaries
-			appParams.AssetBinariesRegexp = app.AssetBinariesRegexp
-			appParams.Extractor = app.Extractor
-			appParams.Sidecars = app.Sidecars
-			appParams.SidecarSymlinkTo = app.SidecarSymlinkTo
-			appParams.IncludeSidecars = app.IncludeSidecars
-			appParams.SidecarMode = app.SidecarMode
-			if app.SymlinkDir != "" {
-				appParams.Symlink = true
-			}
-			appParams.EnvInject = app.EnvInject
-			appParams.FallbackReleases = app.FallbackReleases
-			appParams.ReleaseVersion = "latest"
-			if app.IsPrerelease {
-				appParams.Prerelease = true
-			}
-			if r.Stable {
-				appParams.Prerelease = false
-				appParams.Stable = true
-			}
-			appParams.IsUpgradeCmd = true
-			appParams.NoSaveState = true // thread safety: don't save per worker
-			specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
-			appParams.SpecificallyTargeted = specificallyTargeted
-			appParams.InsecureAllowUnsigned = app.AllowsUnsigned(r.InsecureAllowUnsigned, specificallyTargeted, r.Overwrite)
-
-			err := installReleaseFunc(&appParams, ghClient)
+			err := processSingleUpdate(r, st, &r.ExecContext, ghClient, app, latestTag, &mu, successfulUpdates,
+				oldInstalledSidecars, oldInstalledBinaries, oldTargetPath)
 			if err != nil {
 				log.Error(fmt.Sprintf("Failed to update %s", app.Repository), "error", err)
 				return fmt.Errorf("failed to update %s: %w", app.Repository, err)
 			}
+		}
+	} else {
+		// Parallel execution for non-TUI progress bars
+		var g errgroup.Group
+		limit := UpdateConcurrencyLimit
+		if limit <= 0 {
+			limit = 4
+		}
+		g.SetLimit(limit)
 
-			// Reconcile obsolete assets after successful update installation
-			updatedSidecars := app.InstalledSidecars
-			updatedBinaries := app.InstalledBinaries
-			targetPath := oldTargetPath
-			if targetPath == "" {
-				targetPath = app.TargetPath
-			}
+		for _, item := range outdatedApps {
+			item := item // capture loop variable
+			g.Go(func() error {
+				app := item.app
+				latestTag := item.latestTag
 
-			if freshState, err := state.LoadState(); err == nil && freshState.Apps != nil {
-				if updatedApp, ok := freshState.Apps[app.Repository]; ok && updatedApp != nil {
-					if updatedApp.TargetPath != "" {
-						targetPath = updatedApp.TargetPath
-					}
-					if !stringSlicesEqual(updatedApp.InstalledSidecars, oldInstalledSidecars) ||
-						!stringSlicesEqual(updatedApp.InstalledBinaries, oldInstalledBinaries) ||
-						updatedApp.Version == latestTag {
-						updatedSidecars = updatedApp.InstalledSidecars
-						updatedBinaries = updatedApp.InstalledBinaries
-					}
+				indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
+				repoDisplay := app.Repository
+				if indicator != "" {
+					repoDisplay = indicator + " " + app.Repository
 				}
-			}
+				log.Info(fmt.Sprintf("Updating %s from %s to %s", repoDisplay, app.Version, latestTag))
 
-			newSidecarSet := make(map[string]bool, len(updatedSidecars)*2)
-			for _, sc := range updatedSidecars {
-				newSidecarSet[sc] = true
-				newSidecarSet[filepath.Clean(sc)] = true
-			}
+				oldInstalledSidecars := append([]string(nil), app.InstalledSidecars...)
+				oldInstalledBinaries := append([]string(nil), app.InstalledBinaries...)
+				oldTargetPath := app.TargetPath
 
-			var removedLdso, removedUdev bool
-			for _, oldSidecar := range oldInstalledSidecars {
-				if strings.TrimSpace(oldSidecar) == "" {
-					continue
-				}
-				if !newSidecarSet[oldSidecar] && !newSidecarSet[filepath.Clean(oldSidecar)] {
-					if _, err := os.Lstat(oldSidecar); err == nil {
-						if strings.Contains(oldSidecar, "ld.so.conf.d") {
-							removedLdso = true
-						}
-						if strings.Contains(oldSidecar, "udev/rules.d") {
-							removedUdev = true
-						}
-						if err := os.Remove(oldSidecar); err != nil && !os.IsNotExist(err) {
-							if os.IsPermission(err) && strings.HasPrefix(filepath.Clean(oldSidecar), "/etc") {
-								var cmd *exec.Cmd
-								if os.Geteuid() == 0 {
-									cmd = execCommand("rm", "-f", oldSidecar)
-								} else {
-									cmd = execCommand("sudo", "rm", "-f", oldSidecar)
-								}
-								if sudoErr := cmd.Run(); sudoErr != nil {
-									log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s with sudo", oldSidecar), "error", sudoErr)
-								} else {
-									log.Info(fmt.Sprintf("Removed obsolete sidecar %s with sudo", oldSidecar))
-									stopDirs := getPruneStopDirs()
-									if targetPath != "" {
-										stopDirs = append(stopDirs, targetPath)
-									}
-									pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
-								}
-							} else {
-								log.Warn(fmt.Sprintf("Failed to remove obsolete sidecar %s", oldSidecar), "error", err)
-							}
-						} else if err == nil {
-							log.Info(fmt.Sprintf("Removed obsolete sidecar %s", oldSidecar))
-							stopDirs := getPruneStopDirs()
-							if targetPath != "" {
-								stopDirs = append(stopDirs, targetPath)
-							}
-							pruneEmptyParentDirs(filepath.Dir(oldSidecar), stopDirs)
-						}
-					}
-				}
-			}
+				return processSingleUpdate(r, st, &r.ExecContext, ghClient, app, latestTag, &mu, successfulUpdates,
+					oldInstalledSidecars, oldInstalledBinaries, oldTargetPath)
+			})
+		}
 
-			if removedLdso {
-				var cmd *exec.Cmd
-				if os.Geteuid() == 0 {
-					cmd = execCommand("ldconfig")
-				} else {
-					cmd = execCommand("sudo", "ldconfig")
-				}
-				_ = cmd.Run()
-			}
-			if removedUdev {
-				var cmd *exec.Cmd
-				if os.Geteuid() == 0 {
-					cmd = execCommand("udevadm", "control", "--reload-rules")
-				} else {
-					cmd = execCommand("sudo", "udevadm", "control", "--reload-rules")
-				}
-				_ = cmd.Run()
-				var cmdTrigger *exec.Cmd
-				if os.Geteuid() == 0 {
-					cmdTrigger = execCommand("udevadm", "trigger")
-				} else {
-					cmdTrigger = execCommand("sudo", "udevadm", "trigger")
-				}
-				_ = cmdTrigger.Run()
-			}
-
-			newBinarySet := make(map[string]bool, len(updatedBinaries)*2)
-			for _, b := range updatedBinaries {
-				newBinarySet[b] = true
-				newBinarySet[filepath.Base(b)] = true
-			}
-
-			if targetPath != "" {
-				for _, oldBin := range oldInstalledBinaries {
-					if strings.TrimSpace(oldBin) == "" {
-						continue
-					}
-					if !newBinarySet[oldBin] && !newBinarySet[filepath.Base(oldBin)] {
-						binName := oldBin
-						if filepath.Base(binName) != binName || filepath.IsAbs(binName) {
-							binName = filepath.Base(oldBin)
-						}
-						binPath, err := safeDeletePath(targetPath, binName)
-						if err != nil {
-							log.Warn(fmt.Sprintf("Skipping unsafe binary name %q", oldBin), "error", err)
-							continue
-						}
-						if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
-							log.Warn(fmt.Sprintf("Failed to remove obsolete binary %s", binPath), "error", err)
-						} else if err == nil {
-							log.Info(fmt.Sprintf("Removed obsolete binary %s", binPath))
-						}
-					}
-				}
-			}
-
-			log.Info(fmt.Sprintf("Successfully updated %s", app.Repository))
-			state.LogHistory("update", app.Repository, latestTag)
-
-			// Incremental checkpointing: atomically persist state per completed app update
-			if !r.NoSaveState && !r.DryRun {
-				if err := state.Mutate(func(currentSt *state.State) error {
-					if currentSt.Apps == nil {
-						currentSt.Apps = make(map[string]*state.InstalledApp)
-					}
-					if currentApp, ok := currentSt.Apps[app.Repository]; ok && currentApp != nil {
-						currentApp.Version = latestTag
-						currentApp.InstalledSidecars = updatedSidecars
-						currentApp.InstalledBinaries = updatedBinaries
-					} else {
-						app.Version = latestTag
-						app.InstalledSidecars = updatedSidecars
-						app.InstalledBinaries = updatedBinaries
-						currentSt.Apps[app.Repository] = app
-					}
-					return nil
-				}); err != nil {
-					log.Warn(fmt.Sprintf("Failed to checkpoint state for %s", app.Repository), "error", err)
-				}
-			}
-
-			mu.Lock()
-			successfulUpdates[app.Repository] = latestTag
-			if appEntry, ok := st.Apps[app.Repository]; ok {
-				appEntry.Version = latestTag
-				appEntry.InstalledSidecars = updatedSidecars
-				appEntry.InstalledBinaries = updatedBinaries
-			}
-			mu.Unlock()
-
-			return nil
-		})
+		if err := g.Wait(); err != nil {
+			return err
+		}
 	}
-
-	waitErr := g.Wait()
 
 	if len(successfulUpdates) > 0 && !r.NoSaveState && !r.DryRun {
 		pterm.Success.Printf("Successfully updated %d application(s)\n", len(successfulUpdates))
 	}
 
-	return waitErr
+	return nil
 }
 
 func stringSlicesEqual(a, b []string) bool {
