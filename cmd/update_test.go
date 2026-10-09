@@ -538,6 +538,72 @@ func TestDoUpdate_WorkerErrorHandling(t *testing.T) {
 	assert.Equal(t, "v1.0.0", freshSt.Apps["test/failing-app"].Version)
 }
 
+func TestDoUpdate_SequentialErrorHandlingContinues(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	xdg.Reload()
+
+	st, err := state.LoadState()
+	require.NoError(t, err)
+
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/failing-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+	}))
+	require.NoError(t, st.AddApp(&state.InstalledApp{
+		Repository: "test/succeeding-app",
+		Version:    "v1.0.0",
+		TargetPath: tmpDir,
+	}))
+
+	mockGQL := &mockGQLClient{
+		doFunc: func(query string, variables map[string]interface{}, response interface{}) error {
+			resp, ok := response.(*map[string]GQLRepoResult)
+			require.True(t, ok)
+			*resp = map[string]GQLRepoResult{
+				"repo_0": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}}, // failing-app
+				"repo_1": {LatestRelease: &struct {
+					TagName string `json:"tagName"`
+					Name    string `json:"name"`
+				}{TagName: "v2.0.0"}}, // succeeding-app
+			}
+			return nil
+		},
+	}
+
+	origNewGQL := newGraphQLClient
+	newGraphQLClient = func() (GQLClient, error) {
+		return mockGQL, nil
+	}
+	defer func() { newGraphQLClient = origNewGQL }()
+
+	origInstall := installReleaseFunc
+	installReleaseFunc = func(appParams *params.ExecContext, ghClient *api.RESTClient) error {
+		if appParams.Repository == "test/failing-app" {
+			return errors.New("download failed: 404 not found")
+		}
+		return nil
+	}
+	defer func() { installReleaseFunc = origInstall }()
+
+	r := &RootCLI{}
+	r.Update = true
+	r.ProgressBar = "pacman" // sequential execution
+	err = DoUpdate(r, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "download failed: 404 not found")
+
+	// Succeeding app should still have been processed and state saved
+	freshSt, err := state.LoadState()
+	require.NoError(t, err)
+	assert.Equal(t, "v2.0.0", freshSt.Apps["test/succeeding-app"].Version)
+	assert.Equal(t, "v1.0.0", freshSt.Apps["test/failing-app"].Version)
+}
+
 func TestDoUpdate_PinnedAndDisabledSkipped(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
@@ -637,7 +703,7 @@ func TestDoUpdate_DryRun(t *testing.T) {
 	}
 	defer func() { installReleaseFunc = origInstall }()
 
-r := &RootCLI{}
+	r := &RootCLI{}
 	r.Update = true
 	r.DryRun = true
 	r.ProgressBar = "none"
@@ -714,7 +780,7 @@ func TestDoUpdate_InsecureAllowUnsigned_PerItemEnforcement(t *testing.T) {
 	// Case 1: Bulk upgrade with --insecure-allow-unsigned
 	// Guarantees flag only permits unsigned for packages that genuinely lack signatures,
 	// while strictly enforcing cryptographic checks on packages that previously possessed them.
-r := &RootCLI{}
+	r := &RootCLI{}
 	r.Update = true
 	r.InsecureAllowUnsigned = true
 	r.ProgressBar = "none"
@@ -978,7 +1044,7 @@ func TestUpdate_ReconcilesObsoleteAssets(t *testing.T) {
 	}
 	defer func() { installReleaseFunc = origInstall }()
 
-r := &RootCLI{}
+	r := &RootCLI{}
 	r.Update = true
 	r.ProgressBar = "none"
 

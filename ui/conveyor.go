@@ -66,6 +66,9 @@ func (c *ConveyorUI) View() string {
 // WaitForAnimation waits for the animation to finish (conveyor finishes immediately).
 func (c *ConveyorUI) WaitForAnimation() {}
 
+// Error handles installation error for ConveyorUI.
+func (c *ConveyorUI) Error(args ...any) {}
+
 // NewConveyorUI creates a new ConveyorUI.
 func NewConveyorUI(repo string) *ConveyorUI {
 	return &ConveyorUI{Repo: repo}

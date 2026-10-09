@@ -17,6 +17,7 @@ import (
 	"github.com/joshsukhdeo/gh-pt/params"
 	"github.com/joshsukhdeo/gh-pt/release"
 	"github.com/joshsukhdeo/gh-pt/state"
+	"github.com/joshsukhdeo/gh-pt/status"
 	"github.com/pterm/pterm"
 	"golang.org/x/sync/errgroup"
 )
@@ -212,6 +213,8 @@ func processSingleUpdate(
 	}
 	appParamsCopy.IsUpgradeCmd = true
 	appParamsCopy.NoSaveState = true // thread safety: don't save per worker
+	appParamsCopy.VTApiKey = r.VTApiKey
+	appParamsCopy.SkipVtSandbox = r.SkipVtSandbox
 	specificallyTargeted := (r.Repository != "" && strings.EqualFold(r.Repository, app.Repository))
 	appParamsCopy.SpecificallyTargeted = specificallyTargeted
 	appParamsCopy.InsecureAllowUnsigned = app.AllowsUnsigned(r.InsecureAllowUnsigned, specificallyTargeted, r.Overwrite)
@@ -609,18 +612,24 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 			continue
 		}
 
-		// Compare versions - skip if same version is already installed
+		// Compare versions - skip if same or newer version is already installed
 		// Normalize by stripping leading 'v' to handle version strings like "v1.2.3" vs "1.2.3"
 		normalizedLatest := strings.TrimPrefix(latestTag, "v")
 		normalizedStored := strings.TrimPrefix(app.Version, "v")
 
-		if latestTag == app.Version || (normalizedLatest != "" && normalizedLatest == normalizedStored) {
+		comp := status.CompareVersions(app.Version, latestTag)
+		anyDowngradeFlag := r.AllowDowngrade || r.SelfInflictedDebt || r.LeRetrogrouch || r.RetrogradeStopgap || r.Barbarous
+		if latestTag == app.Version || (normalizedLatest != "" && normalizedLatest == normalizedStored) || comp == 0 || (comp < 0 && !anyDowngradeFlag) {
 			indicator := GetStateIndicator(true, app.Pinned, app.IsPrerelease, false, false, r.DisableIcons || r.NoEmojis)
 			repoDisplay := app.Repository
 			if indicator != "" {
 				repoDisplay = indicator + " " + app.Repository
 			}
-			log.Info(fmt.Sprintf("Skipping %s (already at latest version %s)", repoDisplay, app.Version))
+			if comp < 0 && !anyDowngradeFlag {
+				log.Info(fmt.Sprintf("Skipping %s (installed version %s is newer than release %s)", repoDisplay, app.Version, latestTag))
+			} else {
+				log.Info(fmt.Sprintf("Skipping %s (already at latest version %s)", repoDisplay, app.Version))
+			}
 			continue
 		}
 
@@ -661,6 +670,10 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 	var mu sync.Mutex
 	successfulUpdates := make(map[string]string)
 
+	isMultiApp := r.Repository == "" || len(outdatedApps) > 1
+	var failedUpdates = make(map[string]error)
+	var failedOrder []string
+
 	if runSequentially {
 		// Sequential execution for TUI progress bars
 		for _, item := range outdatedApps {
@@ -682,7 +695,14 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 				oldInstalledSidecars, oldInstalledBinaries, oldTargetPath)
 			if err != nil {
 				log.Error(fmt.Sprintf("Failed to update %s", app.Repository), "error", err)
-				return fmt.Errorf("failed to update %s: %w", app.Repository, err)
+				if !isMultiApp {
+					return fmt.Errorf("failed to update %s: %w", app.Repository, err)
+				}
+				mu.Lock()
+				failedUpdates[app.Repository] = err
+				failedOrder = append(failedOrder, app.Repository)
+				mu.Unlock()
+				continue
 			}
 		}
 	} else {
@@ -711,8 +731,20 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 				oldInstalledBinaries := append([]string(nil), app.InstalledBinaries...)
 				oldTargetPath := app.TargetPath
 
-				return processSingleUpdate(r, st, &r.ExecContext, ghClient, app, latestTag, &mu, successfulUpdates,
+				err := processSingleUpdate(r, st, &r.ExecContext, ghClient, app, latestTag, &mu, successfulUpdates,
 					oldInstalledSidecars, oldInstalledBinaries, oldTargetPath)
+				if err != nil {
+					log.Error(fmt.Sprintf("Failed to update %s", app.Repository), "error", err)
+					if !isMultiApp {
+						return fmt.Errorf("failed to update %s: %w", app.Repository, err)
+					}
+					mu.Lock()
+					failedUpdates[app.Repository] = err
+					failedOrder = append(failedOrder, app.Repository)
+					mu.Unlock()
+					return nil
+				}
+				return nil
 			})
 		}
 
@@ -723,6 +755,18 @@ func DoUpdate(r *RootCLI, ghClient *api.RESTClient) error {
 
 	if len(successfulUpdates) > 0 && !r.NoSaveState && !r.DryRun {
 		pterm.Success.Printf("Successfully updated %d application(s)\n", len(successfulUpdates))
+	}
+
+	if len(failedUpdates) > 0 {
+		if len(failedUpdates) == 1 {
+			repo := failedOrder[0]
+			return fmt.Errorf("failed to update %s: %w", repo, failedUpdates[repo])
+		}
+		var errList []error
+		for _, repo := range failedOrder {
+			errList = append(errList, fmt.Errorf("failed to update %s: %w", repo, failedUpdates[repo]))
+		}
+		return errors.Join(errList...)
 	}
 
 	return nil

@@ -215,8 +215,13 @@ func ValidateConfig(cfg *Config) error {
 	}
 
 	validExtractors := map[string]bool{"default": true, "ouch": true, "native": true, "internal": true}
-	if cfg.Core.Extractor != "" && !validExtractors[cfg.Core.Extractor] {
-		return fmt.Errorf("config extractor %q invalid (must be: default, ouch, native, internal)", cfg.Core.Extractor)
+	if cfg.Core.Extractor != "" {
+		for _, part := range strings.Split(cfg.Core.Extractor, ",") {
+			p := strings.TrimSpace(part)
+			if !validExtractors[p] {
+				return fmt.Errorf("config extractor %q invalid (must be comma-separated list or one of: default, ouch, native, internal)", cfg.Core.Extractor)
+			}
+		}
 	}
 
 	validProgressBars := map[string]bool{"pacman": true, "standard": true, "none": true, "conveyor": true}

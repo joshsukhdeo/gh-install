@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -333,5 +334,67 @@ func TestPacmanLogWriter(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "log message") {
 		t.Errorf("expected buffer to contain log message, got %q", buf.String())
+	}
+}
+
+func TestPacmanLogWriter_NoDeadlockWhenTTY(t *testing.T) {
+	var buf bytes.Buffer
+	writer := PacmanLogWriter{Writer: &buf}
+
+	GlobalPacman = NewPacmanUI("test/repo")
+	GlobalPacman.SetTTY(true)
+	defer func() {
+		GlobalPacman = nil
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = writer.Write([]byte("tty log message\n"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success: no deadlock!
+	case <-time.After(2 * time.Second):
+		t.Fatal("PacmanLogWriter deadlocked while writing on TTY!")
+	}
+}
+
+func TestPacmanModel_ErrorQuits(t *testing.T) {
+	m := NewPacmanModel("test/repo")
+	model, cmd := m.Update(PacmanErrorMsg{Error: "something broke"})
+	updated := model.(*PacmanModel)
+	if !updated.HasError {
+		t.Errorf("expected HasError = true")
+	}
+	if updated.ErrorMsg != "something broke" {
+		t.Errorf("expected ErrorMsg = 'something broke', got %q", updated.ErrorMsg)
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd from PacmanErrorMsg")
+	}
+	// Verify cmd returns tea.QuitMsg
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Errorf("expected tea.QuitMsg, got %T", msg)
+	}
+}
+
+func TestPacmanUI_ErrorStopsCleanly(t *testing.T) {
+	p := NewPacmanUI("test/repo")
+	p.SetTTY(false)
+	GlobalPacman = p
+
+	p.Error("critical failure")
+
+	if GlobalPacman != nil {
+		t.Errorf("expected GlobalPacman to be nil after Stop/Error, got %v", GlobalPacman)
+	}
+	if !p.stopped {
+		t.Errorf("expected p.stopped = true")
+	}
+	if !p.Model().HasError {
+		t.Errorf("expected model HasError = true")
 	}
 }

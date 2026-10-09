@@ -299,6 +299,17 @@ func BinarySelector(criteria BinaryMatchCriteria) (ISelector, error) {
 				precedence = []string{"native", "internal"}
 			case "ouch":
 				precedence = []string{"ouch", "native", "internal"}
+			default:
+				var custom []string
+				for _, part := range strings.Split(criteria.Extractor, ",") {
+					p := strings.TrimSpace(part)
+					if p == "ouch" || p == "native" || p == "internal" {
+						custom = append(custom, p)
+					}
+				}
+				if len(custom) > 0 {
+					precedence = custom
+				}
 			}
 		}
 

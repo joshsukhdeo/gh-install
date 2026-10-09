@@ -352,72 +352,72 @@ func ParseAIOutput(raw string) (*CompilePayload, error) {
 }
 
 // ValidateBodyScript validates the body.sh script using AST-based parsing.
-	// It checks that the script only contains allowed commands and patterns.
-	func ValidateBodyScript(bodyPath string) error {
-		f, err := os.Open(bodyPath)
-		if err != nil {
-			return fmt.Errorf("failed to open body.sh: %w", err)
-		}
-		defer f.Close()
+// It checks that the script only contains allowed commands and patterns.
+func ValidateBodyScript(bodyPath string) error {
+	f, err := os.Open(bodyPath)
+	if err != nil {
+		return fmt.Errorf("failed to open body.sh: %w", err)
+	}
+	defer func() { _ = f.Close() }()
 
-		parser := syntax.NewParser()
-		file, err := parser.Parse(f, "")
-		if err != nil {
-			return fmt.Errorf("failed to parse body.sh: %w", err)
-		}
+	parser := syntax.NewParser()
+	file, err := parser.Parse(f, "")
+	if err != nil {
+		return fmt.Errorf("failed to parse body.sh: %w", err)
+	}
 
-		// Use file to avoid unused variable error
-		_ = file
+	// Use file to avoid unused variable error
+	_ = file
 
-		// Allowed commands that can appear in body.sh
+	// Allowed commands that can appear in body.sh
 	allowedCommands := map[string]bool{
-		"cmake":        true,
-		"make":         true,
-		"gcc":          true,
-		"g++":          true,
-		"clang":        true,
-		"clang++":      true,
-		"go":           true,
-		"cargo":        true,
-		"rustc":        true,
-		"ghpt":         true,
-		"bash":         true,
-		"sh":           true,
-		"python3":      true,
-		"python":       true,
-		"pip":          true,
-		"npm":          true,
-		"yarn":         true,
-		"pnpm":         true,
-		"meson":        true,
-		"ninja":        true,
-		"bazel":        true,
-		"cc":           true,
-		"c++":          true,
-		"ar":           true,
-		"ranlib":       true,
-		"strip":        true,
-		"ld":           true,
-		"objcopy":      true,
-		"objdump":      true,
-		"nm":           true,
-		"readelf":      true,
-		"pkg-config":   true,
-		"autoreconf":   true,
-		"autoconf":     true,
-		"automake":     true,
-		"libtool":      true,
-		"patch":        true,
-		"sed":          true,
-		"awk":          true,
-		"grep":         true,
-		"find":         true,
-		"mkdir":        true,
-		"cp":           true,
-		"rsync":        true,
-		"tar":          true,
-		"unzip":        true,
-		"git":          true,
+		"cmake":      true,
+		"make":       true,
+		"gcc":        true,
+		"g++":        true,
+		"clang":      true,
+		"clang++":    true,
+		"go":         true,
+		"cargo":      true,
+		"rustc":      true,
+		"ghpt":       true,
+		"bash":       true,
+		"sh":         true,
+		"python3":    true,
+		"python":     true,
+		"pip":        true,
+		"npm":        true,
+		"yarn":       true,
+		"pnpm":       true,
+		"meson":      true,
+		"ninja":      true,
+		"bazel":      true,
+		"cc":         true,
+		"c++":        true,
+		"ar":         true,
+		"ranlib":     true,
+		"strip":      true,
+		"ld":         true,
+		"objcopy":    true,
+		"objdump":    true,
+		"nm":         true,
+		"readelf":    true,
+		"pkg-config": true,
+		"autoreconf": true,
+		"autoconf":   true,
+		"automake":   true,
+		"libtool":    true,
+		"patch":      true,
+		"sed":        true,
+		"awk":        true,
+		"grep":       true,
+		"find":       true,
+		"mkdir":      true,
+		"cp":         true,
+		"rsync":      true,
+		"tar":        true,
+		"unzip":      true,
+		"git":        true,
 	}
 
 	// Forbidden patterns that should not appear in body.sh
@@ -453,7 +453,7 @@ func ValidateScript(scriptPath string, allowedCommands map[string]bool, forbidde
 	if err != nil {
 		return fmt.Errorf("failed to open script: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	parser := syntax.NewParser()
 	file, err := parser.Parse(f, "")
@@ -495,7 +495,7 @@ func ValidateScript(scriptPath string, allowedCommands map[string]bool, forbidde
 						}
 					}
 				}
-				
+
 				// Check all arguments for forbidden patterns
 				for _, arg := range callExpr.Args {
 					argLit := arg.Lit()
@@ -509,7 +509,7 @@ func ValidateScript(scriptPath string, allowedCommands map[string]bool, forbidde
 				}
 			}
 		}
-		
+
 		// Check ParamExp (parameter expansions like $VAR or ${VAR})
 		if paramExp, ok := n.(*syntax.ParamExp); ok {
 			if paramExp.Param != nil {
@@ -523,7 +523,7 @@ func ValidateScript(scriptPath string, allowedCommands map[string]bool, forbidde
 				}
 			}
 		}
-		
+
 		return true
 	})
 

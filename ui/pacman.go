@@ -272,6 +272,7 @@ func (m *PacmanModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PacmanErrorMsg:
 		m.HasError = true
 		m.ErrorMsg = msg.Error
+		return m, tea.Quit
 	}
 
 	return m, nil
@@ -606,7 +607,12 @@ func (p *PacmanUI) Stop() {
 	}
 	p.stopped = true
 	p.paused = false
-	p.completeAllAnimations()
+	if GlobalPacman == p {
+		GlobalPacman = nil
+	}
+	if p.model == nil || !p.model.HasError {
+		p.completeAllAnimations()
+	}
 
 	// In non-TTY mode, print the completed assets
 	if !p.isTTY {
@@ -632,6 +638,7 @@ func (p *PacmanUI) Stop() {
 		select {
 		case <-p.animationDone:
 		case <-time.After(1 * time.Second):
+			prog.Kill()
 		}
 		if p.output != nil {
 			_, _ = fmt.Fprintln(p.output)
@@ -647,6 +654,11 @@ func (p *PacmanUI) WaitForAnimation() {
 	p.mu.Lock()
 	if !p.isTTY {
 		p.mu.Unlock()
+		return
+	}
+	if p.model != nil && p.model.HasError {
+		p.mu.Unlock()
+		p.Stop()
 		return
 	}
 	if p.program != nil && p.started && !p.stopped {
@@ -817,19 +829,21 @@ func (p *PacmanUI) Success(msg ...string) {
 // Error signals an installation error.
 func (p *PacmanUI) Error(args ...any) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	errMsg := "Error"
 	if len(args) > 0 {
 		errMsg = fmt.Sprint(args...)
 	}
 
 	errMsgObj := PacmanErrorMsg{Error: errMsg}
+	if p.model != nil {
+		p.model.HasError = true
+		p.model.ErrorMsg = errMsg
+	}
 	if p.program != nil && p.started && !p.stopped {
 		p.program.Send(errMsgObj)
-	} else if p.model != nil {
-		p.model.Update(errMsgObj)
 	}
+	p.mu.Unlock()
+	p.Stop()
 }
 
 // Finish finishes the progress bar (alias for Stop).
@@ -837,15 +851,20 @@ func (p *PacmanUI) Finish() {
 	p.Stop()
 }
 
+// viewLocked returns the rendered string without acquiring p.mu.
+func (p *PacmanUI) viewLocked() string {
+	if p.model != nil {
+		return p.model.View().Content
+	}
+	return ""
+}
+
 // View returns the rendered string of the UI.
 func (p *PacmanUI) View() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.model != nil {
-		return p.model.View().Content
-	}
-	return ""
+	return p.viewLocked()
 }
 
 func (p *PacmanUI) completeAllAnimations() {
@@ -909,23 +928,30 @@ type PacmanLogWriter struct {
 }
 
 func (w PacmanLogWriter) Write(p []byte) (int, error) {
-	if GlobalPacman != nil {
-		GlobalPacman.mu.Lock()
-		defer GlobalPacman.mu.Unlock()
-		if !GlobalPacman.paused && GlobalPacman.isTTY {
-			if len(GlobalPacman.Assets) > 0 {
-				fmt.Printf("\033[%dA\033[J", len(GlobalPacman.Assets)+2)
+	gp := GlobalPacman
+	if gp != nil {
+		gp.mu.Lock()
+		if !gp.stopped && !gp.paused && gp.isTTY {
+			if len(gp.Assets) > 0 {
+				fmt.Printf("\033[%dA\033[J", len(gp.Assets)+2)
 			} else {
 				fmt.Print("\r\033[K")
 			}
 		}
+		gp.mu.Unlock()
 	}
+
 	n, err := w.Writer.Write(p)
-	if GlobalPacman != nil && !GlobalPacman.paused && GlobalPacman.isTTY {
-		view := GlobalPacman.View()
-		if view != "" {
-			fmt.Print(view)
+
+	if gp != nil {
+		gp.mu.Lock()
+		if !gp.stopped && !gp.paused && gp.isTTY {
+			view := gp.viewLocked()
+			if view != "" {
+				fmt.Print(view)
+			}
 		}
+		gp.mu.Unlock()
 	}
 	return n, err
 }

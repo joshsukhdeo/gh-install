@@ -13,6 +13,7 @@ type ProgressBar interface {
 	SetCurrentAsset(index int)
 	SetAssetInstallCmd(installCmd string)
 	View() string
+	Error(args ...any)
 }
 
 // NullProgressBar is a no-op progress bar for when progress is disabled.
@@ -29,3 +30,4 @@ func (p *NullProgressBar) AddAsset(name, fullName, symlink, installCmd string) {
 func (p *NullProgressBar) SetCurrentAsset(index int)                           {}
 func (p *NullProgressBar) SetAssetInstallCmd(installCmd string)                {}
 func (p *NullProgressBar) View() string                                        { return "" }
+func (p *NullProgressBar) Error(args ...any)                                   {}

@@ -385,12 +385,12 @@ func TestTemplates(t *testing.T) {
 	assert.Contains(t, ai.CompileScriptTemplate, "### DEPENDENCIES ARE INSTALLED BY GH-PT VIA CONTAINERIZATION (per manifest.json)")
 	assert.Contains(t, ai.CompileScriptTemplate, "ghpt helper --install")
 	assert.Contains(t, ai.CompileScriptTemplate, "NO shebang")
-	
+
 	// Check that header and footer templates exist
 	assert.NotEmpty(t, ai.HeaderTemplate)
 	assert.Contains(t, ai.HeaderTemplate, "#!/usr/bin/env bash")
 	assert.Contains(t, ai.HeaderTemplate, "{{.InstallPrefix}}")
-	
+
 	assert.NotEmpty(t, ai.FooterTemplate)
 	assert.Contains(t, ai.FooterTemplate, "exit 0")
 }

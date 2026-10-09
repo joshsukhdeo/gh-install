@@ -583,6 +583,18 @@ func TestBinarySelectorOuchExtractor(t *testing.T) {
 			assert.Equal(t, Binary, sel.GetKind())
 		}
 	})
+
+	t.Run("CustomCommaSeparatedExtractor", func(t *testing.T) {
+		sel, err := BinarySelector(BinaryMatchCriteria{
+			DownloadPath: tmpFileZip.Name(),
+			Names:        []string{"dummy"},
+			Interactive:  false,
+			Extractor:    "ouch,native,internal",
+		})
+		if err == nil && sel != nil {
+			assert.Equal(t, Binary, sel.GetKind())
+		}
+	})
 }
 
 func TestReleaseSelectorStableLatest(t *testing.T) {

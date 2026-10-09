@@ -111,3 +111,26 @@ func TestHelperProcessConfigCmd(t *testing.T) {
 	}
 	os.Exit(0)
 }
+
+func TestConfigLs(t *testing.T) {
+	tempDir := t.TempDir()
+	xdg.ConfigHome = filepath.Join(tempDir, "config")
+	xdg.DataHome = filepath.Join(tempDir, "data")
+	require.NoError(t, os.MkdirAll(xdg.ConfigHome, 0755))
+	require.NoError(t, os.MkdirAll(xdg.DataHome, 0755))
+
+	cfg := &config.Config{
+		Paths: config.PathsConfig{
+			InstallPath: "/home/user/.local/bin",
+			ForkPath:    "/home/user/builds",
+		},
+		Core: config.CoreConfig{
+			Extractor: "ouch,native,internal",
+			VTApiKey:  "secret-key-123456789",
+		},
+	}
+	require.NoError(t, config.SaveConfig(cfg))
+
+	err := ConfigLs()
+	assert.NoError(t, err)
+}

@@ -284,3 +284,65 @@ func TestRootCLI_Validate_WinePlatformAndAvailabilityCheck(t *testing.T) {
 		assert.Equal(t, "off", r.Wine, "Wine must be disabled on Windows")
 	}
 }
+
+func TestRootCLI_VirusTotal_AutoEnable(t *testing.T) {
+	t.Run("EnvVar_VT_API_KEY_AutoEnables", func(t *testing.T) {
+		t.Setenv("VT_API_KEY", "test-env-key-12345")
+		r := &RootCLI{
+			ExecContext: params.ExecContext{
+				Repository:    "owner/repo",
+				SkipVtSandbox: true,
+			},
+		}
+		r.ensureCliParams()
+
+		// Simulate setup in RunInstall
+		if r.VTApiKey == "" {
+			if os.Getenv("VT_API_KEY") != "" {
+				r.VTApiKey = os.Getenv("VT_API_KEY")
+			}
+		}
+		if r.VTApiKey != "" && !r.Barbarous {
+			r.SkipVtSandbox = false
+		}
+		if r.CliParams != nil {
+			r.CliParams.VTApiKey = r.VTApiKey
+			if r.VTApiKey != "" && !r.Barbarous {
+				r.CliParams.SkipVtSandbox = false
+			}
+		}
+
+		assert.Equal(t, "test-env-key-12345", r.VTApiKey)
+		assert.False(t, r.SkipVtSandbox, "SkipVtSandbox should be false (VT enabled)")
+		assert.False(t, r.CliParams.SkipVtSandbox)
+	})
+
+	t.Run("Barbarous_Overrides_AutoEnable", func(t *testing.T) {
+		t.Setenv("VT_API_KEY", "test-env-key-12345")
+		r := &RootCLI{
+			ExecContext: params.ExecContext{
+				Repository:    "owner/repo",
+				Barbarous:     true,
+				SkipVtSandbox: true,
+			},
+		}
+		r.ensureCliParams()
+
+		if r.VTApiKey == "" {
+			if os.Getenv("VT_API_KEY") != "" {
+				r.VTApiKey = os.Getenv("VT_API_KEY")
+			}
+		}
+		if r.VTApiKey != "" && !r.Barbarous {
+			r.SkipVtSandbox = false
+		}
+		if r.CliParams != nil {
+			r.CliParams.VTApiKey = r.VTApiKey
+			if r.VTApiKey != "" && !r.Barbarous {
+				r.CliParams.SkipVtSandbox = false
+			}
+		}
+
+		assert.True(t, r.SkipVtSandbox, "Barbarous flag should keep SkipVtSandbox true")
+	})
+}

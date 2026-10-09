@@ -13,15 +13,15 @@ import (
 
 // ContainerConfig holds configuration for container execution.
 type ContainerConfig struct {
-	Image          string
-	BuildDir       string
-	RepoDir        string
-	ScriptPath     string
-	InstallDir     string
-	TargetOS       string
-	TargetArch     string
-	CrossCompile   bool
-	EnvVars        map[string]string
+	Image        string
+	BuildDir     string
+	RepoDir      string
+	ScriptPath   string
+	InstallDir   string
+	TargetOS     string
+	TargetArch   string
+	CrossCompile bool
+	EnvVars      map[string]string
 }
 
 // DetectHostOS returns the host operating system and architecture.
@@ -159,6 +159,7 @@ func RunContainer(cfg *Config, containerCfg *ContainerConfig) error {
 
 	return nil
 }
+
 // CrossCompileConfig holds configuration for cross-compilation.
 type CrossCompileConfig struct {
 	TargetOS   string

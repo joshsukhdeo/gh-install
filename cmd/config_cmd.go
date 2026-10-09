@@ -18,8 +18,55 @@ func ConfigLs() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%+v\n", cfg)
-	return nil
+
+	maskKey := func(key string) string {
+		if key == "" {
+			return ""
+		}
+		if len(key) <= 8 {
+			return "********"
+		}
+		return key[:4] + "..." + key[len(key)-4:]
+	}
+
+	tableData := pterm.TableData{
+		{"Category", "Setting", "Value"},
+		// Paths
+		{"Paths", "install_path", cfg.Paths.InstallPath},
+		{"Paths", "global_path", cfg.Paths.GlobalPath},
+		{"Paths", "clone_path", cfg.Paths.ClonePath},
+		{"Paths", "fork_path", cfg.Paths.ForkPath},
+		{"Paths", "sidecar_path", cfg.Paths.SidecarPath},
+		{"Paths", "target_base_dir", cfg.Paths.TargetBaseDir},
+		{"Paths", "repo_dir", cfg.Paths.RepoDir},
+		{"Paths", "package_path", cfg.Paths.PackagePath},
+		// AI
+		{"AI", "ai_cmd", cfg.AI.AICmd},
+		{"AI", "ai_interactive_cmd", cfg.AI.AIInteractiveCmd},
+		// Core
+		{"Core", "install_types", cfg.Core.InstallTypes},
+		{"Core", "extractor", cfg.Core.Extractor},
+		{"Core", "progress_bar", cfg.Core.ProgressBar},
+		{"Core", "wine", cfg.Core.Wine},
+		{"Core", "avx_level", cfg.Core.AvxLevel},
+		{"Core", "allow_prerelease", fmt.Sprintf("%t", cfg.Core.AllowPrerelease)},
+		{"Core", "add_deps", fmt.Sprintf("%t", cfg.Core.AddDeps)},
+		{"Core", "resolve_deps", fmt.Sprintf("%t", cfg.Core.ResolveDeps)},
+		{"Core", "no_deps", fmt.Sprintf("%t", cfg.Core.NoDeps)},
+		{"Core", "disable_prompts", fmt.Sprintf("%t", cfg.Core.DisablePrompts)},
+		{"Core", "no_save_state", fmt.Sprintf("%t", cfg.Core.NoSaveState)},
+		{"Core", "global", fmt.Sprintf("%t", cfg.Core.Global)},
+		{"Core", "symlink", fmt.Sprintf("%t", cfg.Core.Symlink)},
+		{"Core", "keep_suffixes", fmt.Sprintf("%t", cfg.Core.KeepSuffixes)},
+		{"Core", "disable_icons", fmt.Sprintf("%t", cfg.Core.DisableIcons)},
+		{"Core", "no_color", fmt.Sprintf("%t", cfg.Core.NoColor)},
+		{"Core", "no_emojis", fmt.Sprintf("%t", cfg.Core.NoEmojis)},
+		{"Core", "log_to_file", fmt.Sprintf("%t", cfg.Core.LogToFile)},
+		{"Core", "vt_api_key", maskKey(cfg.Core.VTApiKey)},
+	}
+
+	pterm.DefaultHeader.WithFullWidth().Println("gh-pt configuration (" + config.GetConfigPath() + ")")
+	return pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(tableData).Render()
 }
 
 func ConfigGet(key string) error {

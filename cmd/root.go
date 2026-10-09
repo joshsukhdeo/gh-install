@@ -602,10 +602,26 @@ func (r *RootCLI) RunInstall() error {
 		log.SetOutput(baseWriter)
 	}
 
-	if cfg != nil {
-		if r.VTApiKey == "" {
+	if r.VTApiKey == "" {
+		if os.Getenv("VT_API_KEY") != "" {
+			r.VTApiKey = os.Getenv("VT_API_KEY")
+		} else if os.Getenv("VIRUSTOTAL_API_KEY") != "" {
+			r.VTApiKey = os.Getenv("VIRUSTOTAL_API_KEY")
+		} else if cfg != nil && cfg.Core.VTApiKey != "" {
 			r.VTApiKey = cfg.Core.VTApiKey
 		}
+	}
+	if r.VTApiKey != "" && !r.Barbarous {
+		r.SkipVtSandbox = false
+	}
+	if r.CliParams != nil {
+		r.CliParams.VTApiKey = r.VTApiKey
+		if r.VTApiKey != "" && !r.Barbarous {
+			r.CliParams.SkipVtSandbox = false
+		}
+	}
+
+	if cfg != nil {
 		if cfg.Core.AllowPrerelease {
 			r.Prerelease = true
 		}
@@ -1922,7 +1938,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	var lastOutput string
 
 	useContainer := !r.NoCompileContainer && os.Getenv("GHPT_NO_COMPILE_CONTAINER") != "1"
-	
+
 	if useContainer {
 		// Verify container runtime is available
 		if _, err := exec.LookPath("podman"); err != nil {
@@ -1936,11 +1952,11 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		log.Info("executing compile script in hardened container (stage 2)", "attempt", attempt+1)
-		
+
 		// Use the compile package's hardened container execution with three-part reconstruction
 		// The container will reconstruct compile.sh from header.sh + body.sh + footer.sh at runtime
 		reconstructCmd := "bash -c 'cat /build/.ghpt/header.sh /build/.ghpt/body.sh /build/.ghpt/footer.sh > /build/.ghpt/compile.sh && bash /build/.ghpt/compile.sh'"
-		
+
 		compileCfg := &compile.Config{
 			Repository:       r.Repository,
 			RepoDir:          repoDir,
@@ -1954,17 +1970,17 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			Version:          "source-build",
 			CompileScript:    reconstructCmd,
 		}
-		
+
 		// Execute in hardened container (network=none, cap-drop=ALL, read-only, seccomp, non-root user)
 		err := compile.ExecuteInContainer(compileCfg)
 		if err == nil {
 			lastErr = nil
 			break
 		}
-		
+
 		lastErr = err
 		log.Warn("compile script failed", "error", err, "attempt", attempt+1)
-		
+
 		if attempt < maxRetries {
 			log.Info(fmt.Sprintf("Prompting AI to fix body.sh (retry %d of %d)...", attempt+1, maxRetries))
 			// Re-read body.sh for context

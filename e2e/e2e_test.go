@@ -187,11 +187,11 @@ func TestE2E_CompileFromSource_TwoStage(t *testing.T) {
 	require.NoError(t, os.MkdirAll(targetPath, 0755))
 
 	// Run the compile-from-source command
-	cmd := exec.Command(cliBinPath, "source", "test/test-repo", 
-		"--ai-cmd", "gh api",  // Use our mocked gh
+	cmd := exec.Command(cliBinPath, "source", "test/test-repo",
+		"--ai-cmd", "gh api", // Use our mocked gh
 		"-v", "latest",
 		"-D",
-		"--no-compile-container",  // Skip actual container for unit test
+		"--no-compile-container", // Skip actual container for unit test
 	)
 
 	cmd.Env = append(os.Environ(),

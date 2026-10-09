@@ -1578,7 +1578,7 @@ func (r *GithubRelease) GetLatestRelease() (*selector.SelectorItem, error) {
 	return releases[0], nil
 }
 
-func (r *GithubRelease) Install() error {
+func (r *GithubRelease) Install() (installErr error) {
 	if r.CliParams != nil {
 		if r.CliParams.NoEmojis {
 			r.CliParams.DisableIcons = true
@@ -1601,6 +1601,7 @@ func (r *GithubRelease) Install() error {
 		SetCurrentAsset(index int)
 		SetAssetInstallCmd(installCmd string)
 		WaitForAnimation()
+		Error(args ...any)
 	}
 	if (r.CliParams != nil && r.CliParams.Verbose) || (r.CliParams != nil && r.CliParams.ProgressBar == "none") {
 		pUI = &ui.NullProgressBar{}
@@ -1639,6 +1640,9 @@ func (r *GithubRelease) Install() error {
 	}
 	defer func() {
 		if pUI != nil {
+			if installErr != nil {
+				pUI.Error(installErr.Error())
+			}
 			pUI.Stop()
 		}
 	}()
@@ -1669,6 +1673,78 @@ func (r *GithubRelease) Install() error {
 	releases, err := releaseSelector.Run()
 	if err != nil {
 		return formatGitHubError(err, r.CliParams.Repository)
+	}
+	if len(releases) == 0 {
+		return fmt.Errorf("no releases found for %s", r.CliParams.Repository)
+	}
+
+	// Early status abortion check: Fail fast for unforced zerograde or downgrade
+	// before querying release assets or downloading anything.
+	if st, _ := state.LoadState(); st != nil && st.Apps != nil {
+		if app, ok := st.Apps[r.CliParams.Repository]; ok {
+			alreadyInstalled := false
+			if app.TargetPath != "" {
+				alreadyInstalled = true
+				if len(app.InstalledBinaries) > 0 {
+					for _, name := range app.InstalledBinaries {
+						if _, err := os.Stat(filepath.Join(app.TargetPath, name)); err != nil {
+							alreadyInstalled = false
+							break
+						}
+					}
+				} else {
+					if fi, err := os.Stat(app.TargetPath); err != nil || !fi.IsDir() {
+						alreadyInstalled = false
+					}
+				}
+			}
+			if len(app.PackageNames) > 0 || len(app.SystemPackages) > 0 {
+				alreadyInstalled = true
+			}
+			if app.SymlinkDir != "" {
+				if _, err := os.Stat(app.SymlinkDir); err == nil {
+					alreadyInstalled = true
+				}
+			}
+
+			if alreadyInstalled {
+				comp := status.CompareVersions(app.Version, releases[0].Name)
+				anyDowngradeFlag := r.CliParams.AllowDowngrade || r.CliParams.SelfInflictedDebt || r.CliParams.LeRetrogrouch || r.CliParams.RetrogradeStopgap || r.CliParams.Barbarous
+				if comp == 0 && !r.CliParams.Overwrite {
+					installState := status.InstallState{
+						InState:          true,
+						AlreadyInstalled: true,
+						PrevVersion:      app.Version,
+						NewVersion:       releases[0].Name,
+						AppName:          r.CliParams.Repository,
+						Repo:             r.CliParams.Repository,
+						Force:            false,
+						IsUpgradeCmd:     r.CliParams.IsUpgradeCmd,
+					}
+					statusMsg, abortErr := status.GenerateStatusMessage(installState)
+					if abortErr != nil {
+						r.StatusMessage = statusMsg
+						return abortErr
+					}
+				} else if comp < 0 && !r.CliParams.Overwrite && !anyDowngradeFlag {
+					installState := status.InstallState{
+						InState:          true,
+						AlreadyInstalled: true,
+						PrevVersion:      app.Version,
+						NewVersion:       releases[0].Name,
+						AppName:          r.CliParams.Repository,
+						Repo:             r.CliParams.Repository,
+						Force:            false,
+						IsUpgradeCmd:     r.CliParams.IsUpgradeCmd,
+					}
+					statusMsg, abortErr := status.GenerateStatusMessage(installState)
+					if abortErr != nil {
+						r.StatusMessage = statusMsg
+						return abortErr
+					}
+				}
+			}
+		}
 	}
 
 	// Try each release up to FallbackReleases times if no assets found
@@ -1994,10 +2070,8 @@ func (r *GithubRelease) Install() error {
 			}
 		} else {
 			startUI()
-			if r.CliParams.Interactive {
-				if pUI != nil {
-					pUI.Update(3, "", "", "", "", "")
-				}
+			if pUI != nil {
+				pUI.Update(3, "", "", "", "", "")
 			}
 
 			stdOut, stdErr, ghErr := ghExec("release", "download", releases[0].Name,

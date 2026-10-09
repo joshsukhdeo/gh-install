@@ -32,11 +32,11 @@ type Config struct {
 
 // CompileResult contains the results of a compile operation.
 type CompileResult struct {
-	Version          string
-	InstalledFiles   []string
-	Sidecars         []string
-	Dependencies     []ai.Dependency
-	CommitHash       string
+	Version        string
+	InstalledFiles []string
+	Sidecars       []string
+	Dependencies   []ai.Dependency
+	CommitHash     string
 }
 
 // Execute runs the compile flow for a repository.

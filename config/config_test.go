@@ -228,4 +228,43 @@ install_types: [invalid yaml
 		assert.Nil(t, cfg)
 		assert.Contains(t, err.Error(), "cannot point to sensitive system directory")
 	})
+
+	t.Run("LoadConfig_ValidExtractorCombinations", func(t *testing.T) {
+		validCases := []string{
+			"default",
+			"ouch",
+			"native",
+			"internal",
+			"ouch,native,internal",
+			"native,internal",
+			"internal,native",
+		}
+		for _, tc := range validCases {
+			cfg := &Config{
+				Core: CoreConfig{
+					Extractor: tc,
+				},
+			}
+			err := ValidateConfig(cfg)
+			assert.NoError(t, err, "expected extractor %q to be valid", tc)
+		}
+	})
+
+	t.Run("LoadConfig_InvalidExtractorRejected", func(t *testing.T) {
+		invalidCases := []string{
+			"bogus",
+			"ouch,bogus",
+			"ouch,native,zip",
+		}
+		for _, tc := range invalidCases {
+			cfg := &Config{
+				Core: CoreConfig{
+					Extractor: tc,
+				},
+			}
+			err := ValidateConfig(cfg)
+			assert.Error(t, err, "expected extractor %q to be invalid", tc)
+			assert.Contains(t, err.Error(), "config extractor")
+		}
+	})
 }
