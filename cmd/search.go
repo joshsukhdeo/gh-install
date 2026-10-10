@@ -8,7 +8,7 @@ import (
 )
 
 type SearchCmd struct {
-	Query       string `arg:""`
+	Query       string `arg:"" predictor:"github_repos" predict:"github_repos"`
 	Description bool   `short:"d"`
 }
 

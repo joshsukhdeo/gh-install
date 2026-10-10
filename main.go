@@ -81,6 +81,9 @@ func run() int {
 		kongplete.WithPredictor("installed_apps", cmd.PredictInstalledApps),
 		kongplete.WithPredictor("github_repos", cmd.PredictGithubRepos),
 		kongplete.WithPredictor("config_keys", cmd.PredictConfigKeys),
+		kongplete.WithPredictor("extractors", cmd.PredictExtractors),
+		kongplete.WithPredictor("progress_bars", cmd.PredictProgressBars),
+		kongplete.WithPredictor("sidecar_modes", cmd.PredictSidecarModes),
 	)
 	ctx, err := parser.Parse(os.Args[1:])
 	parser.FatalIfErrorf(err)

@@ -131,7 +131,7 @@ type SidecarFlags struct {
 	Sidecars           string   `optional:"" name:"sidecars" short:"S" help:"Regex pattern for sidecar assets to capture (default: \\\\.so.*|\\\\.h.*|\\\\.pak|\\\\.bin|\\\\.red)."`
 	SidecarSymlinkTo   []string `optional:"" help:"Create symlinks from sidecars to these directories (can be specified multiple times)."`
 	IncludeSidecars    bool     `name:"include-sidecars" short:"s" negatable:"" env:"GH_PT_INCLUDE_SIDECARS" help:"Include companion sidecar assets (auto-detects placement)."`
-	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" help:"Sidecar placement mode: auto (maps standard Unix layout to prefix, else xdg_data_home), local-map, xdg_data_home, or custom-path:/path/to/ (default: auto)."`
+	SidecarMode        string   `optional:"" name:"sidecar-mode" env:"GH_PT_SIDECAR_MODE" predictor:"sidecar_modes" predict:"sidecar_modes" help:"Sidecar placement mode: auto (maps standard Unix layout to prefix, else xdg_data_home), local-map, xdg_data_home, or custom-path:/path/to/ (default: auto)."`
 	Driver             string   `optional:"" name:"driver" enum:"auto,vulkan,opencl,vaapi,udev,ldso,none" default:"none" help:"Register hardware/userspace driver manifests: auto, vulkan, opencl, vaapi, udev, ldso (Linux only)."`
 	Plugin             string   `optional:"" name:"plugin" aliases:"plugins" enum:"auto,obs,gimp,vst,lv2,clap,audio,none" default:"none" help:"Register host application plugin manifests or symlinks: auto, obs, gimp, vst, lv2, clap, audio (Linux only)."`
 	EnvInject          []string `optional:"" help:"Environment variables pointing to sidecar directory (KEY=VALUE)."`
@@ -185,7 +185,7 @@ type ExecutionFlags struct {
 	AllowRootUserInstall bool     `help:"Allow installation to user-local paths when running as root."`
 	ForceRoot            bool     `name:"force-root" env:"GH_PT_FORCE_ROOT" help:"Allow operations when running as root (suppresses root restriction)."`
 	NoCompileContainer   bool     `name:"no-compile-container" env:"GH_PT_NO_COMPILE_CONTAINER" help:"Opt out of mandatory container isolation for AI source compilation (UNSAFE)."`
-	Extractor            string   `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	Extractor            string   `env:"GH_PT_EXTRACTOR" predictor:"extractors" predict:"extractors" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
 	AllowDowngrade       bool     `help:"Allow downgrades when updating or installing."`
 	SelfInflictedDebt    bool     `name:"self-inflicted-technical-debt" help:"Allow downgrades (alias for allow-downgrade)."`
 	LeRetrogrouch        bool     `name:"LE-RETROGROUCH" help:"Exclusively downgrade and save unpinned with Le_RetroGrouch flag."`
@@ -202,7 +202,7 @@ type ExecutionFlags struct {
 
 // OutputFlags controls UI progress display, styling, and colorization.
 type OutputFlags struct {
-	ProgressBar string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	ProgressBar string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" predictor:"progress_bars" predict:"progress_bars" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
 	NoColor     bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
 	NoEmojis    bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
@@ -268,7 +268,7 @@ type StateAddCmd struct {
 	TargetPath     string `short:"p" optional:"" type:"path" help:"Target installation directory."`
 	Global         bool   `short:"g" help:"Install globally."`
 	Pinned         bool   `help:"Pin this version."`
-	Extractor      string `optional:"" help:"Extractor precedence."`
+	Extractor      string `optional:"" predictor:"extractors" predict:"extractors" help:"Extractor precedence."`
 	Type           string `short:"T" optional:"" help:"Comma-separated list of types."`
 	ReleaseAsset   string `short:"a" optional:"" help:"Release asset name."`
 }
@@ -292,7 +292,7 @@ type StateEditCmd struct{}
 
 type UpgradeFlags struct {
 	DisablePrompts        bool   `short:"D" env:"GH_PT_DISABLE_PROMPTS" help:"Disable all interactive prompts."`
-	Extractor             string `env:"GH_PT_EXTRACTOR" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
+	Extractor             string `env:"GH_PT_EXTRACTOR" predictor:"extractors" predict:"extractors" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
 	Overwrite             bool   `default:"false" short:"f" name:"force" env:"GH_PT_FORCE" help:"Reinstall packages overwriting existing files."`
 	DryRun                bool   `default:"false" help:"Show what would be upgraded."`
 	VerifyChecksum        bool   `default:"true" help:"Verify asset checksums."`
@@ -300,7 +300,7 @@ type UpgradeFlags struct {
 	SkipVtSandbox         bool   `default:"true" name:"skip-vt-sandbox" help:"Skip VirusTotal sandbox scan (default: true, use --skip-vt-sandbox=false to enable)."`
 	FallbackReleases      int    `default:"0" help:"Try this many older releases if no assets found in latest (0=disabled)."`
 	WarnUnmappedAssets    bool   `default:"true" negatable:"" help:"Warn about suspected unmapped sidecar assets."`
-	ProgressBar           string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
+	ProgressBar           string `name:"progress-bar" env:"GH_PT_PROGRESS_BAR" predictor:"progress_bars" predict:"progress_bars" help:"Progress bar style: pacman, standard, spinner:<style>, or none. Spinner styles: dots, line, jump, pulse, points, miniDot, step"`
 	NoColor               bool   `name:"no-color" aliases:"no-colors" env:"GH_PT_NO_COLOR" help:"Disable color output."`
 	NoEmojis              bool   `name:"no-emojis" aliases:"no-emoji" env:"GH_PT_NO_EMOJIS" help:"Disable emoji/icon output."`
 }
@@ -441,7 +441,7 @@ type CompletionsZshCmd struct{}
 type CompletionsPowershellCmd struct{}
 
 type SearchCmd struct {
-	Query       string `arg:""`
+	Query       string `arg:"" predictor:"github_repos" predict:"github_repos"`
 	Description bool   `short:"d"`
 }
 
