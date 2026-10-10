@@ -173,6 +173,17 @@ type SourceRepo struct {
 | `--force` | bool | false | Force reinstall to different target base dir (uninstall old, install new). Only for `ghpt source` and `ghpt install`. |
 | `--target-os` | string | - | Target operating system for cross-compilation (e.g., linux, windows, darwin) |
 | `--target-arch` | string | - | Target architecture for cross-compilation (e.g., amd64, arm64, arm) |
+| `--no-ai-container` | bool | false | Opt out of Stage 1 AI container isolation. Runs the AI agent directly on the host machine using `runAIAgentWithOutput`. Emits loud warning. (Env: `GH_PT_NO_AI_CONTAINER` / `GHPT_NO_AI_CONTAINER`) |
+
+### 4.1.1 Stage 1 AI Container Isolation & `--no-ai-container`
+
+By default, Stage 1 AI generation (generating `body.sh` and `manifest.json`) runs inside an isolated container with network access to query the AI provider. If container runtimes (Docker or Podman) are unavailable or `--no-ai-container` (or `GH_PT_NO_AI_CONTAINER` / `GHPT_NO_AI_CONTAINER=1`) is specified:
+
+- **Host Execution**: The AI agent runs directly on the host machine using `runAIAgentWithOutput` instead of inside an isolated container (`runAIAgentInContainer`).
+- **Security Warning**: Emits a loud, prominent warning:
+  `*** [SECURITY: AI_SANDBOX_BYPASS] Executing AI generation directly on host without container isolation (--no-ai-container specified). Host compromise risk! ***`
+- **Distinction from `--no-compile-container`**: `--no-ai-container` governs **Stage 1** (AI compilation script generation and repair), whereas `--no-compile-container` governs **Stage 2** (actual compilation script execution). They are independent controls.
+
 
 ### 4.1.2 Container Security Hardening
 

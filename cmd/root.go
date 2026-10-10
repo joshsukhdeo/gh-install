@@ -1835,12 +1835,24 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			return fmt.Errorf("failed to create scripts directory: %w", err)
 		}
 
-		// Stage 1: Generate body.sh using AI container with network access
+		// Stage 1: Generate body.sh using AI container with network access (or host if --no-ai-container)
 		prompt := buildCompilePrompt(r.Repository, repoDir, scriptPath, targetPath, symlinkDir)
-		log.Info(fmt.Sprintf("Generating AI compilation body.sh using container: %s", aiCmdTemplate))
-		aiResp, err := r.runAIAgentInContainer(aiCmdTemplate, prompt, repoDir)
-		if err != nil {
-			return fmt.Errorf("AI agent failed to generate body.sh: %w", err)
+		var aiResp string
+		useAIContainer := !r.NoAIContainer && os.Getenv("GHPT_NO_AI_CONTAINER") != "1" && os.Getenv("GH_PT_NO_AI_CONTAINER") != "1"
+		if useAIContainer {
+			log.Info(fmt.Sprintf("Generating AI compilation body.sh using container: %s", aiCmdTemplate))
+			resp, err := r.runAIAgentInContainer(aiCmdTemplate, prompt, repoDir)
+			if err != nil {
+				return fmt.Errorf("AI agent failed to generate body.sh: %w", err)
+			}
+			aiResp = resp
+		} else {
+			log.Warn("*** [SECURITY: AI_SANDBOX_BYPASS] Executing AI generation directly on host without container isolation (--no-ai-container specified). Host compromise risk! ***")
+			resp, err := runAIAgentWithOutput(aiCmdTemplate, prompt, repoDir)
+			if err != nil {
+				return fmt.Errorf("AI agent failed to generate body.sh on host: %w", err)
+			}
+			aiResp = resp
 		}
 
 		p, parseErr := ai.ParseAIOutput(aiResp)
@@ -1938,6 +1950,7 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 	var lastOutput string
 
 	useContainer := !r.NoCompileContainer && os.Getenv("GHPT_NO_COMPILE_CONTAINER") != "1"
+	useAIContainer := !r.NoAIContainer && os.Getenv("GHPT_NO_AI_CONTAINER") != "1" && os.Getenv("GH_PT_NO_AI_CONTAINER") != "1"
 
 	if useContainer {
 		// Verify container runtime is available
@@ -1986,7 +1999,14 @@ func (r *RootCLI) handleCompileFromSource(cfg *config.Config) error {
 			// Re-read body.sh for context
 			bodyPath := filepath.Join(ghptDir, "body.sh")
 			fixPrompt := buildCompileFixPrompt(r.Repository, repoDir, bodyPath, targetPath, symlinkDir, err.Error(), attempt+1)
-			fixResp, fixErr := r.runAIAgentInContainer(aiCmdTemplate, fixPrompt, repoDir)
+			var fixResp string
+			var fixErr error
+			if useAIContainer {
+				fixResp, fixErr = r.runAIAgentInContainer(aiCmdTemplate, fixPrompt, repoDir)
+			} else {
+				log.Warn("*** [SECURITY: AI_SANDBOX_BYPASS] Executing AI repair directly on host without container isolation (--no-ai-container specified). Host compromise risk! ***")
+				fixResp, fixErr = runAIAgentWithOutput(aiCmdTemplate, fixPrompt, repoDir)
+			}
 			if fixErr != nil {
 				log.Warn("AI repair command execution failed", "error", fixErr)
 			}

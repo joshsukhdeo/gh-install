@@ -185,6 +185,7 @@ type ExecutionFlags struct {
 	AllowRootUserInstall bool     `help:"Allow installation to user-local paths when running as root."`
 	ForceRoot            bool     `name:"force-root" env:"GH_PT_FORCE_ROOT" help:"Allow operations when running as root (suppresses root restriction)."`
 	NoCompileContainer   bool     `name:"no-compile-container" env:"GH_PT_NO_COMPILE_CONTAINER" help:"Opt out of mandatory container isolation for AI source compilation (UNSAFE)."`
+	NoAIContainer        bool     `name:"no-ai-container" env:"GH_PT_NO_AI_CONTAINER" help:"Run AI generation directly on the host machine without container isolation (UNSAFE)."`
 	Extractor            string   `env:"GH_PT_EXTRACTOR" predictor:"extractors" predict:"extractors" help:"Archive extractor precedence (default, ouch, native, internal)." default:"${extractor}"`
 	AllowDowngrade       bool     `help:"Allow downgrades when updating or installing."`
 	SelfInflictedDebt    bool     `name:"self-inflicted-technical-debt" help:"Allow downgrades (alias for allow-downgrade)."`

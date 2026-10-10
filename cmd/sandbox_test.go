@@ -143,10 +143,15 @@ func TestRootPolicy_ForceRootAndGlobal(t *testing.T) {
 func TestCompileContainerIsolationFlags(t *testing.T) {
 	cli := &RootCLI{
 		NoCompileContainer: false,
+		NoAIContainer:      false,
 	}
-	// By default, container isolation is enabled (NoCompileContainer == false)
+	// By default, container isolation is enabled (NoCompileContainer == false, NoAIContainer == false)
 	assert.False(t, cli.NoCompileContainer)
+	assert.False(t, cli.NoAIContainer)
 
 	cli.NoCompileContainer = true
 	assert.True(t, cli.NoCompileContainer)
+
+	cli.NoAIContainer = true
+	assert.True(t, cli.NoAIContainer)
 }
